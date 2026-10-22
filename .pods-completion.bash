@@ -9,25 +9,53 @@ _pods_completions() {
     local mode=""
     local action=""
 
+    # Complete arguments for flags that require a value
+    case "$prev" in
+        --config|-c)
+            readarray -t COMPREPLY < <(compgen -f -- "${cur}")
+            return 0
+            ;;
+        --tail|--since|--until)
+            return 0
+            ;;
+    esac
+
+    # Scan previous words to detect the active mode and action
     for (( i=1; i<COMP_CWORD; i++ )); do
         local word="${COMP_WORDS[i]}"
-        if [[ "$word" == -* ]]; then
-            continue
-        fi
+
+        # Skip flags and their corresponding value arguments
+        case "$word" in
+            --config|-c|--tail|--since|--until)
+                (( i++ ))
+                continue
+                ;;
+            -*)
+                continue
+                ;;
+        esac
 
         if [[ -z "$mode" ]]; then
-            if [[ " $modes " =~ " $word " ]]; then
-                mode="$word"
-            elif [[ " $default_actions " =~ " $word " ]]; then
-                mode="default"
-                action="$word"
-            fi
+            case "$word" in
+                command|cmd) mode="command" ;;
+                config|cfg)  mode="config" ;;
+                connect|con) mode="connect" ;;
+                image|img)   mode="image" ;;
+                init)        mode="init" ;;
+                logs|log)    mode="logs" ;;
+                recipe|rec)  mode="recipe" ;;
+                down|help|reload|restart|start|status|stop|up|update)
+                    mode="default"
+                    action="$word"
+                    ;;
+            esac
         elif [[ -z "$action" ]]; then
             action="$word"
         fi
     done
 
-    if [[ ${cur} == -* ]]; then
+    # Complete global and mode-specific flags
+    if [[ "$cur" == -* ]]; then
         local opts="--config --debug --simulate"
         case "$mode" in
             default)
@@ -43,39 +71,32 @@ _pods_completions() {
                 opts+=" --all"
                 ;;
         esac
-        COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+        readarray -t COMPREPLY < <(compgen -W "${opts}" -- "${cur}")
         return 0
     fi
 
+    # Complete top-level modes and default lifecycle actions
     if [[ -z "$mode" ]]; then
-        COMPREPLY=( $(compgen -W "${modes} ${default_actions}" -- "${cur}") )
+        readarray -t COMPREPLY < <(compgen -W "${modes} ${default_actions}" -- "${cur}")
         return 0
     fi
 
+    # Complete mode-specific sub-actions
     if [[ -z "$action" ]]; then
+        local sub_actions=""
         case "$mode" in
-            connect)
-                COMPREPLY=( $(compgen -W "shell help" -- "${cur}") )
-                ;;
-            logs)
-                COMPREPLY=( $(compgen -W "show follow help" -- "${cur}") )
-                ;;
-            init)
-                COMPREPLY=( $(compgen -W "help" -- "${cur}") )
-                ;;
-            command)
-                COMPREPLY=( $(compgen -W "exec list help" -- "${cur}") )
-                ;;
-            config)
-                COMPREPLY=( $(compgen -W "show edit help" -- "${cur}") )
-                ;;
-            recipe)
-                COMPREPLY=( $(compgen -W "edit help list show" -- "${cur}") )
-                ;;
-            image)
-                COMPREPLY=( $(compgen -W "help prune update" -- "${cur}") )
-                ;;
+            connect) sub_actions="shell help" ;;
+            logs)    sub_actions="show follow help" ;;
+            init)    sub_actions="help" ;;
+            command) sub_actions="exec list help" ;;
+            config)  sub_actions="show edit help" ;;
+            recipe)  sub_actions="edit help list show" ;;
+            image)   sub_actions="help prune update" ;;
         esac
+
+        if [[ -n "$sub_actions" ]]; then
+            readarray -t COMPREPLY < <(compgen -W "${sub_actions}" -- "${cur}")
+        fi
     fi
 
     return 0

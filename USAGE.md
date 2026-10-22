@@ -20,27 +20,27 @@ This guide documents all implemented features, configuration schemas, recipe def
   - [Actions](#actions)
   - [Options](#options)
   - [Usage](#usage)
-- [Logs Mode](#logs-mode)
+- [Logs Mode (`log`)](#logs-mode-log)
   - [Actions](#actions-1)
   - [Options](#options-1)
   - [Usage](#usage-1)
-- [Connect Mode](#connect-mode)
+- [Connect Mode (`con`)](#connect-mode-con)
   - [Actions](#actions-2)
   - [Options](#options-2)
   - [Usage](#usage-2)
-- [Command Mode](#command-mode)
+- [Command Mode (`cmd`)](#command-mode-cmd)
   - [Actions](#actions-3)
   - [Options](#options-3)
   - [Usage](#usage-3)
-- [Recipe Mode](#recipe-mode)
+- [Recipe Mode (`rec`)](#recipe-mode-rec)
   - [Actions](#actions-4)
   - [Options](#options-4)
   - [Usage](#usage-4)
-- [Config Mode](#config-mode)
+- [Config Mode (`cfg`)](#config-mode-cfg)
   - [Actions](#actions-5)
   - [Options](#options-5)
   - [Usage](#usage-5)
-- [Image Mode](#image-mode)
+- [Image Mode (`img`)](#image-mode-img)
   - [Actions](#actions-6)
   - [Options](#options-6)
   - [Usage](#usage-6)
@@ -59,24 +59,25 @@ pods [MODE] [OPTIONS] [ACTION] [TARGETS...]
 
 Argument parsing follows these rules:
 
-- **Mode Resolution:** If the first positional argument matches a mode name (`command`, `config`, `connect`, `image`, `init`, `logs`, `recipe`), that mode is selected. Otherwise, Podoxide selects the [Default Mode](#default-mode) and treats the first positional argument as the action.
+- **Mode Resolution:** If the first positional argument matches a mode name (`command`, `config`, `connect`, `image`, `init`, `logs`, `recipe`) or its 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`), that mode is selected. Otherwise, Podoxide selects the [Default Mode](#default-mode) and treats the first positional argument as the action.
+- **Mode Aliases:** Every mode except `init` provides a 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`) as an exact drop-in replacement for the first positional mode argument (for example, `pods cmd exec <recipe> <command>` is identical to `pods command exec <recipe> <command>`).
 - **No Arguments:** Running `pods` without arguments executes `pods help`.
 - **Option Placement:** Options prefixed with `--` can appear anywhere in the command line.
-- **Configuration Bypass:** The `init` mode, `pods image prune`, all `help` actions (`pods help`, `pods <mode> help`, `pods status help`), and parameterless calls to `command`, `connect`, `image`, or `logs` run without loading `pods.conf`.
+- **Configuration Bypass:** The `init` mode, `pods image prune`, all `help` actions (`pods help`, `pods <mode> help`, `pods status help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading `pods.conf`.
 - **Privilege Check:** When executed with elevated privileges (`sudo` or `root`), Podoxide prints a warning and requires interactive confirmation (`yes`) before running.
 
 ### Modes Overview
 
-| Mode        | Actions                                                                          | Target                        | Description                                                          |
-| :---------- | :------------------------------------------------------------------------------- | :---------------------------- | :------------------------------------------------------------------- |
-| `(default)` | `up`, `down`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help`   | `<recipe>`, `@<group>`        | Manage pod lifecycles and inspect runtime container status.          |
-| `logs`      | `show`, `follow`, `help`                                                         | `<recipe>[/<container>]`      | Display or follow logs for a pod or a specific container.            |
-| `connect`   | `shell`, `help`                                                                  | `<recipe>[/<container>]`      | Open an interactive shell inside a running container.                |
-| `command`   | `list`, `exec`, `help`                                                           | `<recipe> [<command>\|<idx>]` | List or execute maintenance commands defined in a recipe.            |
-| `recipe`    | `list`, `show`, `edit`, `help`                                                   | `[<recipe>]`                  | List configured recipes, or display and edit a recipe file.          |
-| `config`    | `show`, `edit`, `help`                                                           | `-`                           | Validate and display the active configuration tree or edit it.       |
-| `image`     | `update`, `prune`, `help`                                                        | `[<recipe>, @<group>]`        | Pull recipe container images or preview and remove unused images.    |
-| `init`      | `help`                                                                           | `-`                           | Generate initial `pods.conf` and `recipe.pod` template files.        |
+| Mode              | Actions                                                                        | Target                        | Description                                                       |
+| :---------------- | :----------------------------------------------------------------------------- | :---------------------------- | :---------------------------------------------------------------- |
+| `(default)`       | `up`, `down`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help` | `<recipe>`, `@<group>`        | Manage pod lifecycles and inspect runtime container status.       |
+| `logs` (`log`)    | `show`, `follow`, `help`                                                       | `<recipe>[/<container>]`      | Display or follow logs for a pod or a specific container.         |
+| `connect` (`con`) | `shell`, `help`                                                                | `<recipe>[/<container>]`      | Open an interactive shell inside a running container.             |
+| `command` (`cmd`) | `list`, `exec`, `help`                                                         | `<recipe> [<command>\|<idx>]` | List or execute maintenance commands defined in a recipe.         |
+| `recipe` (`rec`)  | `list`, `show`, `edit`, `help`                                                 | `[<recipe>]`                  | List configured recipes, or display and edit a recipe file.       |
+| `config` (`cfg`)  | `show`, `edit`, `help`                                                         | `-`                           | Validate and display the active configuration tree or edit it.    |
+| `image` (`img`)   | `update`, `prune`, `help`                                                      | `[<recipe>, @<group>]`        | Pull recipe container images or preview and remove unused images. |
+| `init`            | `help`                                                                         | `-`                           | Generate initial `pods.conf` and `recipe.pod` template files.     |
 
 ### Global Options
 
@@ -330,9 +331,9 @@ pods status help
 pods --config=staging --debug reload example-app
 ```
 
-## Logs Mode
+## Logs Mode (`log`)
 
-The `logs` mode fetches or streams container logs for a recipe's pod or a single container within that pod via `podman pod logs`.
+The `logs` (`log`) mode fetches or streams container logs for a recipe's pod or a single container within that pod via `podman pod logs`.
 
 ```bash
 pods logs [OPTIONS] [ACTION] <recipe>[/<container>]
@@ -368,8 +369,9 @@ pods logs help
 pods logs example-app
 pods logs show example-app
 
-# Follow live logs for a specific container by relative name
+# Follow live logs for a specific container by relative name (or via the 'log' alias)
 pods logs follow example-app/db
+pods log follow example-app/db
 
 # Show the last 100 log lines with timestamps for the first container
 pods logs --tail=100 --timestamps show example-app/1
@@ -381,9 +383,9 @@ pods logs --since=1h --until=10m example-app
 pods --config=staging --debug logs follow example-app/app --simulate
 ```
 
-## Connect Mode
+## Connect Mode (`con`)
 
-The `connect` mode opens an interactive shell (`bash` if available, falling back to `sh`) inside a running container via `podman exec -it`.
+The `connect` (`con`) mode opens an interactive shell (`bash` if available, falling back to `sh`) inside a running container via `podman exec -it`.
 
 ```bash
 pods connect [OPTIONS] [ACTION] <target>
@@ -414,9 +416,10 @@ pods connect help
 pods connect db-server
 pods connect shell db-server
 
-# Connect to a specific container in a multi-container recipe by relative name or index
+# Connect to a specific container in a multi-container recipe by relative name or index (or via 'con')
 pods connect example-app/db
 pods connect example-app/2
+pods con example-app/db
 
 # Connect directly to an unmanaged Podman container by its exact container name
 pods connect custom-container-name
@@ -425,9 +428,9 @@ pods connect custom-container-name
 pods --config=staging --debug connect example-app/db --simulate
 ```
 
-## Command Mode
+## Command Mode (`cmd`)
 
-The `command` mode lists or executes maintenance commands declared in `command <name>` blocks inside a recipe's `pod` block via `podman exec -it`.
+The `command` (`cmd`) mode lists or executes maintenance commands declared in `command <name>` blocks inside a recipe's `pod` block via `podman exec -it`.
 
 ```bash
 pods command [OPTIONS] [ACTION] <recipe> [<command>|<index>]
@@ -459,8 +462,9 @@ pods command help
 pods command list example-app
 pods command example-app
 
-# Execute a maintenance command by its identifier
+# Execute a maintenance command by its identifier (or via the 'cmd' alias)
 pods command exec example-app migrate
+pods cmd exec example-app migrate
 pods command example-app migrate
 
 # Execute a maintenance command by its 1-based list index
@@ -470,9 +474,9 @@ pods command exec example-app 1
 pods --config=staging --debug command exec example-app migrate --simulate
 ```
 
-## Recipe Mode
+## Recipe Mode (`rec`)
 
-The `recipe` mode lists configured recipes, inspects `.pod` recipe file contents with line numbers, or opens a recipe file in the configured editor.
+The `recipe` (`rec`) mode lists configured recipes, inspects `.pod` recipe file contents with line numbers, or opens a recipe file in the configured editor.
 
 ```bash
 pods recipe [OPTIONS] [ACTION] [<recipe>]
@@ -502,9 +506,10 @@ pods recipe [OPTIONS] [ACTION] [<recipe>]
 # Display recipe mode help
 pods recipe help
 
-# List all configured recipes and their file status
+# List all configured recipes and their file status (or via the 'rec' alias)
 pods recipe
 pods recipe list
+pods rec list
 
 # List configured recipes plus unreferenced .pod files in the recipes directory
 pods recipe list --all
@@ -520,9 +525,9 @@ pods recipe edit example-app
 pods --config=staging --debug recipe edit example-app --simulate
 ```
 
-## Config Mode
+## Config Mode (`cfg`)
 
-The `config` mode validates and displays the active `pods.conf` configuration (including directory status, group hierarchy trees, and missing or unreferenced recipe warnings) or opens the configuration file in the configured editor.
+The `config` (`cfg`) mode validates and displays the active `pods.conf` configuration (including directory status, group hierarchy trees, and missing or unreferenced recipe warnings) or opens the configuration file in the configured editor.
 
 ```bash
 pods config [OPTIONS] [ACTION]
@@ -550,9 +555,10 @@ pods config [OPTIONS] [ACTION]
 # Display config mode help
 pods config help
 
-# Show the active configuration diagnostic tree and validation summary
+# Show the active configuration diagnostic tree and validation summary (or via the 'cfg' alias)
 pods config
 pods config show
+pods cfg show
 
 # Open the active configuration file in the configured editor
 pods config edit
@@ -562,9 +568,9 @@ pods --config=staging config show
 pods --config=staging --debug config edit --simulate
 ```
 
-## Image Mode
+## Image Mode (`img`)
 
-The `image` mode downloads container images defined in target recipes (`update`) or previews and removes unused container images on the host (`prune`). Podman never removes images attached to existing (running or stopped) containers. Running `pods image prune` or `pods image help` does not require `pods.conf`.
+The `image` (`img`) mode downloads container images defined in target recipes (`update`) or previews and removes unused container images on the host (`prune`). Podman never removes images attached to existing (running or stopped) containers. Running `pods image prune` or `pods image help` does not require `pods.conf`.
 
 ```bash
 pods image [OPTIONS] [ACTION] [TARGETS...]
@@ -595,9 +601,10 @@ pods image [OPTIONS] [ACTION] [TARGETS...]
 # Display image mode help
 pods image help
 
-# Pull the latest container images for a recipe or group without reloading running pods
+# Pull the latest container images for a recipe or group without reloading running pods (or via 'img')
 pods image update example-app
 pods image update @backend
+pods img update @backend
 
 # Preview the generated podman pull commands for a group using an alternative config
 pods --config=staging --debug image update @backend --simulate

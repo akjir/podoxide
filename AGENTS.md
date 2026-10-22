@@ -55,5 +55,5 @@ Organize every Rust source file strictly in this vertical order:
   - Cover fallback `_ =>` branches (`M-FALLBACK-TESTS`), extreme capacity bounds (`M-EXTREME-BOUND-TESTS`), and delimiter/quote injection in PSL files (`M-DELIM-INJECT-TESTS`).
   - Test path edge cases: hidden files, dot paths, multi-extensions, and empty paths (`M-PATH-EDGE-TESTS`).
   - Test I/O and process logic using temporary directories, in-memory cursors, or mock executors (`M-IO-TESTS`).
-- **Documentation & Sync:** Keep `USAGE.md`, `README.md`, `PSL_SPEC.md`, `.pods-completion.bash`, CLI help output, and root `pods.conf` / `recipe.pod` templates in sync per **`update-documentation`**. Follow **`changelog-updater`** for `CHANGELOG.md` and **`podoxide-dev-workflow`** for the edit-verify cycle.
+- **Documentation & Sync:** Keep `USAGE.md`, `README.md`, `PSL_SPEC.md`, `.pods-completion.bash`, CLI help output, and root `pods.conf` / `recipe.pod` templates in sync per **`update-documentation`**. Whenever CLI modes, aliases, actions, or flags are added, modified, or removed, you MUST update `.pods-completion.bash` and `USAGE.md` in the same step. Follow **`changelog-updater`** for `CHANGELOG.md` and **`podoxide-dev-workflow`** for the edit-verify cycle.
 - **Verification:** Run `cargo test` and `cargo clippy -- -D warnings` after every code modification.
