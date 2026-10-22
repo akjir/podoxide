@@ -1,7 +1,7 @@
 # Podoxide AI Agent Rules
 
 > [!IMPORTANT]
-> Update this file and [`ARCHITECTURE.md`](ARCHITECTURE.md) when the architecture, module structure, or file names change.
+> Update this file, [`ARCHITECTURE.md`](ARCHITECTURE.md), and [`PSL_SPEC.md`](PSL_SPEC.md) when the architecture, module structure, file names, or PSL syntax change.
 
 ## 1. Core Constraints & Workflow
 - **Goal:** Manage Podman pods and containers with a deterministic CLI tool (`pods`) in pure standard Rust using declarative configuration (`pods.conf`) and recipes (`*.pod`) written in the custom block-based PodScript Language (`PSL`).
@@ -40,6 +40,7 @@ Organize every Rust source file strictly in this vertical order:
 - **Bounded Allocations:** Always pre-allocate collections with `.with_capacity()` when size is known or estimable. Use named constants (`const MAX_CAPACITY: usize`) instead of magic numbers and clamp dynamic input sizes to prevent OOM (`P-BOUND-ALLOC`). Query maps (`HashMap::get`) with borrowed keys (`P-ZERO-COST-LOOKUP`).
 - **Zero-Copy Slicing:** Use `.split_once()`, `.strip_prefix()`, and safe cursor index offsets instead of intermediate `Vec` allocations or raw pointer arithmetic. Use `str::repeat()` over manual repeat loops (`P-IDIOM-REPEAT`).
 - **PSL (`pods.conf` / `.pod`) & CLI Scanners:**
+  - Treat [`PSL_SPEC.md`](PSL_SPEC.md) as the normative Single Source of Truth for PSL lexical rules, mandatory root-level block grammar, error conditions, and parser bounds (`P-BOUND-ALLOC`). When `PSL_SPEC.md` changes, strictly execute Spec-Driven TDD: update unit and integration tests FIRST, verify failure via `cargo test`, and modify `src/io/psl/` SECOND.
   - Parse PSL configuration (`pods.conf`) and recipe (`*.pod`) files using O(N) single-pass, quote-aware (`'`, `"`) and comment-aware (`#`) state-machine scanners (`P-UNIFIED-PARSER`, `P-NO-QUADRATIC`).
   - NEVER use chained `.replace()` for templates or sanitization; use single-pass streaming.
   - Encapsulate UTF-8 boundary checks in small helpers (`P-UTF8-LOOKAROUND`).
@@ -54,5 +55,5 @@ Organize every Rust source file strictly in this vertical order:
   - Cover fallback `_ =>` branches (`M-FALLBACK-TESTS`), extreme capacity bounds (`M-EXTREME-BOUND-TESTS`), and delimiter/quote injection in PSL files (`M-DELIM-INJECT-TESTS`).
   - Test path edge cases: hidden files, dot paths, multi-extensions, and empty paths (`M-PATH-EDGE-TESTS`).
   - Test I/O and process logic using temporary directories, in-memory cursors, or mock executors (`M-IO-TESTS`).
-- **Documentation & Sync:** Keep `USAGE.md`, `README.md`, `.pods-completion.bash`, CLI help output, and root `pods.conf` / `recipe.pod` templates in sync per **`update-documentation`**. Follow **`changelog-updater`** for `CHANGELOG.md` and **`podoxide-dev-workflow`** for the edit-verify cycle.
+- **Documentation & Sync:** Keep `USAGE.md`, `README.md`, `PSL_SPEC.md`, `.pods-completion.bash`, CLI help output, and root `pods.conf` / `recipe.pod` templates in sync per **`update-documentation`**. Follow **`changelog-updater`** for `CHANGELOG.md` and **`podoxide-dev-workflow`** for the edit-verify cycle.
 - **Verification:** Run `cargo test` and `cargo clippy -- -D warnings` after every code modification.
