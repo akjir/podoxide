@@ -1,0 +1,39 @@
+# ==============================================================================
+# Example Web Stack Recipe
+# ==============================================================================
+
+# Pod configuration and shared namespace settings
+pod example-stack {
+    name        "Example Web Stack"
+    description "A minimal but complete example recipe with a web app and database."
+    path        /pods/example-stack
+    registry    docker.io
+    publish     8080 80 TCP
+    option      --userns=keep-id
+
+    # Maintenance command executed inside the database container
+    command migrate {
+        description "Run database migrations."
+        container   *db
+        user        dbuser
+        execute     "db-cli -U dbuser -d app -f /migrations/run.sql"
+    }
+}
+
+# 1. Database container (starts first, stops last)
+container *db {
+    detach   true
+    restart  always
+    registry docker.io
+    image    example/db-server:latest
+    volume   data /var/lib/db/data:Z # Mounts 'data' with SELinux label 'Z'
+    option   "--env DB_PASSWORD=secret"
+}
+
+# 2. Web application container (starts second, stops first)
+container *app {
+    detach  true
+    restart always
+    image   example/example-app:latest
+    command start-server.sh
+}
