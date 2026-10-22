@@ -5,7 +5,7 @@ _pods_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local modes="logs connect init command config recipe image"
-    local default_actions="create help recreate remove status update"
+    local default_actions="down help reload restart start status stop up update"
     local mode=""
     local action=""
 
@@ -73,7 +73,7 @@ _pods_completions() {
                 COMPREPLY=( $(compgen -W "edit help list show" -- "${cur}") )
                 ;;
             image)
-                COMPREPLY=( $(compgen -W "prune help" -- "${cur}") )
+                COMPREPLY=( $(compgen -W "help prune update" -- "${cur}") )
                 ;;
         esac
     fi

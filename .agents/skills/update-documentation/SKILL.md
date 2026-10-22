@@ -9,7 +9,7 @@ description: >-
 ## 1. Triggers & Sync Checklist
 Update documentation whenever you change:
 * **CLI Syntax:** Modes, actions, options, default actions, or target resolution. Sync: `USAGE.md`, `README.md`, CLI help output, and `.pods-completion.bash`.
-* **Schemas & Behavior:** `config.pod` or `recipe.pod` fields, defaults, volume/port/naming rules, or config-bypass rules. Sync: `USAGE.md`, `README.md` (if top-level), and root `config.pod` / `recipe.pod`.
+* **Schemas & Behavior:** `pods.conf` or `recipe.pod` fields, defaults, volume/port/naming rules, or config-bypass rules. Sync: `USAGE.md`, `README.md` (if top-level), and root `pods.conf` / `recipe.pod`.
 * **Requirements:** OS, Rust edition, or Podman minimum versions. Sync: `README.md` and `AGENTS.md`.
 
 ## 2. `README.md` Rules (Onboarding & Overview)
@@ -18,8 +18,8 @@ Keep `README.md` concise as the project entry point. Omit a Table of Contents. M
 2. **`## Features`:** Bullet list of core capabilities.
 3. **`## Requirements`:** 2-column table (`Component | Minimum Version`).
 4. **`## Installation`:** Build/install instructions and `### Shell Autocompletion (Optional)`.
-5. **`## Quick Start`:** Numbered flow (`pods init`, `pods create recipe --simulate`, lifecycle actions, `pods remove recipe`).
-6. **`## Configuration and Recipes`:** `### Configuration (config.pod)` and `### Recipes (<name>.pod)` examples.
+5. **`## Quick Start`:** Numbered flow (`pods init`, `pods up recipe --simulate`, lifecycle actions, `pods down recipe`).
+6. **`## Configuration and Recipes`:** `### Configuration (pods.conf)` and `### Recipes (<name>.pod)` examples.
 7. **`## CLI Overview`:** General syntax block, 4-column summary table (`Mode | Actions | Target | Description`), global options list, and link to `[USAGE.md](USAGE.md)`.
 8. **`## Development`:** Single `bash` block with `cargo test`, `cargo clippy -- -D warnings`, and `cargo build --release`.
 9. **`## License`:** Link to `[LICENSE](LICENSE)` + 1-line warranty disclaimer.
@@ -28,7 +28,7 @@ Keep `README.md` concise as the project entry point. Omit a Table of Contents. M
 Keep `USAGE.md` as the exhaustive technical manual. Maintain this section order:
 1. **`# Podoxide Usage Guide`** + **`## Table of Contents`**.
 2. **`## Command Syntax`:** `pods` syntax, parsing rules, `### Modes Overview`, and `### Global Options`.
-3. **`## Configuration Reference`:** Schema table and `config.pod` reference.
+3. **`## Configuration Reference`:** Schema table and `pods.conf` reference.
 4. **`## Recipe Reference`:** Top-level, pod, and container field schema tables, port/volume/naming rules, and `recipe.pod` reference.
 5. **`## Targeting Rules`:** `### Recipe and Group Targets` and `### Container Targets`.
 6. **Mode Sections (`## <Name> Mode`):** Order modes identically to `Modes Overview`. Each mode section contains intro/syntax, `### Actions`, `### Options`, and `### Usage`.
