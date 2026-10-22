@@ -78,7 +78,7 @@ pods [global-flags] <mode> <sub-action> [action-flags] [arguments...]
 
 | Mode / Scope | Alias | Primary Purpose |
 | :--- | :--- | :--- |
-| *(default)* | - | Manage pod lifecycles (`up`, `down`, `start`, `stop`, `restart`, `reload`, `update`, `status`). |
+| *(default)* | - | Manage pod lifecycles (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`). |
 | `init` | - | Initialize a default `pods.conf` file. |
 | `config` | `cfg` | Validate, display, or edit `pods.conf`. |
 | `recipe` | `rec` | List, inspect, create, or edit `*.pod` recipes. |

@@ -68,16 +68,16 @@ Argument parsing follows these rules:
 
 ### Modes Overview
 
-| Mode              | Actions                                                                        | Target                        | Description                                                       |
-| :---------------- | :----------------------------------------------------------------------------- | :---------------------------- | :---------------------------------------------------------------- |
-| `(default)`       | `up`, `down`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help` | `<recipe>`, `@<group>`        | Manage pod lifecycles and inspect runtime container status.       |
-| `logs` (`log`)    | `show`, `follow`, `help`                                                       | `<recipe>[/<container>]`      | Display or follow logs for a pod or a specific container.         |
-| `connect` (`con`) | `shell`, `help`                                                                | `<recipe>[/<container>]`      | Open an interactive shell inside a running container.             |
-| `command` (`cmd`) | `list`, `exec`, `help`                                                         | `<recipe> [<command>\|<idx>]` | List or execute maintenance commands defined in a recipe.         |
-| `recipe` (`rec`)  | `list`, `show`, `edit`, `help`                                                 | `[<recipe>]`                  | List configured recipes, or display and edit a recipe file.       |
-| `config` (`cfg`)  | `show`, `edit`, `help`                                                         | `-`                           | Validate and display the active configuration tree or edit it.    |
-| `image` (`img`)   | `update`, `prune`, `help`                                                      | `[<recipe>, @<group>]`        | Pull recipe container images or preview and remove unused images. |
-| `init`            | `help`                                                                         | `-`                           | Generate initial `pods.conf` and `recipe.pod` template files.     |
+| Mode              | Actions                                                                                          | Target                        | Description                                                       |
+| :---------------- | :----------------------------------------------------------------------------------------------- | :---------------------------- | :---------------------------------------------------------------- |
+| `(default)`       | `up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help` | `<recipe>`, `@<group>`        | Manage pod lifecycles and inspect runtime container status.       |
+| `logs` (`log`)    | `show`, `follow`, `help`                                                                         | `<recipe>[/<container>]`      | Display or follow logs for a pod or a specific container.         |
+| `connect` (`con`) | `shell`, `help`                                                                                  | `<recipe>[/<container>]`      | Open an interactive shell inside a running container.             |
+| `command` (`cmd`) | `list`, `exec`, `help`                                                                           | `<recipe> [<command>\|<idx>]` | List or execute maintenance commands defined in a recipe.         |
+| `recipe` (`rec`)  | `list`, `show`, `edit`, `help`                                                                   | `[<recipe>]`                  | List configured recipes, or display and edit a recipe file.       |
+| `config` (`cfg`)  | `show`, `edit`, `help`                                                                           | `-`                           | Validate and display the active configuration tree or edit it.    |
+| `image` (`img`)   | `update`, `prune`, `help`                                                                        | `[<recipe>, @<group>]`        | Pull recipe container images or preview and remove unused images. |
+| `init`            | `help`                                                                                           | `-`                           | Generate initial `pods.conf` and `recipe.pod` template files.     |
 
 ### Global Options
 
@@ -259,7 +259,7 @@ The `logs`, `connect`, and `command` modes resolve individual containers within 
 
 ## Default Mode
 
-The default mode executes pod lifecycle operations (`up`, `down`, `start`, `stop`, `restart`, `reload`, `update`) and queries container runtime status (`status`). Omit the mode name to invoke default mode.
+The default mode executes pod lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`) and queries container runtime status (`status`). Omit the mode name to invoke default mode.
 
 ```bash
 pods [OPTIONS] <action> [TARGETS...]
@@ -269,9 +269,11 @@ pods [OPTIONS] <action> [TARGETS...]
 
 | Action                | Description                                                                                                  |
 | :-------------------- | :----------------------------------------------------------------------------------------------------------- |
+| `create <target...>`  | Create the pod and its containers in deterministic top-to-bottom order without starting them.                |
 | `down <target...>`    | Stop all containers in reverse bottom-to-top order and remove the containers and the pod (`stop` + `remove`). |
 | `help`                | Display command-line syntax, modes, options, and actions for the default mode.                               |
 | `reload <target...>`  | Tear down and rebuild the pod from the `.pod` recipe to apply configuration changes (`down` + `up`).         |
+| `remove <target...>`  | Remove all containers in reverse bottom-to-top order and remove the pod without stopping them first.         |
 | `restart <target...>` | Stop and start an existing pod and its containers (`stop` + `start`) without removing or recreating them.    |
 | `start <target...>`   | Start an existing stopped pod and its containers in top-to-bottom order without recreating them.             |
 | `status`              | Display a formatted status table of managed containers (or status help via `pods status help`).              |
@@ -305,6 +307,10 @@ pods up @backend --simulate
 pods stop example-app
 pods start example-app
 pods restart example-app
+
+# Create a pod and its containers without starting them, or remove a stopped pod
+pods create example-app
+pods remove example-app
 
 # Tear down and rebuild a pod from its .pod recipe to apply configuration changes
 pods reload example-app

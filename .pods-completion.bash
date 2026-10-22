@@ -5,7 +5,7 @@ _pods_completions() {
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
     local modes="logs connect init command config recipe image"
-    local default_actions="down help reload restart start status stop up update"
+    local default_actions="create down help reload remove restart start status stop up update"
     local mode=""
     local action=""
 
@@ -44,7 +44,7 @@ _pods_completions() {
                 init)        mode="init" ;;
                 logs|log)    mode="logs" ;;
                 recipe|rec)  mode="recipe" ;;
-                down|help|reload|restart|start|status|stop|up|update)
+                create|down|help|reload|remove|restart|start|status|stop|up|update)
                     mode="default"
                     action="$word"
                     ;;

@@ -62,10 +62,12 @@ podoxide/
     │       │   ├── mod.rs
     │       │   └── shell.rs
     │       ├── default/
+    │       │   ├── create.rs
     │       │   ├── down.rs
     │       │   ├── help.rs
     │       │   ├── mod.rs
     │       │   ├── reload.rs
+    │       │   ├── remove.rs
     │       │   ├── restart.rs
     │       │   ├── start.rs
     │       │   ├── status.rs
@@ -138,7 +140,7 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/context.rs`   | Defines the runtime `Context` structure holding loaded configuration, selected mode, parsed flags, and positional parameters. |
 | `src/core/error.rs`     | Defines the strongly typed `PodError` domain enum and implements `std::error::Error` and `std::fmt::Display`. |
 | `src/core/log.rs`       | Provides structured output and diagnostic logging (`debug`, `info`, `warning`, `error`) with debug state control. |
-| `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `start`, `stop`, `restart`, `reload`, `update`) across containers. |
+| `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`) across containers. |
 | `src/core/recipe.rs`    | Defines the `.pod` recipe model, validates pod and container definitions, and resolves target container specifications (`<recipe>/<spec>`). |
 
 ## CLI Modes (`src/core/modes/`)
@@ -188,9 +190,11 @@ Executes primary pod lifecycle operations and displays container runtime status 
 | File                                | Function |
 | :---------------------------------- | :------- |
 | `src/core/modes/default/mod.rs`     | Validates the requested default action, expands `@group` targets, and dispatches to the action handler. |
+| `src/core/modes/default/create.rs`  | Loads and validates target recipes, then creates pods and containers in top-to-bottom declaration order without starting them. |
 | `src/core/modes/default/down.rs`    | Stops target containers in reverse startup order and removes the containers and parent pod (`stop` + `remove`). |
 | `src/core/modes/default/help.rs`    | Formats and outputs the global CLI help text for `pods`. |
 | `src/core/modes/default/reload.rs`  | Tears down and rebuilds target pods and containers from their `.pod` recipes (`down` + `up`). |
+| `src/core/modes/default/remove.rs`  | Removes target containers in reverse startup order and removes the parent pod without stopping them first. |
 | `src/core/modes/default/restart.rs` | Stops and starts existing target pods and containers without removing or recreating them (`stop` + `start`). |
 | `src/core/modes/default/start.rs`   | Starts existing stopped target pods and their containers in top-to-bottom declaration order. |
 | `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes, and formats the runtime status table and `status help`. |

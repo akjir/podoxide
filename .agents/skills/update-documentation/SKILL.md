@@ -8,7 +8,7 @@ description: >-
 
 ## 1. Strict Separation of Concerns (Single Source of Truth)
 * **`README.md` (Project Entry Point):** Keep under 130 lines. Do NOT copy detailed CLI flag tables, sub-action matrices, target resolution rules, or PSL grammar/file templates into `README.md`. Update `README.md` ONLY when top-level CLI modes, 3-letter aliases, lifecycle action names, system requirements, installation steps, or repository document links change.
-* **`USAGE.md` (CLI & Schema Reference):** Single Source of Truth for all CLI modes, 3-letter aliases (`cmd`, `cfg`, `con`, `img`, `log`, `rec`), lifecycle actions (`up`, `down`, `start`, `stop`, `restart`, `reload`, `update`, `status`), mode sub-actions, flags, targeting rules, and `pods.conf` / `*.pod` field schemas.
+* **`USAGE.md` (CLI & Schema Reference):** Single Source of Truth for all CLI modes, 3-letter aliases (`cmd`, `cfg`, `con`, `img`, `log`, `rec`), lifecycle actions (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`), mode sub-actions, flags, targeting rules, and `pods.conf` / `*.pod` field schemas.
 * **`PSL_SPEC.md` (Language Specification):** Single Source of Truth for the PodScript Language (`PSL`) lexical rules, root-block grammar, parser bounds, and canonical syntax used in `pods.conf` and `*.pod`.
 * **`.pods-completion.bash` & Templates:** Update `.pods-completion.bash` whenever CLI modes, aliases, actions, or flags change. Keep root `pods.conf`, `recipe.pod`, and CLI `help` output synchronized with `USAGE.md` and `PSL_SPEC.md`.
 
