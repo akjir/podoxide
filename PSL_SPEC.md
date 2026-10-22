@@ -6,9 +6,7 @@
 
 > [!IMPORTANT]
 > **AI Agent Mandate (Single Source of Truth):**
-> This document defines the lexical and syntactic rules of the PodScript Language (`PSL`) used in `pods.conf` and `*.pod` files. Whenever this specification is modified, you MUST follow the strict **Spec-Driven TDD Workflow** in Section 7: update or add unit/integration tests FIRST, and modify the parser implementation in `src/io/psl/` SECOND.
-
----
+> This document defines the lexical and syntactic rules of the PodScript Language (`PSL`) used in `pods.conf` and `*.pod` files. Whenever this specification is modified, you MUST follow the strict **Spec-Driven TDD Workflow** in Section 8: update or add unit/integration tests FIRST, and modify the parser implementation in `src/io/psl/` SECOND.
 
 ## 1. Overview & Design Goals
 
@@ -19,8 +17,6 @@ The PodScript Language (`PSL`) is a minimal, deterministic, line-oriented, block
 2. **Unified Grammar (`P-UNIFIED-PARSER`):** Both `pods.conf` (application configuration) and `*.pod` (Podman recipes) share the exact same lexical scanner and structural parser.
 3. **Zero-Dependency, Single-Pass Scanning (`P-STDLIB-ONLY`, `P-NO-QUADRATIC`):** PSL is designed to be parsed in a single $O(N)$ pass using pure Rust standard library slices (`&str`, `Cow<'a, str>`) without regular expressions or external crates.
 4. **String-Centric Tokens:** At the syntax level, all identifiers and arguments are UTF-8 string tokens. Semantic type conversion (such as booleans, port numbers, paths, or `@group` references) is delegated to the domain validation layer.
-
----
 
 ## 2. Lexical Elements
 
@@ -91,8 +87,6 @@ An **Argument** represents a parameter passed to a block header or a directive. 
 - **Single-line constraint:** Raw newlines (`\r` or `\n`) inside a single-quoted string are forbidden.
 - Always returns a zero-copy `Cow::Borrowed(&str)` slice excluding the outer quotes.
 
----
-
 ## 3. Structural Grammar
 
 ### 3.1 Document Structure (Mandatory Root Blocks)
@@ -128,8 +122,6 @@ A **Directive** is a single-line key-value or key-tuple instruction inside a blo
 - **Minimum Arity:** A directive MUST have an Identifier followed by at least one Argument separated by horizontal whitespace. A standalone identifier on a line without arguments and without `{` is a syntax error (`MissingDirectiveArgument`).
 - **Termination:** A directive is terminated by a newline (`LF` or `CRLF`) or `EOF` (if preceding a closing brace). Semicolons (`;`) are NOT used as statement terminators; a trailing `;` on an unquoted token is treated as part of that bare word.
 - **Ordering & Multiplicity:** The parser MUST preserve the exact top-to-bottom declaration order of blocks and directives. Repeated directives with the same identifier (e.g., multiple `publish`, `volume`, or `option` lines) are syntactically valid and appended in sequence.
-
----
 
 ## 4. Formal Grammar (EBNF)
 
@@ -179,21 +171,17 @@ ws              = " " | "\t" ;
 newline         = "\n" | "\r\n" ;
 ```
 
----
-
 ## 5. Security & Resource Bounds
 
 To comply with `AGENTS.md` (`P-BOUND-ALLOC`, `P-NO-QUADRATIC`, `P-UTF8-LOOKAROUND`), the PSL parser in `src/io/psl/` MUST enforce the following deterministic limits using named constants:
 
-| Constant Name | Default Limit | Purpose |
-| :--- | :--- | :--- |
-| `MAX_FILE_BYTES` | `1_048_576` (1 MiB) | Maximum input size in bytes before rejecting input to prevent OOM. |
-| `MAX_NESTING_DEPTH` | `8` | Maximum `{ ... }` block nesting depth (prevents stack overflow). |
-| `MAX_BLOCKS_PER_DOC` | `256` | Maximum total blocks per PSL document. |
-| `MAX_STMTS_PER_BLOCK` | `512` | Maximum directives/sub-blocks inside a single block. |
-| `MAX_ARGS_PER_STMT` | `64` | Maximum arguments allowed on a single block header or directive. |
-
----
+| Constant Name          | Default Limit       | Purpose |
+| :--------------------- | :------------------ | :------ |
+| `MAX_FILE_BYTES`       | `1_048_576` (1 MiB) | Maximum input size in bytes before rejecting input to prevent OOM. |
+| `MAX_NESTING_DEPTH`    | `8`                 | Maximum `{ ... }` block nesting depth (prevents stack overflow). |
+| `MAX_BLOCKS_PER_DOC`   | `256`               | Maximum total blocks per PSL document. |
+| `MAX_STMTS_PER_BLOCK`  | `512`               | Maximum directives/sub-blocks inside a single block. |
+| `MAX_ARGS_PER_STMT`    | `64`                | Maximum arguments allowed on a single block header or directive. |
 
 ## 6. Mandatory Error Conditions
 
@@ -210,8 +198,6 @@ The PSL parser MUST return a strongly typed error enum (including the 1-based li
 - **Adjacent Quoted Token (`UnexpectedToken`):** A quote opens or closes in the middle of a token without separating whitespace (e.g., `foo"bar"` or `"foo"bar`).
 - **Invalid Escape (`InvalidEscapeSequence`):** A `"` string contains an unknown escape sequence (e.g., `\a`, `\x`, `\0`).
 - **Limit Exceeded (`LimitExceeded`):** Any resource bound defined in Section 5 is exceeded.
-
----
 
 ## 7. Canonical Examples
 
@@ -278,8 +264,6 @@ container *app {
     command start-server.sh
 }
 ```
-
----
 
 ## 8. Agent Workflow: Spec-Driven Modification Protocol
 

@@ -9,7 +9,7 @@
 - **Target & Execution:** Support Linux only (Rust Edition 2024, Podman 5.8.0+). Execute processes directly via `std::process::Command` without shell interpolation (`sh -c`).
 - **Safety:** Enforce `#![forbid(unsafe_code)]` in crate roots. Avoid global mutable state (`static mut`). Never use `.unwrap()` or `.expect()` in production code (allowed only for proven mathematical invariants).
 - **Version Control:** NEVER commit changes unless the user explicitly instructs you to do so.
-- **Language & Tone:** Write all responses, code, comments, documentation, tests, and commits in English. Follow ASD-STE100 (80%). Be concise and precise. Do not use emojis.
+- **Language & Tone:** Write all responses, code, comments, documentation, tests, and commits in English. Follow ASD-STE100 (80%). Be concise and precise. Do not use emojis or horizontal rules (`---`) in Markdown files.
 - **Token Efficiency:** Avoid redundant information across code, docs, rules, and skills. When restructuring code without logic changes, preserve all business logic, signatures, error types, and test semantics.
 
 ## 2. Deterministic File Layout (`.rs`)
