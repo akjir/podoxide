@@ -1,5 +1,5 @@
 ---
-name: red-team-audit
+name: red
 description: Acts as an adversarial Red Team Security Auditor to ruthlessly break, exploit, and subsequently harden the Rust codebase. Triggered when the user types `/red <filename>` or `/red all`.
 ---
 
