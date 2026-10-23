@@ -11,7 +11,7 @@ Execute this workflow whenever the user invokes `/c` or `/c <message>`. Follow a
 Before staging or committing any changes, verify that the entire workspace is healthy:
 1. **Run Test Suite:** Execute `cargo test` and verify that all unit, integration, and doc tests pass without failure.
 2. **Run Linter & Compiler Checks:** Execute `cargo clippy --all-targets -- -D warnings` and verify zero compiler or Clippy warnings.
-3. **Rule & Sync Check:** Inspect `git status --short` and `git diff` to ensure modified files comply with `AGENTS.md` (deterministic vertical layout, flat control flow, documentation sync via **`update-documentation`**, and `CHANGELOG.md` sync via **`changelog-updater`** when user-facing changes exist).
+3. **Rule & Sync Check:** Inspect `git status --short` and `git diff` to ensure modified files comply with `AGENTS.md` (deterministic vertical layout, flat control flow, zero dead code or `#[allow(dead_code)]` suppressions per `P-NO-DEAD-CODE`, documentation sync via **`update-documentation`**, and `CHANGELOG.md` sync via **`changelog-updater`** when user-facing changes exist).
 4. **Remediate Failures:** If any test fails or Clippy reports a warning, fix the root cause and re-run the verification suite until every check passes cleanly before proceeding to commit.
 
 ## 2. Stage & Commit All Open Changes

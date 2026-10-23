@@ -138,7 +138,7 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/cli.rs`       | Parses CLI arguments (`OsStr` / `OsString`), extracts global and mode-specific flags (`--config`, `--debug`, `--simulate`), and selects modes. |
 | `src/core/config.rs`    | Defines the configuration model (`pods.conf`), collects active recipes, checks recipe membership, and expands `@group` targets. |
 | `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and builds Podman commands. |
-| `src/core/context.rs`   | Defines the runtime `Context` structure holding loaded configuration, selected mode, parsed flags, and positional parameters. |
+| `src/core/context.rs`   | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
 | `src/core/log.rs`       | Provides structured output and diagnostic logging (`debug`, `info`, `warning`, `error`) with debug state control. |
 | `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`) across containers. |
 | `src/core/recipe.rs`    | Defines the `.pod` recipe model, validates pod and container definitions, and resolves target container specifications (`<recipe>/<spec>`). |
@@ -149,7 +149,7 @@ The `src/core/modes/` directory contains the mode router and one subdirectory pe
 
 | File                    | Function |
 | :---------------------- | :------- |
-| `src/core/modes/mod.rs` | Defines the mode enumeration and dispatches execution to the active mode handler in O(1) time. |
+| `src/core/modes/mod.rs` | Re-exports the mode enumerations and dispatches execution to the active mode handler in O(1) time. |
 
 ### Command Mode (`src/core/modes/command/`)
 

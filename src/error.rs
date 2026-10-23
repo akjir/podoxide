@@ -4,9 +4,84 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 
+/// Command-line argument parsing or validation error.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CliError {
+    pub argument: Option<String>,
+    pub kind: CliErrorKind,
+}
+
+impl CliError {
+    /// Creates a new CLI error without an associated argument token.
+    #[must_use]
+    pub const fn new(kind: CliErrorKind) -> Self {
+        Self {
+            argument: None,
+            kind,
+        }
+    }
+
+    /// Creates a new CLI error associated with the offending argument token.
+    #[must_use]
+    pub fn with_argument(kind: CliErrorKind, argument: impl Into<String>) -> Self {
+        Self {
+            argument: Some(argument.into()),
+            kind,
+        }
+    }
+}
+
+impl Display for CliError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        if let Some(argument) = &self.argument {
+            write!(formatter, "{}: '{argument}'", self.kind)
+        } else {
+            write!(formatter, "{}", self.kind)
+        }
+    }
+}
+
+impl Error for CliError {}
+
+/// Specific failure category encountered while parsing CLI arguments.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CliErrorKind {
+    EmptyFlagValue,
+    InvalidFlagValue,
+    InvalidTarget,
+    InvalidUtf8,
+    LimitExceeded,
+    MissingFlagValue,
+    MissingTarget,
+    TooManyArguments,
+    UnexpectedFlag,
+    UnknownAction,
+    UnknownFlag,
+}
+
+impl Display for CliErrorKind {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::EmptyFlagValue => "empty value for command-line flag",
+            Self::InvalidFlagValue => "invalid value for command-line flag",
+            Self::InvalidTarget => "invalid target specification",
+            Self::InvalidUtf8 => "command-line argument is not valid UTF-8",
+            Self::LimitExceeded => "command-line argument limit exceeded",
+            Self::MissingFlagValue => "missing value for command-line flag",
+            Self::MissingTarget => "missing required target argument",
+            Self::TooManyArguments => "too many positional arguments",
+            Self::UnexpectedFlag => "flag is not valid for the selected mode",
+            Self::UnknownAction => "unknown mode or action",
+            Self::UnknownFlag => "unknown command-line flag",
+        };
+        formatter.write_str(message)
+    }
+}
+
 /// Top-level error type encompassing all failure modes in Podoxide.
 #[derive(Debug)]
 pub enum PodError {
+    Cli(CliError),
     Io(io::Error),
     Psl(PslError),
 }
@@ -14,6 +89,7 @@ pub enum PodError {
 impl Display for PodError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cli(error) => write!(formatter, "CLI error: {error}"),
             Self::Io(error) => write!(formatter, "I/O error: {error}"),
             Self::Psl(error) => write!(formatter, "PSL error: {error}"),
         }
@@ -23,9 +99,16 @@ impl Display for PodError {
 impl Error for PodError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Cli(error) => Some(error),
             Self::Io(error) => Some(error),
             Self::Psl(error) => Some(error),
         }
+    }
+}
+
+impl From<CliError> for PodError {
+    fn from(error: CliError) -> Self {
+        Self::Cli(error)
     }
 }
 
@@ -104,7 +187,44 @@ mod tests {
     use std::error::Error;
     use std::io;
 
-    use super::{PodError, PslError, PslErrorKind};
+    use super::{CliError, CliErrorKind, PodError, PslError, PslErrorKind};
+
+    #[test]
+    fn cli_error_kind_display_messages() {
+        let variants = [
+            (CliErrorKind::EmptyFlagValue, "empty value"),
+            (CliErrorKind::InvalidFlagValue, "invalid value"),
+            (CliErrorKind::InvalidTarget, "invalid target"),
+            (CliErrorKind::InvalidUtf8, "not valid UTF-8"),
+            (CliErrorKind::LimitExceeded, "limit exceeded"),
+            (CliErrorKind::MissingFlagValue, "missing value"),
+            (CliErrorKind::MissingTarget, "missing required target"),
+            (CliErrorKind::TooManyArguments, "too many positional"),
+            (CliErrorKind::UnexpectedFlag, "not valid for the selected mode"),
+            (CliErrorKind::UnknownAction, "unknown mode or action"),
+            (CliErrorKind::UnknownFlag, "unknown command-line flag"),
+        ];
+
+        for (kind, expected_substring) in variants {
+            let plain_error = CliError::new(kind);
+            assert!(plain_error.to_string().contains(expected_substring));
+
+            let argument_error = CliError::with_argument(kind, "--bad");
+            assert!(argument_error.to_string().contains(expected_substring));
+            assert!(argument_error.to_string().contains("--bad"));
+        }
+    }
+
+    #[test]
+    fn pod_error_cli_display_and_source() {
+        let cli_error = CliError::with_argument(CliErrorKind::UnknownFlag, "--unknown");
+        let pod_error = PodError::from(cli_error.clone());
+
+        assert!(pod_error.to_string().contains("CLI error"));
+        assert!(pod_error.to_string().contains("--unknown"));
+        assert!(pod_error.source().is_some());
+        assert!(cli_error.source().is_none());
+    }
 
     #[test]
     fn pod_error_io_display_and_source() {

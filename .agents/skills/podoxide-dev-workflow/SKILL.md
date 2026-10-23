@@ -8,14 +8,20 @@ description: >-
 
 ## 1. Edit-Build-Test Cycle
 1. **Verify Baseline:** Run `cargo test` and `cargo clippy -- -D warnings` before editing files.
-2. **Edit:** Modify source files under `src/` following the deterministic file layout, zero-dependency, and flat control flow rules (`P-VERTICAL-CLARITY`, `P-FLAT-CONTROL-FLOW`, `P-FLATTEN-DISPATCH`, `P-NO-NESTED-LOOPS`, `P-LOOP-MODULARITY`) in `AGENTS.md`. Ensure `crate::` precedes `self::` and `super::` in all import blocks (including `mod tests`), and enforce `MAX_*` bounds before scanning or allocating the $(N+1)$-th item.
+2. **Edit:** Modify source files under `src/` following the deterministic file layout, zero-dependency, direct-use (`P-NO-DEAD-CODE`), and flat control flow rules (`P-VERTICAL-CLARITY`, `P-FLAT-CONTROL-FLOW`, `P-FLATTEN-DISPATCH`, `P-NO-NESTED-LOOPS`, `P-LOOP-MODULARITY`) in `AGENTS.md`:
+   - Ensure `crate::` precedes `self::` and `super::` in all import blocks (including `mod tests`), and enforce `MAX_*` bounds before scanning or allocating the $(N+1)$-th item.
+   - Do not create speculative helper methods, unused trait implementations, or fallback branches that have no active caller (`P-NO-DEAD-CODE`).
+   - If downstream modules are not implemented yet, create only the minimal no-op placeholder stubs (`Ok(())` or `Default`) directly invoked by the current module so the crate compiles cleanly.
 3. **Flatness & Readability Gate:** Before running final verification (`cargo test` and `cargo clippy -- -D warnings`), scan all modified functions for:
    - Nested loops (`P-NO-NESTED-LOOPS`)
    - Indentation depth exceeding 3 levels (`P-FLAT-CONTROL-FLOW`)
    - Complex inline closures or large loop bodies (`P-VERTICAL-CLARITY`, `P-LOOP-MODULARITY`)
    If any function violates these rules, refactor the inner blocks into small, alphabetically sorted helper functions (following Section 2 of `AGENTS.md`) before completing the task.
-4. **Test & Lint:** Run `cargo test` and `cargo clippy -- -D warnings` after every code modification.
-5. **Sync Docs, Templates & Changelog:** Follow **`update-documentation`** to sync `USAGE.md`, `README.md`, `PSL_SPEC.md`, CLI help output, `.pods-completion.bash`, `pods.conf`, `recipe.pod`, `ARCHITECTURE.md`, and `AGENTS.md`. Follow **`changelog-updater`** to update `CHANGELOG.md`.
+4. **Direct-Use & Dead-Code Pruning Gate (`P-NO-DEAD-CODE`):** Before running final verification (`cargo test` and `cargo clippy -- -D warnings`):
+   - Scan all modified and affected files for orphaned functions, unused struct fields, obsolete error variants, legacy code paths, underscore-prefixed unused items (`_unused_fn`), or `#[allow(dead_code)]` attributes.
+   - Remove every piece of code that no longer has a direct use (along with its obsolete unit tests) before running final verification.
+5. **Test & Lint:** Run `cargo test` and `cargo clippy -- -D warnings` after every code modification.
+6. **Sync Docs, Templates & Changelog:** Follow **`update-documentation`** to sync `USAGE.md`, `README.md`, `PSL_SPEC.md`, CLI help output, `.pods-completion.bash`, `pods.conf`, `recipe.pod`, `ARCHITECTURE.md`, and `AGENTS.md`. Follow **`changelog-updater`** to update `CHANGELOG.md`.
 
 ## 2. Testing Standards (`cargo test`)
 * **Coverage:** Write unit and integration tests for every feature, parser routine, or bug fix.
