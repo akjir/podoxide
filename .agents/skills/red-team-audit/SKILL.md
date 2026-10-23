@@ -22,7 +22,12 @@ Assume the target Rust code is fundamentally flawed, naive, and vulnerable. Acti
 Once the user approves the report, apply defensive Rust programming to neutralize the vulnerabilities without breaking existing functionality:
 1. **Write Exploit Tests First:** Open the target module's `#[cfg(test)] mod tests` block (or the corresponding integration test in `tests/`) and write tests that actively simulate the identified attacks (`M-DELIM-INJECT-TESTS`, `M-PATH-EDGE-TESTS`, `M-EXTREME-BOUND-TESTS`, `M-FALLBACK-TESTS`, `M-IO-TESTS`).
 2. **Harden the Source Code:** Refactor the target `.rs` file in `src/` to block the attacks. Enforce `#![forbid(unsafe_code)]`, eliminate `.unwrap()` / `.expect()`, clamp dynamic allocations (`P-BOUND-ALLOC`), use zero-copy safe slicing, and return strongly typed `PodError` variants with `#[source]` chaining (`P-ERR-PRESERVE`). Maintain the strict deterministic vertical file layout defined in `AGENTS.md`.
-3. **Closed-Loop Verification:** Run `cargo test` and `cargo clippy -- -D warnings`. If any check or warning fails, analyze the compiler output, fix the root cause, and re-run until both pass with zero warnings.
+3. **Flatness & Readability Gate:** Before running final verification (`cargo test` and `cargo clippy -- -D warnings`), scan all modified functions for:
+   - Nested loops (`P-NO-NESTED-LOOPS`)
+   - Indentation depth exceeding 3 levels (`P-FLAT-CONTROL-FLOW`)
+   - Complex inline closures or large loop bodies (`P-VERTICAL-CLARITY`, `P-LOOP-MODULARITY`)
+   If any function violates these rules, refactor the inner blocks into small, alphabetically sorted helper functions (following Section 2 of `AGENTS.md`) before completing the task.
+4. **Closed-Loop Verification:** Run `cargo test` and `cargo clippy -- -D warnings`. If any check or warning fails, analyze the compiler output, fix the root cause, and re-run until both pass with zero warnings.
 
 ## 4. Finalization
 Report the successful mitigation and the verification results. Do not run `git commit`.

@@ -10,6 +10,7 @@
 - **Safety:** Enforce `#![forbid(unsafe_code)]` in crate roots. Avoid global mutable state (`static mut`). Never use `.unwrap()` or `.expect()` in production code (allowed only for proven mathematical invariants).
 - **Version Control:** NEVER commit changes unless the user explicitly instructs you to do so.
 - **Language & Tone:** Write all responses, code, comments, documentation, tests, and commits in English. Follow ASD-STE100 (80%). Be concise and precise. Do not use emojis or horizontal rules (`---`) in Markdown files.
+- **Simplicity & Vertical Clarity (`P-VERTICAL-CLARITY`):** Prioritize human readability, clear structure, and flat control flow over compact code density. Writing more lines of code and extracting small, well-named helper functions is ALWAYS preferred over deep nesting, dense expressions, or complex inline closures. Smart and efficient algorithms are encouraged, provided their implementation is broken down into flat, single-purpose functions.
 - **Token Efficiency:** Avoid redundant information across code, docs, rules, and skills. When restructuring code without logic changes, preserve all business logic, signatures, error types, and test semantics.
 
 ## 2. Deterministic File Layout (`.rs`)
@@ -18,7 +19,7 @@ Organize every Rust source file strictly in this vertical order:
 2. **Crate Attributes:** `#![...]` (mandatory `#![forbid(unsafe_code)]` in `main.rs` / `lib.rs`).
 3. **Imports:** 2 groups separated by a blank line:
    - `std::` imports
-   - `crate::` and `super::` imports
+   - `crate::`, `self::`, and `super::` imports (strictly in that ASCII order, including inside `mod tests`; never let `rustfmt` place `super::` before `crate::`)
    Alphabetize lines and braced items (`pub use x::{A, B};`).
 4. **Constants & Statics:** Module-local `const` and `static` items, sorted alphabetically.
 5. **Types & Impls:** `struct`, `enum`, and `type` definitions sorted alphabetically (`pub` before private). Every `impl` block MUST immediately follow its type definition:
@@ -32,21 +33,26 @@ Organize every Rust source file strictly in this vertical order:
 - **Constructors & Traits:** Implement `Default` for all ZSTs and parameterless types. `new()` MUST delegate to `Self::default()` (or `Self` for ZSTs). Enforce `#[must_use]` on constructors and pure getters. Implement standard traits (`Display`, `FromStr`) instead of custom duplicate methods.
 - **Error Handling:** Use strongly typed domain error enums (e.g., `PodError`); NEVER use `Result<T, String>`. Preserve error causes via `#[source]` / `Error::source` chaining (`P-ERR-PRESERVE`). Use `format!` for error messages over manual allocation micro-optimizations.
 - **I/O & Process Isolation:** Isolate all direct `std::fs` and `std::process::Command` calls to dedicated `src/io/` modules (`src/io/exec/`, `src/io/psl/`, `src/io/system/`) (`P-IO-ISOLATION`; see [`ARCHITECTURE.md`](ARCHITECTURE.md)). Never use `println!` in core library logic; route diagnostics to `stderr` or structured output buffers.
-- **State & Dispatch:** Use bitflags or fixed arrays instead of chained boolean fields (`P-MASK-SAFE`). Use static arrays (`[&'static dyn Trait; N]`) or index routing for O(1) dispatch (`P-O1-DISPATCH`). Keep dispatchers flat (<50 lines) and delegate to `try_parse_*` or handler helpers (`P-FLATTEN-DISPATCH`).
+- **State & Dispatch:** Use bitflags or fixed arrays instead of chained boolean fields (`P-MASK-SAFE`). Use static arrays (`[&'static dyn Trait; N]`) or index routing for O(1) dispatch (`P-O1-DISPATCH`).
+- **Flat Control Flow & Dispatch (`P-FLAT-CONTROL-FLOW`, `P-FLATTEN-DISPATCH`):** Never exceed 2 to 3 levels of block indentation inside any function. Eliminate deep `if` / `if let` / `match` pyramids by using guard clauses, early `return` / `continue` / `break`, the `?` operator, and `let ... else { return ... };` statements. Keep dispatchers flat (<40 lines) and delegate branch logic immediately to dedicated helper functions.
 - **Attributes:** Use `#[inline]` ONLY on trivial getters or proven hot-paths. NEVER put `#[inline]` on functions performing allocations, I/O, process spawning, CLI parsing, or large `match` blocks (`P-ATTR-USAGE`).
 
 ## 4. Memory, Parsing & Performance
 - **Zero-Waste Borrowing:** Accept `&str`, `&[u8]`, `&Path`, or `Cow<'a, str>` in parameters; NEVER accept owned `String` or `PathBuf` when read-only. Avoid unnecessary `.to_string()`, `.to_owned()`, or `PathBuf::from()`.
-- **Bounded Allocations:** Always pre-allocate collections with `.with_capacity()` when size is known or estimable. Use named constants (`const MAX_CAPACITY: usize`) instead of magic numbers and clamp dynamic input sizes to prevent OOM (`P-BOUND-ALLOC`). Query maps (`HashMap::get`) with borrowed keys (`P-ZERO-COST-LOOKUP`).
+- **Bounded Allocations:** Always pre-allocate collections with `.with_capacity()` when size is known or estimable. Use named constants (`const MAX_CAPACITY: usize`) instead of magic numbers, clamp dynamic input sizes, and check `MAX_*` cardinality bounds BEFORE scanning the next element or allocating buffers to prevent OOM (`P-BOUND-ALLOC`). Query maps (`HashMap::get`) with borrowed keys (`P-ZERO-COST-LOOKUP`).
 - **Zero-Copy Slicing:** Use `.split_once()`, `.strip_prefix()`, and safe cursor index offsets instead of intermediate `Vec` allocations or raw pointer arithmetic. Use `str::repeat()` over manual repeat loops (`P-IDIOM-REPEAT`).
 - **PSL (`pods.conf` / `.pod`) & CLI Scanners:**
   - Treat [`PSL_SPEC.md`](PSL_SPEC.md) as the normative Single Source of Truth for PSL lexical rules, mandatory root-level block grammar, error conditions, and parser bounds (`P-BOUND-ALLOC`). When `PSL_SPEC.md` changes, strictly execute Spec-Driven TDD: update unit and integration tests FIRST, verify failure via `cargo test`, and modify `src/io/psl/` SECOND.
-  - Parse PSL configuration (`pods.conf`) and recipe (`*.pod`) files using O(N) single-pass, quote-aware (`'`, `"`) and comment-aware (`#`) state-machine scanners (`P-UNIFIED-PARSER`, `P-NO-QUADRATIC`).
+  - Parse PSL configuration (`pods.conf`) and recipe (`*.pod`) files using O(N) single-pass, quote-aware (`'`, `"`) and comment-aware (`#`) state-machine scanners (`P-UNIFIED-PARSER`, `P-NO-QUADRATIC`). Enforce identical post-token delimiter and block-header error kinds across bare words, single-quoted strings, and double-quoted strings.
   - NEVER use chained `.replace()` for templates or sanitization; use single-pass streaming.
   - Encapsulate UTF-8 boundary checks in small helpers (`P-UTF8-LOOKAROUND`).
   - Use `eq_ignore_ascii_case` in match guards instead of allocating `.to_ascii_lowercase()` (`P-ZERO-ALLOC-CASE`).
   - Parse CLI arguments and file paths using pure iterators over `OsStr` / `OsString` (`P-CLI-PURE`), handling `=` flags and rejecting empty values.
-- **Loops & Combinators:** Order `match` arms by enum declaration with `_ =>` last. Prefer functional combinators (`.filter()`, `.map()`, `.fold()`) over imperative loops (`P-FUNCTIONAL-COMBINATORS`). Extract stateless helpers when any loop exceeds 40 lines (`P-LOOP-MODULARITY`).
+- **Flat Loops & Combinators (`P-NO-NESTED-LOOPS`, `P-LOOP-MODULARITY`, `P-FUNCTIONAL-COMBINATORS`):**
+  - NEVER write nested loops (`for`, `while`, `loop` inside another loop) or place multi-arm `match` trees directly inside a loop body. Extract the inner loop or branch body into a dedicated, stateless helper function.
+  - Keep every loop body under 25 lines and single-level (`P-LOOP-MODULARITY`).
+  - Order `match` arms by enum declaration with `_ =>` last.
+  - Use functional combinators (`.filter()`, `.map()`, `.fold()`) only when they remain shallow and readable (`P-FUNCTIONAL-COMBINATORS`). Never nest loops or multi-branch `if/else` blocks inside closures; extract a named helper function instead.
 - **Buffers:** Use `out.write_str("...")` for static strings and `write!(out, "...", vars)` for dynamic formatting without splitting into multiple fragmented calls.
 
 ## 5. Testing, Documentation & Verification

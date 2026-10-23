@@ -9,3 +9,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Added initial Rust crate layout, core I/O and process modules, and documentation templates.
+- Added single-pass O(N) PSL scanner, parser, intermediate AST, and domain error types.

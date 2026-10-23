@@ -173,7 +173,7 @@ newline         = "\n" | "\r\n" ;
 
 ## 5. Security & Resource Bounds
 
-To comply with `AGENTS.md` (`P-BOUND-ALLOC`, `P-NO-QUADRATIC`, `P-UTF8-LOOKAROUND`), the PSL parser in `src/io/psl/` MUST enforce the following deterministic limits using named constants:
+To comply with `AGENTS.md` (`P-BOUND-ALLOC`, `P-NO-QUADRATIC`, `P-UTF8-LOOKAROUND`), the PSL parser in `src/io/psl/` MUST enforce the following deterministic limits using named constants. Every cardinality limit MUST be checked **before** scanning or allocating the $(N+1)$-th element:
 
 | Constant Name          | Default Limit       | Purpose |
 | :--------------------- | :------------------ | :------ |
@@ -188,9 +188,9 @@ To comply with `AGENTS.md` (`P-BOUND-ALLOC`, `P-NO-QUADRATIC`, `P-UTF8-LOOKAROUN
 The PSL parser MUST return a strongly typed error enum (including the 1-based line number) and MUST fail deterministically on any of the following inputs:
 
 - **Root Directive (`UnexpectedRootDirective`):** A key-value directive (e.g., `editor vim`) appears at nesting depth `0` outside of any `{ ... }` block.
-- **Missing Argument or Brace (`MissingDirectiveArgument`):** A single identifier appears on a line without arguments and without an opening `{`.
+- **Missing Argument or Brace (`MissingDirectiveArgument`):** A single identifier appears on a line without arguments and without an opening `{` (e.g., `general` at root level or `editor` inside a block).
 - **Quoted Identifier (`InvalidIdentifier`):** A block or directive name is quoted (e.g., `"general" {` or `"editor" vim`) or starts with an invalid character (e.g., `123block {` or `-flag val`).
-- **Missing Whitespace Before Brace (`InvalidBlockHeader`):** The opening `{` is attached directly to the identifier or argument without whitespace (e.g., `general{` or `pod app{`).
+- **Missing Whitespace Before Brace (`InvalidBlockHeader`):** The opening `{` is attached directly to the identifier or argument (bare word, single-quoted, or double-quoted) without whitespace (e.g., `general{`, `pod app{`, `pod "app"{`, or `pod 'app'{`).
 - **Trailing Tokens After Brace (`UnexpectedToken`):** Non-comment tokens appear on the same line after `{` (except `}`) or after `}`.
 - **Unclosed Block (`UnclosedBlock`):** `EOF` is reached while nesting depth $> 0$.
 - **Unmatched Closing Brace (`UnexpectedClosingBrace`):** `}` is encountered at nesting depth `0`.

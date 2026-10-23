@@ -11,7 +11,7 @@ Podoxide separates pure domain logic from operating system interactions across t
 
 | Layer            | Path             | Responsibility   |
 | :--------------- | :--------------- | :--------------- |
-| **Core**         | `src/core/`      | Domain models, CLI argument parsing, runtime context, logging, error types, and mode orchestration. |
+| **Core**         | `src/core/`      | Domain models, CLI argument parsing, runtime context, logging, and mode orchestration. |
 | **I/O & System** | `src/io/`        | Process execution (`std::process::Command`), PSL (`.pod` / `pods.conf`) parsing, and filesystem I/O. |
 | **Utilities**    | `src/utilities/` | Stateless string, path, formatting, and collection helper functions. |
 
@@ -33,6 +33,7 @@ podoxide/
 ├── README.md
 ├── USAGE.md
 └── src/
+    ├── error.rs
     ├── lib.rs
     ├── main.rs
     ├── core/
@@ -40,7 +41,6 @@ podoxide/
     │   ├── config.rs
     │   ├── container.rs
     │   ├── context.rs
-    │   ├── error.rs
     │   ├── log.rs
     │   ├── mod.rs
     │   ├── pod.rs
@@ -101,7 +101,7 @@ podoxide/
     │   │   ├── mod.rs
     │   │   └── podman.rs
     │   ├── psl/
-    │   │   ├── lexer.rs
+    │   │   ├── ast.rs
     │   │   ├── mod.rs
     │   │   └── parser.rs
     │   └── system/
@@ -125,7 +125,8 @@ podoxide/
 | `recipe.pod`            | Provides the root recipe template embedded and written by `pods init`. |
 | `.pods-completion.bash` | Provides Bash autocompletion for all CLI modes, actions, and flags. |
 | `src/main.rs`           | Serves as the binary entry point (`pods`), delegates execution to `podoxide`, and returns `ExitCode`. |
-| `src/lib.rs`            | Serves as the library root, enforces `#![forbid(unsafe_code)]`, and exports `core`, `io`, and `utilities`. |
+| `src/lib.rs`            | Serves as the library root, enforces `#![forbid(unsafe_code)]`, and exports `core`, `error`, `io`, and `utilities`. |
+| `src/error.rs`          | Defines the central `PodError`, `PslError`, and `PslErrorKind` domain error types and implements `Error` and `Display`. |
 
 ## Core Domain (`src/core/`)
 
@@ -138,7 +139,6 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/config.rs`    | Defines the configuration model (`pods.conf`), collects active recipes, checks recipe membership, and expands `@group` targets. |
 | `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and builds Podman commands. |
 | `src/core/context.rs`   | Defines the runtime `Context` structure holding loaded configuration, selected mode, parsed flags, and positional parameters. |
-| `src/core/error.rs`     | Defines the strongly typed `PodError` domain enum and implements `std::error::Error` and `std::fmt::Display`. |
 | `src/core/log.rs`       | Provides structured output and diagnostic logging (`debug`, `info`, `warning`, `error`) with debug state control. |
 | `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`) across containers. |
 | `src/core/recipe.rs`    | Defines the `.pod` recipe model, validates pod and container definitions, and resolves target container specifications (`<recipe>/<spec>`). |
@@ -270,9 +270,9 @@ Parses Podoxide configuration files (`pods.conf`) and declarative recipe files (
 
 | File                   | Function |
 | :--------------------- | :------- |
-| `src/io/psl/mod.rs`    | Declares and exposes the public PSL parsing entry points for configurations and recipes. |
-| `src/io/psl/lexer.rs`  | Tokenizes `.pod` and `pods.conf` input in O(N) time with quote-aware (`'`, `"`) and comment-aware (`#`) scanning. |
-| `src/io/psl/parser.rs` | Parses token streams into strongly typed block structures (`general`, `pods`, `recipes`, `pod`, `container`). |
+| `src/io/psl/mod.rs`    | Declares PSL resource bound constants, re-exports AST types, and exposes the `parse_psl` entry point. |
+| `src/io/psl/ast.rs`    | Defines the untyped intermediate AST structures (`PslBlock`, `PslDirective`, `PslDocument`, `PslStatement`). |
+| `src/io/psl/parser.rs` | Scans and parses `.pod` and `pods.conf` input in a single O(N) pass into an untyped `PslDocument` AST. |
 
 ### Host System & Filesystem (`src/io/system/`)
 
