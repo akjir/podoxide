@@ -1,7 +1,24 @@
+// Podoxide
+// Copyright (C) 2026  Stefan Stark
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! Structured output and diagnostic logging for Podoxide.
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use crate::utilities::string::{clamp_utf8_prefix, sanitize_char};
 
 static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
 /// Maximum payload bytes written per diagnostic or output line.
@@ -68,31 +85,7 @@ pub fn write_warning<W: Write>(writer: &mut W, message: &str) {
     write_line(writer, "WARNING: ", message);
 }
 
-fn clamp_utf8_prefix(input: &str, max_bytes: usize) -> &str {
-    if input.len() <= max_bytes {
-        return input;
-    }
-    let mut boundary = max_bytes;
-    while boundary > 0 && !input.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    &input[..boundary]
-}
-
-const fn is_bidi_control(character: char) -> bool {
-    matches!(
-        character,
-        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-    )
-}
-
-fn sanitize_char(character: char) -> char {
-    if character.is_control() || is_bidi_control(character) {
-        return ' ';
-    }
-    character
-}
-
+/// Formats a single sanitized output line with `prefix`, clamped to [`MAX_LOG_MESSAGE_BYTES`], and writes it to `writer`.
 fn write_line<W: Write>(writer: &mut W, prefix: &str, message: &str) {
     let clamped = clamp_utf8_prefix(message, MAX_LOG_MESSAGE_BYTES);
     let mut line = String::with_capacity(prefix.len() + clamped.len() + 1);

@@ -1,3 +1,18 @@
+// Podoxide
+// Copyright (C) 2026  Stefan Stark
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! Host filesystem operations, bounded file reading, and path resolution.
 
 use std::env;
@@ -7,6 +22,9 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::error::{PodError, PslError, PslErrorKind};
 use crate::io::psl::MAX_FILE_BYTES;
+use crate::utilities::path::{
+    matches_extension, normalize_lexical_path, pop_relative_or_absolute,
+};
 
 const INITIAL_DIRECTORY_CAPACITY: usize = 16;
 const INITIAL_FILE_CAPACITY: usize = 256;
@@ -107,16 +125,7 @@ pub fn write_file(path: &Path, content: &str) -> Result<(), PodError> {
     Ok(())
 }
 
-fn apply_lexical_component(normalized: &mut PathBuf, component: Component<'_>) {
-    match component {
-        Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-        Component::RootDir => normalized.push(component.as_os_str()),
-        Component::CurDir => {}
-        Component::ParentDir => pop_relative_or_absolute(normalized),
-        Component::Normal(part) => normalized.push(part),
-    }
-}
-
+/// Applies a path component to `resolved` and canonicalizes existing directory prefixes to resolve symlinks before `..`.
 fn apply_resolved_component(resolved: &mut PathBuf, component: Component<'_>) {
     match component {
         Component::Prefix(prefix) => resolved.push(prefix.as_os_str()),
@@ -132,6 +141,7 @@ fn apply_resolved_component(resolved: &mut PathBuf, component: Component<'_>) {
     }
 }
 
+/// Appends a directory entry name to `entries` if it is valid UTF-8, matches `extension`, and stays within [`MAX_DIRECTORY_ENTRIES`].
 fn collect_matching_entry(
     entry_result: io::Result<DirEntry>,
     extension: Option<&str>,
@@ -152,6 +162,7 @@ fn collect_matching_entry(
     Ok(())
 }
 
+/// Creates a [`PodError::Io`] indicating that [`MAX_DIRECTORY_ENTRIES`] was exceeded.
 fn directory_limit_error() -> PodError {
     PodError::from(io::Error::new(
         io::ErrorKind::InvalidData,
@@ -159,6 +170,7 @@ fn directory_limit_error() -> PodError {
     ))
 }
 
+/// Verifies that `metadata` describes a regular file, rejecting directories, FIFOs, and device nodes.
 fn ensure_regular_file(metadata: &Metadata) -> Result<(), PodError> {
     if !metadata.is_file() {
         return Err(PodError::from(io::Error::new(
@@ -169,6 +181,7 @@ fn ensure_regular_file(metadata: &Metadata) -> Result<(), PodError> {
     Ok(())
 }
 
+/// Verifies that `path` either does not exist yet or is an existing regular file (and not a symlink or directory).
 fn ensure_writable_target(path: &Path) -> Result<(), PodError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -184,46 +197,7 @@ fn ensure_writable_target(path: &Path) -> Result<(), PodError> {
     Ok(())
 }
 
-fn matches_extension(file_name: &str, extension: Option<&str>) -> bool {
-    let Some(required_extension) = extension else {
-        return true;
-    };
-    let Some(stem) = file_name.strip_suffix(required_extension) else {
-        return false;
-    };
-    !stem.is_empty()
-}
-
-fn normalize_lexical_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::with_capacity(path.as_os_str().len());
-    for component in path.components() {
-        apply_lexical_component(&mut normalized, component);
-    }
-    if normalized.as_os_str().is_empty() && !path.as_os_str().is_empty() {
-        normalized.push(".");
-    }
-    normalized
-}
-
-fn pop_relative_or_absolute(path: &mut PathBuf) {
-    match path.components().next_back() {
-        Some(Component::Prefix(_) | Component::RootDir) => {}
-        Some(Component::CurDir) => {
-            let _ = path.pop();
-            path.push(Component::ParentDir.as_os_str());
-        }
-        Some(Component::ParentDir) => {
-            path.push(Component::ParentDir.as_os_str());
-        }
-        Some(Component::Normal(_)) => {
-            let _ = path.pop();
-        }
-        None => {
-            path.push(Component::ParentDir.as_os_str());
-        }
-    }
-}
-
+/// Reads at most [`MAX_FILE_BYTES`] bytes from `reader` and decodes the buffer as UTF-8.
 fn read_bounded_utf8<R: Read>(reader: R, initial_capacity: usize) -> Result<String, PodError> {
     let mut bytes = Vec::with_capacity(initial_capacity.min(MAX_FILE_BYTES));
     let mut bounded = reader.take((MAX_FILE_BYTES + 1) as u64);
@@ -238,6 +212,7 @@ fn read_bounded_utf8<R: Read>(reader: R, initial_capacity: usize) -> Result<Stri
         .map_err(|error| PodError::from(io::Error::new(io::ErrorKind::InvalidData, error)))
 }
 
+/// Resolves `path` component by component, canonicalizing existing prefixes along the way.
 fn resolve_absolute_components(path: &Path) -> PathBuf {
     let mut resolved = PathBuf::with_capacity(path.as_os_str().len());
     for component in path.components() {
@@ -257,10 +232,10 @@ mod tests {
 
     use crate::error::{PodError, PslErrorKind};
     use crate::io::psl::MAX_FILE_BYTES;
+    use crate::utilities::path::{matches_extension, normalize_lexical_path};
     use super::{
         INITIAL_FILE_CAPACITY, MAX_DIRECTORY_ENTRIES, collect_matching_entry, directory_exists,
-        file_exists, get_absolute_path, list_directory, matches_extension, normalize_lexical_path,
-        read_bounded_utf8, read_file, write_file,
+        file_exists, get_absolute_path, list_directory, read_bounded_utf8, read_file, write_file,
     };
 
     fn create_temp_test_dir(suffix: &str) -> PathBuf {

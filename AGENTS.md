@@ -16,21 +16,23 @@
 
 ## 2. Deterministic File Layout (`.rs`)
 Organize every Rust source file strictly in this vertical order:
-1. **Module Docs:** `//! ...` at top of file. Keep `///` above items and `//` for domain quirks.
-2. **Crate Attributes:** `#![...]` (mandatory `#![forbid(unsafe_code)]` in `main.rs` / `lib.rs`).
-3. **Imports:** 2 groups separated by a blank line:
+1. **License Header (`P-LICENSE-HEADER`):** The exact GPL-3.0 license comment block (matching `src/main.rs` verbatim) MUST appear at the very top of every `.rs` file, followed by a single blank line.
+2. **Module Docs:** `//! ...` module-level documentation directly below the license header. Keep `///` above all production items and `//` for non-obvious domain quirks.
+3. **Crate Attributes:** `#![...]` (mandatory `#![forbid(unsafe_code)]` in `main.rs` / `lib.rs`).
+4. **Imports:** 2 groups separated by a blank line:
    - `std::` imports
    - `crate::`, `self::`, and `super::` imports (strictly in that ASCII order, including inside `mod tests`; never let `rustfmt` place `super::` before `crate::`)
    Alphabetize lines and braced items (`pub use x::{A, B};`).
-4. **Constants & Statics:** Module-local `const` and `static` items, sorted alphabetically.
-5. **Types & Impls:** `struct`, `enum`, and `type` definitions sorted alphabetically (`pub` before private). Every `impl` block MUST immediately follow its type definition:
+5. **Constants & Statics:** Module-local `const` and `static` items, sorted alphabetically.
+6. **Types & Impls:** `struct`, `enum`, and `type` definitions sorted alphabetically (`pub` before private). Every `impl` block MUST immediately follow its type definition:
    - **Inherent `impl Type`:** Constructors at top (`new`, `with_capacity`), all remaining methods sorted alphabetically below.
    - **Trait `impl Trait for Type`:** Sorted alphabetically by trait name directly below the inherent `impl`.
-6. **Free Functions:** Sorted alphabetically (`pub` before private).
-7. **Tests:** `#[cfg(test)] mod tests { ... }` at the bottom of the file.
+7. **Free Functions:** Sorted alphabetically (`pub` before private).
+8. **Tests:** `#[cfg(test)] mod tests { ... }` at the bottom of the file.
 
 ## 3. Architecture, Types & Idioms
 - **Formatting & Naming:** Indent with 4 spaces (`rustfmt`). Remove trailing spaces. Alphabetize `#[derive(...)]` macros and struct fields/enum variants within visibility tiers (`pub` > private). Do not abbreviate variable names (`container` > `cnt`, `element` > `el`; loop indices `i`, `j` are allowed) (`P-NO-ABBREV-VARS`).
+- **Mandatory Documentation (`P-FN-DOCS`):** Every production function, method, and constructor (`pub`, `pub(crate)`, and private) as well as every `struct`, `enum`, and `type` definition MUST have a concise `///` doc comment directly above it. Write all doc comments in factual English following ASD-STE100 (80%) without emojis or filler text. Whenever you extract a helper function (e.g., to satisfy `P-FLAT-CONTROL-FLOW` or `P-NO-NESTED-LOOPS`), immediately document it with `///`. **Exception for Tests:** Functions inside `#[cfg(test)] mod tests` (`#[test]` functions and test-only helpers) do NOT require `///` comments unless a comment is strictly necessary to explain a non-obvious edge case or attack vector.
 - **Constructors & Traits:** Implement `Default` for all ZSTs and parameterless types. `new()` MUST delegate to `Self::default()` (or `Self` for ZSTs). Enforce `#[must_use]` on constructors and pure getters. Implement standard traits (`Display`, `FromStr`) instead of custom duplicate methods.
 - **Error Handling:** Use strongly typed domain error enums (e.g., `PodError`); NEVER use `Result<T, String>`. Preserve error causes via `#[source]` / `Error::source` chaining (`P-ERR-PRESERVE`). Use `format!` for error messages over manual allocation micro-optimizations.
 - **I/O & Process Isolation:** Isolate all direct `std::fs` and `std::process::Command` calls to dedicated `src/io/` modules (`src/io/exec/`, `src/io/psl/`, `src/io/system/`) (`P-IO-ISOLATION`; see [`ARCHITECTURE.md`](ARCHITECTURE.md)). Never use `println!` in core library logic; route diagnostics to `stderr` or structured output buffers.

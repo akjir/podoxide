@@ -1,13 +1,32 @@
+// Podoxide
+// Copyright (C) 2026  Stefan Stark
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! Configuration model (`pods.conf`), PSL configuration loading, and semantic validation.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
-use crate::core::cli;
-use crate::error::{ConfigError, ConfigErrorKind, PodError};
+use crate::error::{ConfigError, ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError};
 use crate::io::psl::{PslBlock, PslDirective, PslDocument, PslStatement, parse_psl};
 use crate::io::system::fs;
+use crate::utilities::path::{extract_config_stem, has_parent_dir};
+use crate::utilities::string::{
+    clamp_utf8_prefix, contains_control_or_whitespace, is_bidi_control, is_valid_identifier,
+    is_valid_recipe_identifier, sanitize_char,
+};
 
 /// Default configuration name when `--config` is not specified.
 pub const DEFAULT_CONFIG_NAME: &str = "pods";
@@ -122,11 +141,16 @@ pub fn load(path: &Path) -> Result<Config, PodError> {
     validate_load_path(path)?;
     let content = fs::read_file(path)?;
     let mut config = Config::from_str(&content)?;
-    config.name = cli::resolve_config_name(Some(path));
+    config.name = path
+        .to_str()
+        .and_then(extract_config_stem)
+        .unwrap_or(DEFAULT_CONFIG_NAME)
+        .to_owned();
     config.path = path.to_path_buf();
     Ok(config)
 }
 
+/// Validates and applies a single directive inside the `general` block (`editor` or `simulate`).
 fn apply_general_statement(
     config: &mut Config,
     statement: &PslStatement<'_>,
@@ -174,6 +198,7 @@ fn apply_general_statement(
     }
 }
 
+/// Validates and inserts a single recipe group directive inside the `recipes.groups` block.
 fn apply_group_statement(
     groups: &mut BTreeMap<String, Vec<String>>,
     statement: &PslStatement<'_>,
@@ -201,6 +226,7 @@ fn apply_group_statement(
     Ok(())
 }
 
+/// Validates and applies a single directive inside the `pods` block (`path`).
 fn apply_pods_statement(
     pods: &mut PodsConfig,
     statement: &PslStatement<'_>,
@@ -237,6 +263,7 @@ fn apply_pods_statement(
     }
 }
 
+/// Validates and applies a statement inside the `recipes` block (`path` directive or `groups` sub-block).
 fn apply_recipes_statement(
     recipes: &mut RecipesConfig,
     statement: &PslStatement<'_>,
@@ -281,6 +308,7 @@ fn apply_recipes_statement(
     }
 }
 
+/// Validates and dispatches a top-level block (`general`, `pods`, or `recipes`) in `pods.conf`.
 fn apply_root_block(
     config: &mut Config,
     block: &PslBlock<'_>,
@@ -326,6 +354,7 @@ fn apply_root_block(
     }
 }
 
+/// Builds and semantically validates a [`Config`] from a parsed [`PslDocument`].
 fn build_config(document: &PslDocument<'_>) -> Result<Config, ConfigError> {
     let mut config = Config::new();
     let mut seen_blocks = 0_u8;
@@ -341,6 +370,7 @@ fn build_config(document: &PslDocument<'_>) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
+/// Validates and collects all `<recipe>` and `@<group>` target arguments for a group directive.
 fn collect_group_targets(directive: &PslDirective<'_>) -> Result<Vec<String>, ConfigError> {
     let mut targets = Vec::with_capacity(directive.arguments.len());
     for argument in &directive.arguments {
@@ -357,6 +387,7 @@ fn collect_group_targets(directive: &PslDirective<'_>) -> Result<Vec<String>, Co
     Ok(targets)
 }
 
+/// Verifies that a configuration block header does not declare any arguments.
 fn ensure_no_block_arguments(block: &PslBlock<'_>) -> Result<(), ConfigError> {
     if !block.arguments.is_empty() {
         return Err(ConfigError::with_token(
@@ -368,17 +399,15 @@ fn ensure_no_block_arguments(block: &PslBlock<'_>) -> Result<(), ConfigError> {
     Ok(())
 }
 
-fn has_parent_dir(path: &Path) -> bool {
-    path.components()
-        .any(|component| matches!(component, Component::ParentDir))
-}
-
+/// Evaluates whether `value` is a safe directory path for `pods.path` or `recipes.path`.
 fn is_valid_directory_path(value: &str) -> bool {
     if value.is_empty()
         || value != value.trim()
         || value.starts_with('-')
         || value.contains(':')
-        || value.chars().any(char::is_control)
+        || value
+            .chars()
+            .any(|character| character.is_control() || is_bidi_control(character))
     {
         return false;
     }
@@ -390,13 +419,12 @@ fn is_valid_directory_path(value: &str) -> bool {
         .any(|component| matches!(component, Component::CurDir | Component::Normal(_)))
 }
 
+/// Evaluates whether `value` is a safe executable name or path for `general.editor`.
 fn is_valid_editor_value(value: &str) -> bool {
     if value.is_empty()
         || value.starts_with('-')
         || value.ends_with('/')
-        || value
-            .chars()
-            .any(|character| character.is_whitespace() || character.is_control())
+        || contains_control_or_whitespace(value)
     {
         return false;
     }
@@ -413,61 +441,23 @@ fn is_valid_editor_value(value: &str) -> bool {
         && !file_name.starts_with('-')
 }
 
-fn is_valid_group_identifier(identifier: &str) -> bool {
-    let Some(&first) = identifier.as_bytes().first() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != b'_' {
-        return false;
-    }
-    identifier
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-}
-
+/// Evaluates whether `target` is a valid `@<group>` reference or recipe stem identifier.
 fn is_valid_group_target(target: &str) -> bool {
     if let Some(group_name) = target.strip_prefix('@') {
-        return is_valid_group_identifier(group_name);
+        return is_valid_identifier(group_name);
     }
     is_valid_recipe_identifier(target)
 }
 
+/// Evaluates whether `path` is a safe configuration file path without `..` traversal or invalid filenames.
 fn is_valid_load_path(path: &Path) -> bool {
     let Some(raw) = path.to_str() else {
         return false;
     };
-    if raw.is_empty()
-        || raw != raw.trim()
-        || raw.starts_with('-')
-        || raw.ends_with('/')
-        || raw.chars().any(char::is_control)
-        || has_parent_dir(path)
-    {
-        return false;
-    }
-    let file_name = raw.rsplit('/').next().unwrap_or(raw);
-    let stem = file_name.strip_suffix(".conf").unwrap_or(file_name);
-    !file_name.is_empty()
-        && file_name != "."
-        && file_name != ".."
-        && !file_name.starts_with('-')
-        && !stem.is_empty()
-        && stem != "."
-        && stem != ".."
+    !has_parent_dir(path) && extract_config_stem(raw).is_some()
 }
 
-fn is_valid_recipe_identifier(identifier: &str) -> bool {
-    let Some(&first) = identifier.as_bytes().first() else {
-        return false;
-    };
-    if !first.is_ascii_alphanumeric() && first != b'_' {
-        return false;
-    }
-    identifier
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-}
-
+/// Sets `flag` in `seen` or returns a duplicate block/directive [`ConfigError`] if already set.
 fn mark_seen(
     seen: &mut u8,
     flag: u8,
@@ -482,6 +472,7 @@ fn mark_seen(
     Ok(())
 }
 
+/// Parses a single-argument boolean directive (`"true"` or `"false"`).
 fn parse_bool_directive(directive: &PslDirective<'_>) -> Result<bool, ConfigError> {
     let value = parse_single_argument(directive)?;
     match value {
@@ -495,6 +486,7 @@ fn parse_bool_directive(directive: &PslDirective<'_>) -> Result<bool, ConfigErro
     }
 }
 
+/// Parses and validates the `general.editor` directive argument.
 fn parse_editor_directive(directive: &PslDirective<'_>) -> Result<String, ConfigError> {
     let value = parse_single_argument(directive)?;
     if !is_valid_editor_value(value) {
@@ -507,6 +499,7 @@ fn parse_editor_directive(directive: &PslDirective<'_>) -> Result<String, Config
     Ok(value.to_owned())
 }
 
+/// Parses all statements inside the `general` block of `pods.conf`.
 fn parse_general_block(config: &mut Config, block: &PslBlock<'_>) -> Result<(), ConfigError> {
     let mut seen_directives = 0_u8;
     for statement in &block.statements {
@@ -515,6 +508,7 @@ fn parse_general_block(config: &mut Config, block: &PslBlock<'_>) -> Result<(), 
     Ok(())
 }
 
+/// Parses and validates the `groups` sub-block inside `recipes`, ensuring it is non-empty and acyclic.
 fn parse_groups_block(recipes: &mut RecipesConfig, block: &PslBlock<'_>) -> Result<(), ConfigError> {
     ensure_no_block_arguments(block)?;
     if block.statements.is_empty() {
@@ -529,6 +523,7 @@ fn parse_groups_block(recipes: &mut RecipesConfig, block: &PslBlock<'_>) -> Resu
     validate_groups_acyclic(&recipes.groups, block.line)
 }
 
+/// Parses and validates a single-argument directory `path` directive.
 fn parse_path_directive(directive: &PslDirective<'_>) -> Result<PathBuf, ConfigError> {
     let value = parse_single_argument(directive)?;
     if !is_valid_directory_path(value) {
@@ -541,6 +536,7 @@ fn parse_path_directive(directive: &PslDirective<'_>) -> Result<PathBuf, ConfigE
     Ok(PathBuf::from(value))
 }
 
+/// Parses all statements inside the `pods` block of `pods.conf`.
 fn parse_pods_block(pods: &mut PodsConfig, block: &PslBlock<'_>) -> Result<(), ConfigError> {
     let mut seen_directives = 0_u8;
     for statement in &block.statements {
@@ -549,6 +545,7 @@ fn parse_pods_block(pods: &mut PodsConfig, block: &PslBlock<'_>) -> Result<(), C
     Ok(())
 }
 
+/// Parses all statements inside the `recipes` block and verifies that a `groups` sub-block is present.
 fn parse_recipes_block(recipes: &mut RecipesConfig, block: &PslBlock<'_>) -> Result<(), ConfigError> {
     let mut seen_items = 0_u8;
     for statement in &block.statements {
@@ -563,6 +560,7 @@ fn parse_recipes_block(recipes: &mut RecipesConfig, block: &PslBlock<'_>) -> Res
     Ok(())
 }
 
+/// Extracts the sole argument of a directive or returns [`ConfigErrorKind::InvalidArgumentCount`].
 fn parse_single_argument<'a>(directive: &'a PslDirective<'a>) -> Result<&'a str, ConfigError> {
     if directive.arguments.len() != 1 {
         return Err(ConfigError::with_token(
@@ -574,6 +572,20 @@ fn parse_single_argument<'a>(directive: &'a PslDirective<'a>) -> Result<&'a str,
     Ok(directive.arguments[0].as_ref())
 }
 
+/// Clamps and sanitizes a filesystem `path` into a bounded [`MAX_ERROR_TOKEN_BYTES`] error token.
+fn sanitize_path_token(path: &Path) -> String {
+    let raw_bytes = path.as_os_str().as_encoded_bytes();
+    let prefix_len = raw_bytes.len().min(MAX_ERROR_TOKEN_BYTES);
+    let lossy = String::from_utf8_lossy(&raw_bytes[..prefix_len]);
+    let clamped = clamp_utf8_prefix(&lossy, MAX_ERROR_TOKEN_BYTES);
+    let mut sanitized = String::with_capacity(clamped.len());
+    for character in clamped.chars() {
+        sanitized.push(sanitize_char(character));
+    }
+    sanitized
+}
+
+/// Verifies that `@<group>` references in `groups` form a directed acyclic graph (DAG) without cycles.
 fn validate_groups_acyclic(
     groups: &BTreeMap<String, Vec<String>>,
     line: usize,
@@ -592,18 +604,19 @@ fn validate_groups_acyclic(
     Ok(())
 }
 
+/// Validates that `path` is a safe configuration file path before reading from disk.
 fn validate_load_path(path: &Path) -> Result<(), PodError> {
     if !is_valid_load_path(path) {
-        let token = path.to_string_lossy().into_owned();
         return Err(PodError::from(ConfigError {
             kind: ConfigErrorKind::InvalidPath,
             line: None,
-            token: Some(token),
+            token: Some(sanitize_path_token(path)),
         }));
     }
     Ok(())
 }
 
+/// Performs depth-first cycle detection starting from `group_name`.
 fn verify_group_acyclic<'a>(
     group_name: &'a str,
     groups: &'a BTreeMap<String, Vec<String>>,
@@ -624,6 +637,7 @@ fn verify_group_acyclic<'a>(
     Ok(())
 }
 
+/// Inspects all `@<subgroup>` targets of the currently visiting group for cycles.
 fn verify_group_targets<'a>(
     targets: &'a [String],
     groups: &'a BTreeMap<String, Vec<String>>,
@@ -657,7 +671,7 @@ mod tests {
     use std::process;
     use std::str::FromStr;
 
-    use crate::error::{ConfigErrorKind, PodError, PslErrorKind};
+    use crate::error::{ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError, PslErrorKind};
     use crate::io::system::fs as system_fs;
     use super::{
         Config, DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH, DEFAULT_RECIPES_PATH, PodsConfig,
@@ -818,6 +832,7 @@ recipes {
             "\"/var/pods \"",
             "/",
             "///",
+            "/var/pods/\u{202E}evil",
         ] {
             let pods_input = format!(
                 "pods {{\n    path {malicious_path}\n}}\nrecipes {{\n    groups {{\n        all app\n    }}\n}}"
@@ -846,6 +861,7 @@ recipes {
             "/usr/bin/",
             "../../bin/vim",
             "/usr/bin/../../etc/passwd",
+            "/usr/bin/\u{202E}miv",
         ] {
             let editor_input = format!(
                 "general {{\n    editor {malicious_editor}\n}}\nrecipes {{\n    groups {{\n        all app\n    }}\n}}"
@@ -875,6 +891,7 @@ recipes {
             "/tmp/staging.conf/",
             " /tmp/staging.conf",
             "/tmp/staging.conf\n",
+            "/tmp/\u{202E}staging.conf",
         ] {
             let err = Config::load(Path::new(malicious_load_path)).unwrap_err();
             match err {
@@ -883,6 +900,29 @@ recipes {
                 }
                 other => panic!("expected PodError::Config(InvalidPath), got {other:?}"),
             }
+        }
+
+        let injected_load_err =
+            Config::load(Path::new("/tmp/../bad\n\x1b[31m\u{202E}.conf")).unwrap_err();
+        match injected_load_err {
+            PodError::Config(config_err) => {
+                assert_eq!(config_err.kind, ConfigErrorKind::InvalidPath);
+                let token = config_err.token.as_deref().unwrap();
+                assert!(!token.contains('\n'));
+                assert!(!token.contains('\x1b'));
+                assert!(!token.contains('\u{202E}'));
+            }
+            other => panic!("expected PodError::Config(InvalidPath), got {other:?}"),
+        }
+
+        let oversized_path = format!("/tmp/../{}.conf", "a".repeat(MAX_ERROR_TOKEN_BYTES + 128));
+        let oversized_load_err = Config::load(Path::new(&oversized_path)).unwrap_err();
+        match oversized_load_err {
+            PodError::Config(config_err) => {
+                assert_eq!(config_err.kind, ConfigErrorKind::InvalidPath);
+                assert!(config_err.token.as_deref().unwrap().len() <= MAX_ERROR_TOKEN_BYTES);
+            }
+            other => panic!("expected PodError::Config(InvalidPath), got {other:?}"),
         }
 
         let invalid_utf8_os = OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff, 0xfe]);

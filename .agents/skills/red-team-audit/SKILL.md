@@ -1,17 +1,18 @@
 ---
 name: red
-description: Acts as an adversarial Red Team Security Auditor to ruthlessly break, exploit, and subsequently harden the Rust codebase. Triggered when the user types `/red`, `/red all`, or `/red <file_or_dir...>`.
+description: Acts as an adversarial Red Team Security Auditor to ruthlessly break, exploit, and subsequently harden the Rust codebase. Triggered when the user types `/red`, `/red all`, `/red changed`, or `/red <file_or_dir...>`.
 ---
 
 # Red Team Audit & Hardening Workflow
 
-Execute this workflow whenever the user invokes `/red`, `/red all`, `/red <path>`, or `/red <path1> <path2> ...` (where each `<path>` is a file or a directory). Your persona is an adversarial hacker combined with a strict Rust security engineer. Follow all rules in `AGENTS.md` strictly.
+Execute this workflow whenever the user invokes `/red`, `/red all`, `/red changed`, `/red <path>`, or `/red <path1> <path2> ...` (where each `<path>` is a file or a directory). Your persona is an adversarial hacker combined with a strict Rust security engineer. Follow all rules in `AGENTS.md` strictly.
 
 ## 1. Scope Resolution & Context-Isolated Dispatch
 To guarantee maximum audit depth, **every file must be audited in an isolated, distraction-free context window**:
 1. **Single File (`/red <file>`):** Audit the specified file directly (or via a single dedicated `research` subagent) with exclusive focus on that file.
-2. **Multiple Files or Directory (`/red <file1> <file2> ...` or `/red <dir>`):**
+2. **Multiple Files, Directory, or Changed Files (`/red <file1> <file2> ...`, `/red <dir>`, or `/red changed`):**
    - If a directory path is given, expand it to **all `.rs` files inside that directory** (including subdirectories) and treat the resulting file list identically to an explicit list of multiple files.
+   - If `/red changed` is given, resolve all non-deleted `.rs` files modified, staged, or untracked relative to the last commit (`HEAD`, via `git diff --name-only --diff-filter=d HEAD -- '*.rs'` and `git ls-files --others --exclude-standard -- '*.rs'`) and treat the resulting file list identically to an explicit list of files (stopping immediately if no `.rs` files changed).
    - Spawn **one dedicated `research` subagent per file** (`invoke_subagent` with `TypeName: "research"` and `Model: "inherit"`).
    - Provide every subagent with the complete Red Team Reconnaissance instructions (Section 2) and require it to inspect **only its single assigned file** (reading external definitions only when strictly necessary to verify a called function or type contract).
 3. **Full Project (`/red` without arguments or `/red all`):**
@@ -51,16 +52,16 @@ Once the user approves the Remediation Plan, apply defensive Rust programming wi
 
 ### Per-File Remediation Checklist
 For each vulnerable file, the assigned agent must execute these steps in order:
-1. **Write Exploit Tests First:** Open the target module's `#[cfg(test)] mod tests` block (or the corresponding integration test in `tests/`) and write tests that actively simulate the identified attacks (`M-DELIM-INJECT-TESTS`, `M-PATH-EDGE-TESTS`, `M-EXTREME-BOUND-TESTS`, `M-FALLBACK-TESTS`, `M-IO-TESTS`).
-2. **Harden the Source Code:** Refactor the target `.rs` file in `src/` to block the attacks. Enforce `#![forbid(unsafe_code)]`, eliminate `.unwrap()` / `.expect()`, clamp dynamic allocations (`P-BOUND-ALLOC`), use zero-copy safe slicing, and return strongly typed `PodError` variants with `#[source]` chaining (`P-ERR-PRESERVE`). Maintain the strict deterministic vertical file layout defined in `AGENTS.md`. Do not create speculative helper methods, unused trait implementations, or fallback branches that have no active caller (`P-NO-DEAD-CODE`); if downstream modules are not implemented yet, create only the minimal no-op placeholder stubs (`Ok(())` or `Default`) directly invoked by the current module so the crate compiles cleanly.
+1. **Write Exploit Tests First:** Open the target module's `#[cfg(test)] mod tests` block (or the corresponding integration test in `tests/`) and write tests that actively simulate the identified attacks (`M-DELIM-INJECT-TESTS`, `M-PATH-EDGE-TESTS`, `M-EXTREME-BOUND-TESTS`, `M-FALLBACK-TESTS`, `M-IO-TESTS`). Keep `#[test]` functions free of redundant `///` doc comments unless required to explain a non-obvious attack vector (`P-FN-DOCS`).
+2. **Harden the Source Code:** Refactor the target `.rs` file in `src/` to block the attacks. Enforce `#![forbid(unsafe_code)]`, eliminate `.unwrap()` / `.expect()`, clamp dynamic allocations (`P-BOUND-ALLOC`), use zero-copy safe slicing, and return strongly typed `PodError` variants with `#[source]` chaining (`P-ERR-PRESERVE`). Maintain the strict deterministic vertical file layout defined in `AGENTS.md`, starting with the verbatim GPL-3.0 license header from `src/main.rs` (`P-LICENSE-HEADER`) above `//!` module docs, and document every newly created or modified production function, method, constructor, or type (`pub` or private) with a concise `///` doc comment (`P-FN-DOCS`). Do not create speculative helper methods, unused trait implementations, or fallback branches that have no active caller (`P-NO-DEAD-CODE`); if downstream modules are not implemented yet, create only the minimal no-op placeholder stubs (`Ok(())` or `Default`) directly invoked by the current module so the crate compiles cleanly.
 3. **Flatness & Readability Gate:** Before running verification (`cargo test` and `cargo clippy -- -D warnings`), scan all modified functions for:
    - Nested loops (`P-NO-NESTED-LOOPS`)
    - Indentation depth exceeding 3 levels (`P-FLAT-CONTROL-FLOW`)
    - Complex inline closures or large loop bodies (`P-VERTICAL-CLARITY`, `P-LOOP-MODULARITY`)
-   If any function violates these rules, refactor the inner blocks into small, alphabetically sorted helper functions (following Section 2 of `AGENTS.md`) before completing the file.
-4. **Direct-Use & Dead-Code Pruning Gate (`P-NO-DEAD-CODE`):** Before running verification (`cargo test` and `cargo clippy -- -D warnings`):
-   - Scan all modified and affected files for orphaned functions, unused struct fields, obsolete error variants, legacy code paths, underscore-prefixed unused items (`_unused_fn`), or `#[allow(dead_code)]` attributes.
-   - Remove every piece of code that no longer has a direct use (along with its obsolete unit tests).
+   If any function violates these rules, refactor the inner blocks into small, alphabetically sorted helper functions (following Section 2 of `AGENTS.md`) with `///` doc comments (`P-FN-DOCS`) before completing the file.
+4. **License, Documentation & Dead-Code Audit Gate (`P-LICENSE-HEADER`, `P-FN-DOCS`, `P-NO-DEAD-CODE`):** Before running verification (`cargo test` and `cargo clippy -- -D warnings`):
+   - Flag any `.rs` file missing the verbatim license header (`P-LICENSE-HEADER`) or `//!` module docs, or any production `fn`, `struct`, `enum`, or `type` missing a `///` doc comment (`P-FN-DOCS`), as a violation that must be fixed immediately.
+   - Scan all modified and affected files for orphaned functions, unused struct fields, obsolete error variants, legacy code paths, underscore-prefixed unused items (`_unused_fn`), or `#[allow(dead_code)]` attributes, and remove every piece of code that no longer has a direct use (along with its obsolete unit tests).
 5. **Closed-Loop Verification:** Run `cargo test` and `cargo clippy -- -D warnings`. If any check or warning fails, analyze the compiler output, fix the root cause, and re-run until both pass with zero warnings.
 
 ## 5. Finalization

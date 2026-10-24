@@ -1,3 +1,18 @@
+// Podoxide
+// Copyright (C) 2026  Stefan Stark
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! CLI argument scanner, flag validator, and mode/action resolver.
 
 use std::ffi::{OsStr, OsString};
@@ -10,6 +25,8 @@ use crate::core::context::{
     InitAction, LogsAction, Mode, ModeAction, RecipeAction,
 };
 use crate::error::{CliError, CliErrorKind};
+use crate::utilities::path::extract_config_stem;
+use crate::utilities::string::{contains_control_or_whitespace, is_empty_value_literal};
 
 const INITIAL_POSITIONALS_CAPACITY: usize = 8;
 /// Maximum number of command-line arguments accepted by the parser.
@@ -46,18 +63,11 @@ where
 /// Resolves a configuration file argument into its configuration name (file stem).
 #[must_use]
 pub fn resolve_config_name(config: Option<&Path>) -> String {
-    let Some(path) = config else {
-        return String::from(DEFAULT_CONFIG_NAME);
-    };
-    let Some(raw) = path.to_str() else {
-        return String::from(DEFAULT_CONFIG_NAME);
-    };
-    if parse_config_path("--config", raw).is_err() {
-        return String::from(DEFAULT_CONFIG_NAME);
-    }
-    let file_name = raw.rsplit('/').next().unwrap_or(raw);
-    let stem = file_name.strip_suffix(".conf").unwrap_or(file_name);
-    stem.to_owned()
+    config
+        .and_then(Path::to_str)
+        .and_then(extract_config_stem)
+        .unwrap_or(DEFAULT_CONFIG_NAME)
+        .to_owned()
 }
 
 /// Resolves a configuration file argument into a normalized `.conf` path.
@@ -69,7 +79,7 @@ pub fn resolve_config_path(config: Option<&Path>) -> PathBuf {
     let Some(raw) = path.to_str() else {
         return PathBuf::from(DEFAULT_CONFIG_PATH);
     };
-    if parse_config_path("--config", raw).is_err() {
+    if extract_config_stem(raw).is_none() {
         return PathBuf::from(DEFAULT_CONFIG_PATH);
     }
     let has_explicit_prefix =
@@ -87,6 +97,7 @@ pub fn resolve_config_path(config: Option<&Path>) -> PathBuf {
     PathBuf::from(resolved)
 }
 
+/// Validates and stores a value-taking CLI flag (`--config`, `-c`, `--since`, `--tail`, `--until`) into `flags`.
 fn apply_flag_value(flags: &mut Flags, flag_name: &str, raw_value: &str) -> Result<(), CliError> {
     if is_empty_value_literal(raw_value) {
         return Err(CliError::with_argument(
@@ -115,6 +126,7 @@ fn apply_flag_value(flags: &mut Flags, flag_name: &str, raw_value: &str) -> Resu
     }
 }
 
+/// Consumes and validates the next CLI argument as the value for a space-separated value flag.
 fn consume_next_value<I, T>(
     iterator: &mut I,
     argument_count: &mut usize,
@@ -151,12 +163,7 @@ where
     Ok(value_str.to_owned())
 }
 
-fn contains_control_or_whitespace(value: &str) -> bool {
-    value
-        .chars()
-        .any(|character| character.is_whitespace() || character.is_control())
-}
-
+/// Verifies that `positionals` contains at most `max_count` arguments.
 fn ensure_no_extra_arguments(
     positionals: &[String],
     max_count: usize,
@@ -170,10 +177,7 @@ fn ensure_no_extra_arguments(
     Ok(())
 }
 
-fn is_empty_value_literal(value: &str) -> bool {
-    value.is_empty() || value == "\"\"" || value == "''"
-}
-
+/// Evaluates whether `segment` is a safe, non-empty target component without path separators, leading dashes, or control characters.
 fn is_valid_target_segment(segment: &str) -> bool {
     !segment.is_empty()
         && segment != "."
@@ -184,12 +188,14 @@ fn is_valid_target_segment(segment: &str) -> bool {
         && !contains_control_or_whitespace(segment)
 }
 
+/// Converts an `OsStr` command-line argument to a UTF-8 `&str`.
 fn os_str_to_utf8(argument: &OsStr) -> Result<&str, CliError> {
     argument
         .to_str()
         .ok_or_else(|| CliError::new(CliErrorKind::InvalidUtf8))
 }
 
+/// Parses positional arguments for `pods command exec <recipe> <command|index>`.
 fn parse_command_exec(
     positionals: &[String],
     bypass_targets: bool,
@@ -218,6 +224,7 @@ fn parse_command_exec(
     ))
 }
 
+/// Parses implicit `pods command <recipe> [<command|index>]` arguments into `list` or `exec`.
 fn parse_command_implicit(
     recipe: &str,
     positionals: &[String],
@@ -237,6 +244,7 @@ fn parse_command_implicit(
     ))
 }
 
+/// Parses positional arguments for `pods command list <recipe>`.
 fn parse_command_list(
     positionals: &[String],
     bypass_targets: bool,
@@ -255,6 +263,7 @@ fn parse_command_list(
     ))
 }
 
+/// Parses positional arguments for `command` (`cmd`) mode.
 fn parse_command_positionals(
     positionals: &[String],
     bypass_targets: bool,
@@ -273,6 +282,7 @@ fn parse_command_positionals(
     }
 }
 
+/// Validates a `--config` / `-c` file path argument and converts it to a [`PathBuf`].
 fn parse_config_path(flag_name: &str, raw_value: &str) -> Result<PathBuf, CliError> {
     if is_empty_value_literal(raw_value) {
         return Err(CliError::with_argument(
@@ -280,26 +290,7 @@ fn parse_config_path(flag_name: &str, raw_value: &str) -> Result<PathBuf, CliErr
             flag_name,
         ));
     }
-    if raw_value != raw_value.trim()
-        || raw_value.starts_with('-')
-        || raw_value.ends_with('/')
-        || raw_value.chars().any(char::is_control)
-    {
-        return Err(CliError::with_argument(
-            CliErrorKind::InvalidFlagValue,
-            raw_value,
-        ));
-    }
-    let file_name = raw_value.rsplit('/').next().unwrap_or(raw_value);
-    let stem = file_name.strip_suffix(".conf").unwrap_or(file_name);
-    if file_name.is_empty()
-        || file_name == "."
-        || file_name == ".."
-        || file_name.starts_with('-')
-        || stem.is_empty()
-        || stem == "."
-        || stem == ".."
-    {
+    if extract_config_stem(raw_value).is_none() {
         return Err(CliError::with_argument(
             CliErrorKind::InvalidFlagValue,
             raw_value,
@@ -308,6 +299,7 @@ fn parse_config_path(flag_name: &str, raw_value: &str) -> Result<PathBuf, CliErr
     Ok(PathBuf::from(raw_value))
 }
 
+/// Parses positional arguments for `config` (`cfg`) mode.
 fn parse_config_positionals(
     positionals: &[String],
     bypass_targets: bool,
@@ -325,6 +317,7 @@ fn parse_config_positionals(
     Ok((ModeAction::Config(action), Vec::new()))
 }
 
+/// Parses positional arguments for `connect` (`con`) mode.
 fn parse_connect_positionals(
     positionals: &[String],
     bypass_targets: bool,
@@ -342,6 +335,7 @@ fn parse_connect_positionals(
     }
 }
 
+/// Extracts and validates the container target for `pods connect [shell] <target>`.
 fn parse_connect_shell(
     positionals: &[String],
     target_index: usize,
@@ -361,6 +355,7 @@ fn parse_connect_shell(
     ))
 }
 
+/// Parses positional arguments for `default` mode lifecycle and status actions.
 fn parse_default_positionals(
     positionals: &[String],
     bypass_targets: bool,
@@ -387,6 +382,7 @@ fn parse_default_positionals(
     Ok((ModeAction::Default(action), parameters.to_vec()))
 }
 
+/// Parses a `--flag=value` argument token, rejecting `=value` on boolean flags.
 fn parse_equals_flag(
     flags: &mut Flags,
     flag_name: &str,
@@ -407,6 +403,7 @@ fn parse_equals_flag(
     }
 }
 
+/// Dispatches a leading-dash flag token to either `--flag=value` or standalone flag parsing.
 fn parse_flag_token<I, T>(
     token: &str,
     iterator: &mut I,
@@ -423,6 +420,7 @@ where
     parse_global_flag(token, iterator, argument_count, flags)
 }
 
+/// Parses a standalone boolean flag or space-separated value flag into `flags`.
 fn parse_global_flag<I, T>(
     flag_name: &str,
     iterator: &mut I,
@@ -452,6 +450,7 @@ where
     Ok(())
 }
 
+/// Parses positional arguments for `image` (`img`) mode.
 fn parse_image_positionals(
     positionals: &[String],
     bypass_targets: bool,
@@ -477,6 +476,7 @@ fn parse_image_positionals(
     }
 }
 
+/// Parses positional arguments for `init` mode.
 fn parse_init_positionals(
     positionals: &[String],
     bypass_targets: bool,
@@ -494,6 +494,7 @@ fn parse_init_positionals(
     Ok((ModeAction::Init(action), Vec::new()))
 }
 
+/// Validates a `--since`, `--tail`, or `--until` flag value, rejecting leading dashes, whitespace, and control characters.
 fn parse_log_flag_value(raw_value: &str) -> Result<String, CliError> {
     if raw_value.is_empty()
         || raw_value.starts_with('-')
@@ -507,6 +508,7 @@ fn parse_log_flag_value(raw_value: &str) -> Result<String, CliError> {
     Ok(raw_value.to_owned())
 }
 
+/// Parses positional arguments for `logs` (`log`) mode.
 fn parse_logs_positionals(
     positionals: &[String],
     bypass_targets: bool,
@@ -525,6 +527,7 @@ fn parse_logs_positionals(
     }
 }
 
+/// Extracts and validates the `<recipe>[/<container>]` target for `logs show` or `logs follow`.
 fn parse_logs_target(
     action: LogsAction,
     positionals: &[String],
@@ -542,6 +545,7 @@ fn parse_logs_target(
     Ok((ModeAction::Logs(action), vec![target.clone()]))
 }
 
+/// Resolves the top-level [`Mode`], [`ModeAction`], and remaining target parameters from `positionals`.
 fn parse_mode(
     positionals: &[String],
     help: bool,
@@ -562,6 +566,7 @@ fn parse_mode(
     Ok((Mode::Default, action, parameters))
 }
 
+/// Routes positional arguments to the mode-specific action parser for `mode`.
 fn parse_mode_action(
     mode: Mode,
     positionals: &[String],
@@ -581,6 +586,7 @@ fn parse_mode_action(
     }
 }
 
+/// Parses positional arguments for `recipe` (`rec`) mode.
 fn parse_recipe_positionals(
     positionals: &[String],
     bypass_targets: bool,
@@ -608,6 +614,7 @@ fn parse_recipe_positionals(
     }
 }
 
+/// Extracts and validates the `<recipe>` target for `recipe show` or `recipe edit`.
 fn parse_recipe_target(
     action: RecipeAction,
     positionals: &[String],
@@ -625,6 +632,7 @@ fn parse_recipe_target(
     Ok((ModeAction::Recipe(action), vec![recipe.clone()]))
 }
 
+/// Decodes a single raw `OsString` argument and routes it as either a flag or a positional argument.
 fn process_single_argument<I, T>(
     raw_argument: OsString,
     iterator: &mut I,
@@ -644,6 +652,7 @@ where
     Ok(())
 }
 
+/// Scans all raw CLI arguments in a single pass, populating `flags` and returning positional arguments.
 fn scan_raw_arguments<I, T>(
     flags: &mut Flags,
     arguments: I,
@@ -673,6 +682,7 @@ where
     Ok(positionals)
 }
 
+/// Constructs an [`CliErrorKind::UnexpectedFlag`] error for `flag_name`.
 fn unexpected_flag(flag_name: &str) -> Result<(), CliError> {
     Err(CliError::with_argument(
         CliErrorKind::UnexpectedFlag,
@@ -680,6 +690,7 @@ fn unexpected_flag(flag_name: &str) -> Result<(), CliError> {
     ))
 }
 
+/// Validates a container target (`<target>` or `<recipe>/<container>`) for `connect` and `logs` modes.
 fn validate_container_target(target: &str) -> Result<(), CliError> {
     if let Some((recipe, container)) = target.split_once('/') {
         if !is_valid_target_segment(recipe) || !is_valid_target_segment(container) {
@@ -693,6 +704,7 @@ fn validate_container_target(target: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Validates a single `<recipe>` or `@<group>` target argument.
 fn validate_group_or_recipe_target(target: &str) -> Result<(), CliError> {
     let segment = target.strip_prefix('@').unwrap_or(target);
     if !is_valid_target_segment(segment) {
@@ -701,6 +713,7 @@ fn validate_group_or_recipe_target(target: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Validates a slice of `<recipe>` or `@<group>` target arguments.
 fn validate_group_or_recipe_targets(parameters: &[String]) -> Result<(), CliError> {
     for parameter in parameters {
         validate_group_or_recipe_target(parameter)?;
@@ -708,6 +721,7 @@ fn validate_group_or_recipe_targets(parameters: &[String]) -> Result<(), CliErro
     Ok(())
 }
 
+/// Verifies that all parsed mode-specific flags are permitted for `context.mode`.
 fn validate_mode_flags(context: &Context) -> Result<(), CliError> {
     if context.flags.all && !matches!(context.mode, Mode::Default | Mode::Image | Mode::Recipe) {
         return unexpected_flag("--all");
@@ -736,6 +750,7 @@ fn validate_mode_flags(context: &Context) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Validates a single `<recipe>` or `<command|index>` target that does not allow `@group` or `/` syntax.
 fn validate_recipe_only_target(target: &str) -> Result<(), CliError> {
     if !is_valid_target_segment(target) {
         return Err(CliError::with_argument(CliErrorKind::InvalidTarget, target));

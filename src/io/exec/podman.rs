@@ -1,6 +1,22 @@
+// Podoxide
+// Copyright (C) 2026  Stefan Stark
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! Podman CLI version verification and runtime inspection queries.
 
 use crate::io::exec::command;
+use crate::utilities::string::parse_ascii_u32;
 
 /// Maximum number of lines scanned in `podman --version` output.
 const MAX_VERSION_LINES: usize = 32;
@@ -29,6 +45,7 @@ pub fn is_supported_podman_version(output: &str) -> bool {
     major > MIN_PODMAN_MAJOR || (major == MIN_PODMAN_MAJOR && minor >= MIN_PODMAN_MINOR)
 }
 
+/// Extracts the raw semantic version token from a `"podman version <semver>"` output line.
 fn extract_version_token(line: &str) -> Option<&str> {
     let mut tokens = line.split_whitespace();
     if tokens.next()? != "podman" || tokens.next()? != "version" {
@@ -41,6 +58,7 @@ fn extract_version_token(line: &str) -> Option<&str> {
     Some(version_token)
 }
 
+/// Evaluates whether `patch_remainder` starts with valid patch digits followed by an optional SemVer suffix.
 fn is_valid_patch_segment(patch_remainder: &str) -> bool {
     let digit_end = patch_remainder
         .find(|character: char| !character.is_ascii_digit())
@@ -52,6 +70,7 @@ fn is_valid_patch_segment(patch_remainder: &str) -> bool {
     is_valid_version_suffix(suffix)
 }
 
+/// Evaluates whether `suffix` is empty or a valid SemVer pre-release (`-...`) or build metadata (`+...`) tag.
 fn is_valid_version_suffix(suffix: &str) -> bool {
     if suffix.is_empty() {
         return true;
@@ -68,13 +87,7 @@ fn is_valid_version_suffix(suffix: &str) -> bool {
         })
 }
 
-fn parse_ascii_u32(segment: &str) -> Option<u32> {
-    if segment.is_empty() || !segment.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    segment.parse::<u32>().ok()
-}
-
+/// Parses a single `"podman version <major>.<minor>.<patch>"` line into its `(major, minor)` version tuple.
 fn parse_line_major_minor(line: &str) -> Option<(u32, u32)> {
     let version_token = extract_version_token(line)?;
     let (major_str, remainder) = version_token.split_once('.')?;
@@ -87,6 +100,7 @@ fn parse_line_major_minor(line: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
+/// Scans bounded `podman --version` output lines and returns the first valid `(major, minor)` version tuple.
 fn parse_podman_major_minor(output: &str) -> Option<(u32, u32)> {
     if output.len() > MAX_VERSION_OUTPUT_BYTES {
         return None;

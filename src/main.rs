@@ -31,6 +31,7 @@ use podoxide::error::{PodError, SystemError};
 use podoxide::io::exec::podman;
 use podoxide::io::system::env as system_env;
 
+/// Runs the CLI pipeline for `arguments`, logs any error to standard error, and returns the process exit code.
 fn execute<I, T>(arguments: I) -> ExitCode
 where
     I: IntoIterator<Item = T>,
@@ -45,15 +46,18 @@ where
     }
 }
 
+/// Prints the application name and version string to standard output.
 fn handle_version() -> Result<(), PodError> {
     log::print(concat!("Podoxide v", env!("CARGO_PKG_VERSION")));
     Ok(())
 }
 
+/// Entry point of the `pods` binary that forwards process command-line arguments to [`execute`].
 fn main() -> ExitCode {
     execute(env::args_os().skip(1))
 }
 
+/// Verifies host environment prerequisites, parses CLI arguments, loads `pods.conf` when required, and dispatches the selected mode.
 fn run<I, T>(arguments: I) -> Result<(), PodError>
 where
     I: IntoIterator<Item = T>,
@@ -81,6 +85,7 @@ where
     modes::dispatch_mode(&context)
 }
 
+/// Verifies that the host OS is Linux, Podman is version 5.8.0+, and elevated execution is confirmed by the user.
 fn verify_environment() -> Result<(), PodError> {
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
@@ -95,6 +100,7 @@ fn verify_environment() -> Result<(), PodError> {
     )
 }
 
+/// Evaluates environment check flags and prompts for confirmation on `reader`/`stdout_writer`/`stderr_writer` when `elevated` is `true`.
 fn verify_environment_with<R, W, E>(
     os_supported: bool,
     podman_supported: bool,

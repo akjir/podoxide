@@ -1,8 +1,25 @@
+// Podoxide
+// Copyright (C) 2026  Stefan Stark
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! Central domain error types for Podoxide.
 
 use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write};
 use std::io;
+
+use crate::utilities::string::{clamp_utf8_prefix, sanitize_char};
 
 /// Maximum byte length stored or formatted for an offending CLI argument or PSL token.
 pub const MAX_ERROR_TOKEN_BYTES: usize = 256;
@@ -312,31 +329,7 @@ impl Display for SystemError {
 
 impl Error for SystemError {}
 
-fn clamp_utf8_prefix(input: &str, max_bytes: usize) -> &str {
-    if input.len() <= max_bytes {
-        return input;
-    }
-    let mut boundary = max_bytes;
-    while boundary > 0 && !input.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    &input[..boundary]
-}
-
-const fn is_bidi_control(character: char) -> bool {
-    matches!(
-        character,
-        '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-    )
-}
-
-const fn sanitize_char(character: char) -> char {
-    if character.is_control() || is_bidi_control(character) {
-        return ' ';
-    }
-    character
-}
-
+/// Clamps `raw` to [`MAX_ERROR_TOKEN_BYTES`] and replaces all control and bidirectional characters with spaces.
 fn sanitize_error_token(raw: &str) -> String {
     let clamped = clamp_utf8_prefix(raw, MAX_ERROR_TOKEN_BYTES);
     let mut sanitized = String::with_capacity(clamped.len());
@@ -346,6 +339,7 @@ fn sanitize_error_token(raw: &str) -> String {
     sanitized
 }
 
+/// Writes `raw` to `formatter`, clamped to [`MAX_ERROR_TOKEN_BYTES`] and sanitized of control characters.
 fn write_sanitized_token(formatter: &mut Formatter<'_>, raw: &str) -> fmt::Result {
     let clamped = clamp_utf8_prefix(raw, MAX_ERROR_TOKEN_BYTES);
     for character in clamped.chars() {

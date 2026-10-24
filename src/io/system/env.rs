@@ -1,3 +1,18 @@
+// Podoxide
+// Copyright (C) 2026  Stefan Stark
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! Host operating system verification and privilege detection.
 
 use std::io::{BufRead, Read, Write};
@@ -72,6 +87,7 @@ pub fn runs_elevated() -> bool {
     is_root_uid(&output)
 }
 
+/// Reads at most [`MAX_CONFIRMATION_BYTES`] bytes of a single line from `reader`.
 fn read_bounded_line<R: BufRead>(reader: &mut R) -> Option<String> {
     let mut buffer = String::with_capacity(MAX_CONFIRMATION_BYTES);
     let mut bounded = reader.take((MAX_CONFIRMATION_BYTES + 1) as u64);

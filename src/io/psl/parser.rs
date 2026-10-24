@@ -1,8 +1,24 @@
+// Podoxide
+// Copyright (C) 2026  Stefan Stark
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! Single-pass O(N) lexical scanner and structural parser for PSL documents.
 
 use std::borrow::Cow;
 
 use crate::error::{PslError, PslErrorKind};
+use crate::utilities::string::{is_identifier_continue, is_identifier_start};
 use super::ast::{PslBlock, PslDirective, PslDocument, PslStatement};
 use super::{
     MAX_ARGS_PER_STMT, MAX_BLOCKS_PER_DOC, MAX_FILE_BYTES, MAX_NESTING_DEPTH, MAX_STMTS_PER_BLOCK,
@@ -13,6 +29,7 @@ const INITIAL_BLOCKS_CAPACITY: usize = 8;
 const INITIAL_ESCAPE_EXTRA_CAPACITY: usize = 16;
 const INITIAL_STMTS_CAPACITY: usize = 8;
 
+/// Stateful single-pass cursor scanner and block stack for parsing PSL documents.
 struct Parser<'a> {
     bytes: &'a [u8],
     cursor: usize,
@@ -24,6 +41,7 @@ struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    /// Creates a new [`Parser`] initialized at the beginning of `input`.
     #[must_use]
     fn new(input: &'a str) -> Self {
         Self {
@@ -37,12 +55,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consumes and returns the next UTF-8 character at the cursor, or `None` at end of input.
     fn advance_char(&mut self) -> Option<char> {
         let character = self.peek_char()?;
         self.cursor += character.len_utf8();
         Some(character)
     }
 
+    /// Consumes a `\n` or `\r\n` newline sequence, increments the line counter, and rejects standalone `\r`.
     fn advance_newline(&mut self) -> Result<bool, PslError> {
         match self.peek_byte() {
             Some(b'\n') => {
@@ -63,6 +83,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses a backslash escape inside a double-quoted string and appends the preceding slice and unescaped character to `unescaped_buffer`.
     fn append_escape_sequence(
         &mut self,
         content_start: usize,
@@ -88,6 +109,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Pops the innermost open block on `}`, verifies that no trailing tokens follow on the line, and attaches the block to its parent or root document.
     fn close_block(&mut self, statement_line: usize) -> Result<(), PslError> {
         let Some(block) = self.open_blocks.pop() else {
             return Err(PslError::new(
@@ -101,6 +123,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Skips optional horizontal whitespace and comments, and verifies that the cursor is at a newline or end of input.
     fn expect_end_of_line(&mut self, statement_line: usize) -> Result<(), PslError> {
         self.skip_horizontal_whitespace()?;
         if self.peek_byte() == Some(b'#') {
@@ -113,6 +136,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Finalizes a double-quoted string literal at the closing `"`, returning a borrowed slice or an owned unescaped string.
     fn finish_double_quoted(
         &mut self,
         content_start: usize,
@@ -138,6 +162,7 @@ impl<'a> Parser<'a> {
         Ok(Cow::Borrowed(slice))
     }
 
+    /// Skips horizontal whitespace and evaluates whether the current statement line has ended at EOF, a comment, or a newline.
     fn is_statement_end(&mut self, statement_line: usize) -> Result<bool, PslError> {
         self.skip_horizontal_whitespace()?;
         match self.peek_byte() {
@@ -156,6 +181,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Enforces block nesting and document block bounds, handles inline empty `{}` blocks, or pushes a new open block onto the stack.
     fn open_block(
         &mut self,
         name: &'a str,
@@ -187,6 +213,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Consumes the entire input buffer and returns the parsed [`PslDocument`].
     fn parse(mut self) -> Result<PslDocument<'a>, PslError> {
         if self.input.len() > MAX_FILE_BYTES {
             return Err(PslError::new(PslErrorKind::LimitExceeded, 1));
@@ -221,6 +248,7 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Dispatches argument scanning to double-quoted, single-quoted, or bare-word token parsers.
     fn parse_argument(&mut self, statement_line: usize) -> Result<Cow<'a, str>, PslError> {
         match self.peek_byte() {
             Some(b'"') => self.parse_double_quoted(statement_line),
@@ -229,6 +257,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Scans an unquoted bare-word argument token and returns it as a borrowed slice.
     fn parse_bare_word(&mut self, statement_line: usize) -> Result<Cow<'a, str>, PslError> {
         let start = self.cursor;
         while let Some(character) = self.peek_char() {
@@ -244,6 +273,7 @@ impl<'a> Parser<'a> {
         Ok(Cow::Borrowed(slice))
     }
 
+    /// Scans a double-quoted string argument, unescaping valid backslash sequences on demand.
     fn parse_double_quoted(&mut self, statement_line: usize) -> Result<Cow<'a, str>, PslError> {
         self.cursor += 1;
         let content_start = self.cursor;
@@ -283,6 +313,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    /// Parses the character immediately following a `\` in a double-quoted string.
     fn parse_escape_sequence(&mut self, statement_line: usize) -> Result<char, PslError> {
         let Some(byte) = self.peek_byte() else {
             return Err(PslError::new(
@@ -306,6 +337,7 @@ impl<'a> Parser<'a> {
         Ok(unescaped)
     }
 
+    /// Scans and validates a block or directive identifier (`[A-Za-z_][A-Za-z0-9_-]*`).
     fn parse_identifier(&mut self, statement_line: usize) -> Result<&'a str, PslError> {
         if !self.peek_byte().is_some_and(is_identifier_start) {
             return Err(PslError::new(
@@ -326,6 +358,7 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| PslError::new(PslErrorKind::InvalidIdentifier, statement_line))
     }
 
+    /// Scans a literal single-quoted string argument without escape interpretation.
     fn parse_single_quoted(&mut self, statement_line: usize) -> Result<Cow<'a, str>, PslError> {
         self.cursor += 1;
         let content_start = self.cursor;
@@ -354,6 +387,7 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    /// Parses a single block header or directive line starting at `statement_line`.
     fn parse_statement(&mut self, statement_line: usize) -> Result<(), PslError> {
         if self
             .open_blocks
@@ -381,15 +415,18 @@ impl<'a> Parser<'a> {
         self.push_directive(name, arguments, statement_line)
     }
 
+    /// Returns the byte at the current cursor position without advancing, or `None` at EOF.
     #[inline]
     fn peek_byte(&self) -> Option<u8> {
         self.bytes.get(self.cursor).copied()
     }
 
+    /// Returns the UTF-8 character at the current cursor position without advancing, or `None` at EOF.
     fn peek_char(&self) -> Option<char> {
         self.input.get(self.cursor..)?.chars().next()
     }
 
+    /// Appends a completed [`PslBlock`] to its enclosing parent block or to `root_blocks`.
     fn push_block(&mut self, block: PslBlock<'a>) {
         if let Some(parent) = self.open_blocks.last_mut() {
             parent.statements.push(PslStatement::Block(block));
@@ -398,6 +435,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Validates that a directive has at least one argument and is inside an open block, then appends it.
     fn push_directive(
         &mut self,
         name: &'a str,
@@ -421,6 +459,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Advances the cursor from `#` to the end of the line, rejecting standalone `\r` bytes.
     fn skip_comment(&mut self) -> Result<(), PslError> {
         while let Some(byte) = self.peek_byte() {
             if byte == b'\n' {
@@ -437,6 +476,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Advances the cursor past ASCII spaces and horizontal tabs, rejecting other whitespace or control characters.
     fn skip_horizontal_whitespace(&mut self) -> Result<(), PslError> {
         while self.peek_byte().is_some_and(is_horizontal_whitespace) {
             self.cursor += 1;
@@ -450,6 +490,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Evaluates the next character in a bare-word token, advancing the cursor when valid or returning `Ok(false)` at a delimiter.
     fn step_bare_word_char(
         &mut self,
         character: char,
@@ -479,6 +520,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Validates the byte immediately following a scanned identifier.
     fn validate_post_identifier(&self, statement_line: usize) -> Result<(), PslError> {
         match self.peek_byte() {
             None | Some(b' ' | b'\t' | b'\n' | b'#') => Ok(()),
@@ -510,6 +552,7 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Validates that a closing quote is followed by whitespace, a comment, a newline, or EOF.
     fn validate_post_quote(&self, statement_line: usize) -> Result<(), PslError> {
         match self.peek_byte() {
             None => Ok(()),
@@ -539,26 +582,19 @@ pub fn parse_psl<'a>(input: &'a str) -> Result<PslDocument<'a>, PslError> {
     Parser::new(input).parse()
 }
 
+/// Evaluates whether `byte` is an ASCII space (`0x20`) or horizontal tab (`0x09`).
 #[inline]
 const fn is_horizontal_whitespace(byte: u8) -> bool {
     byte == b' ' || byte == b'\t'
 }
 
-#[inline]
-const fn is_identifier_continue(byte: u8) -> bool {
-    is_identifier_start(byte) || byte.is_ascii_digit() || byte == b'-'
-}
-
-#[inline]
-const fn is_identifier_start(byte: u8) -> bool {
-    byte.is_ascii_alphabetic() || byte == b'_'
-}
-
+/// Evaluates whether `byte` is a valid delimiter immediately following a closing quote.
 #[inline]
 const fn is_post_quote_delimiter(byte: u8) -> bool {
     matches!(byte, b' ' | b'\t' | b'\n' | b'#')
 }
 
+/// Maps an escaped byte inside a double-quoted string to its unescaped character.
 #[inline]
 const fn unescape_byte(byte: u8) -> Option<char> {
     match byte {

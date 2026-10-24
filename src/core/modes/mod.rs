@@ -1,3 +1,18 @@
+// Podoxide
+// Copyright (C) 2026  Stefan Stark
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option)
+// any later version.
+//
+// This program is distributed in the hope that it will be useful, but WITHOUT
+// ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+// FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License along with
+// this program.  If not, see <https://www.gnu.org/licenses/>.
+
 //! Mode enumeration re-exports and O(1) mode dispatcher.
 
 pub mod command;
@@ -28,13 +43,14 @@ static MODE_DISPATCH_TABLE: [ModeHandler; MODE_COUNT] = [
     recipe::handle,
 ];
 
+/// Function pointer signature for a top-level CLI mode handler.
 type ModeHandler = fn(&Context) -> Result<(), PodError>;
 
-/// Dispatches execution to the active mode handler in O(1) time via [`MODE_DISPATCH_TABLE`].
+/// Dispatches execution to the active mode handler in O(1) time via `MODE_DISPATCH_TABLE`.
 ///
 /// # Workflow
 ///
-/// 1. Look up the mode handler function in [`MODE_DISPATCH_TABLE`] using
+/// 1. Look up the mode handler function in `MODE_DISPATCH_TABLE` using
 ///    `context.mode().as_index()`.
 /// 2. Invoke the selected mode's `handle(context)` entry point (`command::handle`,
 ///    `config::handle`, `connect::handle`, `default::handle`, `image::handle`,
