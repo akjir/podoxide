@@ -25,9 +25,9 @@ use crate::error::PodError;
 use crate::io::system::fs;
 use crate::utilities::path::{extract_config_stem, has_parent_dir};
 
-const CONFIG_TEMPLATE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/pods.conf"));
+const CONFIG_TEMPLATE: &str = include_str!("../../../../pods.conf");
 const DEFAULT_RECIPE_PATH: &str = "./recipe.pod";
-const RECIPE_TEMPLATE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/recipe.pod"));
+const RECIPE_TEMPLATE: &str = include_str!("../../../../recipe.pod");
 
 /// Verifies that target files or directories do not exist and writes the root `recipe.pod`
 /// and `pods.conf` templates to disk.

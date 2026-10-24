@@ -71,3 +71,55 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::context::{CommandAction, Context, DefaultAction, Mode, ModeAction};
+    use crate::error::{CliErrorKind, PodError};
+    use super::handle;
+
+    #[test]
+    fn handle_routes_default_actions_and_rejects_mismatched_action() {
+        let actions = [
+            DefaultAction::Create,
+            DefaultAction::Down,
+            DefaultAction::Help,
+            DefaultAction::Reload,
+            DefaultAction::Remove,
+            DefaultAction::Restart,
+            DefaultAction::Start,
+            DefaultAction::Status,
+            DefaultAction::Stop,
+            DefaultAction::Up,
+            DefaultAction::Update,
+        ];
+
+        for action in actions {
+            let mut context = Context::new();
+            context.mode = Mode::Default;
+            context.action = ModeAction::Default(action);
+            assert!(handle(&context).is_ok());
+        }
+
+        let mut flag_help_context = Context::new();
+        flag_help_context.mode = Mode::Default;
+        flag_help_context.action = ModeAction::Default(DefaultAction::Up);
+        flag_help_context.flags.help = true;
+        assert!(handle(&flag_help_context).is_ok());
+
+        let mut status_help_context = Context::new();
+        status_help_context.mode = Mode::Default;
+        status_help_context.action = ModeAction::Default(DefaultAction::Status);
+        status_help_context.flags.help = true;
+        assert!(handle(&status_help_context).is_ok());
+
+        let mut invalid_context = Context::new();
+        invalid_context.mode = Mode::Default;
+        invalid_context.action = ModeAction::Command(CommandAction::Help);
+        let error = handle(&invalid_context).unwrap_err();
+        match error {
+            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::UnknownAction),
+            other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
+        }
+    }
+}

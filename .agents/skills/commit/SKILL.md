@@ -1,11 +1,11 @@
 ---
 name: commit
-description: Verifies that all tests pass, the project builds cleanly without Clippy warnings, and commits all open changes. Triggered when the user types `/commit` or `/commit <message>`.
+description: Verifies that all tests pass, the project builds cleanly without Clippy warnings, commits all open changes, and optionally pushes to origin. Triggered when the user types `/commit`, `/commit push`, `/commit <message>`, or `/commit push <message>`.
 ---
 
 # Verify & Commit Workflow
 
-Execute this workflow whenever the user invokes `/commit` or `/commit <message>`. Follow all rules in `AGENTS.md` strictly.
+Execute this workflow whenever the user invokes `/commit`, `/commit push`, `/commit <message>`, or `/commit push <message>`. Follow all rules in `AGENTS.md` strictly.
 
 ## 1. Pre-Commit Verification Gate
 Before staging or committing any changes, verify that the entire workspace is healthy:
@@ -19,6 +19,11 @@ Once all verification checks pass:
 1. **Stage Changes:** Run `git add -A` to stage all modified, new, and deleted files in the working tree.
 2. **Verify Staged State:** Run `git status --short` and `git diff --cached --stat` to confirm that all open changes are staged and no unintended scratch files are included.
 3. **Commit Message:**
-   - If the user provided a message via `/commit <message>`, use that message (ensuring concise English per `AGENTS.md`).
+   - If the user provided a message via `/commit <message>` or `/commit push <message>`, use that message (ensuring concise English per `AGENTS.md`).
    - Otherwise, write a concise, imperative English commit message (following ASD-STE100, zero emojis) that accurately summarizes the staged changes.
 4. **Create Commit:** Execute `git commit -m "<subject>"` and report the resulting commit hash and clean working tree status (`git log -n 1 --oneline` and `git status --short`).
+
+## 3. Optional Push to Origin
+If the user invoked `/commit push` (or `/commit push <message>`):
+1. **Push Commit:** Execute `git push origin HEAD` to push the new commit on the current branch to `origin`.
+2. **Verify Remote Sync:** Report the push result and verify the branch status via `git status -sb`.

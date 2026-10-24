@@ -128,10 +128,57 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs;
     use std::io::Cursor;
-    use std::process::ExitCode;
+    use std::os::unix::fs as unix_fs;
+    use std::process::{self, Command, ExitCode};
 
     use super::{execute, run, verify_environment_with};
+
+    #[test]
+    fn binary_in_usr_local_bin_uses_current_working_directory() {
+        if env::var_os("PODOXIDE_TEST_SUBPROCESS_CWD").is_some() {
+            assert_eq!(execute(["init"]), ExitCode::SUCCESS);
+            assert_eq!(execute(["init"]), ExitCode::FAILURE);
+            assert_eq!(execute(["up", "recipe"]), ExitCode::SUCCESS);
+            assert_eq!(execute(["cfg", "show"]), ExitCode::SUCCESS);
+            assert_eq!(execute(["rec", "list"]), ExitCode::SUCCESS);
+            return;
+        }
+
+        let temp_dir = env::temp_dir().join(format!("podoxide_cwd_test_{}", process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        let bin_dir = temp_dir.join("usr").join("local").join("bin");
+        let working_dir = temp_dir.join("workspace");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::create_dir_all(&working_dir).unwrap();
+
+        let installed_pods = bin_dir.join("pods");
+        unix_fs::symlink(env::current_exe().unwrap(), &installed_pods).unwrap();
+
+        let output = Command::new(&installed_pods)
+            .current_dir(&working_dir)
+            .env("PODOXIDE_TEST_SUBPROCESS_CWD", "1")
+            .args([
+                "--exact",
+                "tests::binary_in_usr_local_bin_uses_current_working_directory",
+                "--nocapture",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "subprocess failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(working_dir.join("recipe.pod").is_file());
+        assert!(working_dir.join("pods.conf").is_file());
+        assert!(!bin_dir.join("recipe.pod").exists());
+        assert!(!bin_dir.join("pods.conf").exists());
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn execute_pipeline_handles_valid_and_invalid_arguments() {

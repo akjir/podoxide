@@ -15,6 +15,7 @@
 
 //! Host filesystem operations, bounded file reading, and path resolution.
 
+use std::borrow::Cow;
 use std::env;
 use std::fs::{self, DirEntry, File, Metadata};
 use std::io::{self, Read};
@@ -37,7 +38,8 @@ pub fn directory_exists(path: &Path) -> bool {
     if path.as_os_str().is_empty() {
         return false;
     }
-    fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+    let working_path = resolve_working_path(path);
+    fs::metadata(working_path.as_ref()).is_ok_and(|metadata| metadata.is_dir())
 }
 
 /// Verifies that `path` either does not exist yet (within an existing parent directory) or is an
@@ -48,10 +50,11 @@ pub fn directory_exists(path: &Path) -> bool {
 /// Returns [`PodError::Io`] if `path` is a symlink, directory, or special file, or if its parent
 /// directory does not exist.
 pub fn ensure_writable_target(path: &Path) -> Result<(), PodError> {
-    let metadata = match fs::symlink_metadata(path) {
+    let working_path = resolve_working_path(path);
+    let metadata = match fs::symlink_metadata(working_path.as_ref()) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return ensure_parent_directory(path);
+            return ensure_parent_directory(working_path.as_ref());
         }
         Err(error) => return Err(PodError::from(error)),
     };
@@ -70,7 +73,8 @@ pub fn file_exists(path: &Path) -> bool {
     if path.as_os_str().is_empty() {
         return false;
     }
-    fs::metadata(path).is_ok_and(|metadata| metadata.is_file())
+    let working_path = resolve_working_path(path);
+    fs::metadata(working_path.as_ref()).is_ok_and(|metadata| metadata.is_file())
 }
 
 /// Resolves the normalized absolute path for `path` without requiring the target to exist on disk.
@@ -79,16 +83,14 @@ pub fn get_absolute_path(path: &Path) -> PathBuf {
     if path.as_os_str().is_empty() {
         return PathBuf::new();
     }
-    if let Ok(canonical) = fs::canonicalize(path) {
+    let working_path = resolve_working_path(path);
+    if let Ok(canonical) = fs::canonicalize(working_path.as_ref()) {
         return canonical;
     }
-    if path.is_absolute() {
-        return resolve_absolute_components(path);
+    if working_path.is_absolute() {
+        return resolve_absolute_components(working_path.as_ref());
     }
-    let Ok(current_dir) = env::current_dir() else {
-        return normalize_lexical_path(path);
-    };
-    resolve_absolute_components(&current_dir.join(path))
+    normalize_lexical_path(working_path.as_ref())
 }
 
 /// Lists entry names in `path`, optionally filtered by `extension` (such as `Some(".pod")`),
@@ -99,7 +101,8 @@ pub fn get_absolute_path(path: &Path) -> PathBuf {
 /// Returns [`PodError`] if `path` cannot be read or if the number of scanned or matching entries
 /// exceeds [`MAX_DIRECTORY_ENTRIES`].
 pub fn list_directory(path: &Path, extension: Option<&str>) -> Result<Vec<String>, PodError> {
-    let read_dir = fs::read_dir(path)?;
+    let working_path = resolve_working_path(path);
+    let read_dir = fs::read_dir(working_path.as_ref())?;
     let mut entries = Vec::with_capacity(INITIAL_DIRECTORY_CAPACITY.min(MAX_DIRECTORY_ENTRIES));
     for (scanned_count, entry_result) in read_dir.enumerate() {
         if scanned_count >= MAX_DIRECTORY_ENTRIES {
@@ -119,8 +122,9 @@ pub fn list_directory(path: &Path, extension: Option<&str>) -> Result<Vec<String
 /// Returns [`PodError::Io`] if opening, verifying, or reading `path` fails, or [`PodError::Psl`]
 /// with [`PslErrorKind::LimitExceeded`] if the file size exceeds [`MAX_FILE_BYTES`].
 pub fn read_file(path: &Path) -> Result<String, PodError> {
-    ensure_regular_file(&fs::metadata(path)?)?;
-    let file = File::open(path)?;
+    let working_path = resolve_working_path(path);
+    ensure_regular_file(&fs::metadata(working_path.as_ref())?)?;
+    let file = File::open(working_path.as_ref())?;
     let metadata = file.metadata()?;
     ensure_regular_file(&metadata)?;
     if metadata.len() > MAX_FILE_BYTES as u64 {
@@ -140,7 +144,8 @@ pub fn read_file(path: &Path) -> Result<String, PodError> {
 /// Returns [`PodError::Io`] if `path` is a symlink or non-regular file, or if writing fails.
 pub fn write_file(path: &Path, content: &str) -> Result<(), PodError> {
     ensure_writable_target(path)?;
-    fs::write(path, content)?;
+    let working_path = resolve_working_path(path);
+    fs::write(working_path.as_ref(), content)?;
     Ok(())
 }
 
@@ -237,6 +242,18 @@ fn resolve_absolute_components(path: &Path) -> PathBuf {
         apply_resolved_component(&mut resolved, component);
     }
     resolved
+}
+
+/// Anchors a relative `path` to the process current working directory (`env::current_dir()`),
+/// or returns `path` borrowed as-is when `path` is already absolute or empty.
+fn resolve_working_path(path: &Path) -> Cow<'_, Path> {
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Cow::Borrowed(path);
+    }
+    let Ok(current_dir) = env::current_dir() else {
+        return Cow::Borrowed(path);
+    };
+    Cow::Owned(current_dir.join(path))
 }
 
 #[cfg(test)]
