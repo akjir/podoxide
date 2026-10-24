@@ -126,7 +126,7 @@ podoxide/
 | `.pods-completion.bash` | Provides Bash autocompletion for all CLI modes, actions, and flags. |
 | `src/main.rs`           | Serves as the binary entry point (`pods`), delegates execution to `podoxide`, and returns `ExitCode`. |
 | `src/lib.rs`            | Serves as the library root, enforces `#![forbid(unsafe_code)]`, and exports `core`, `error`, `io`, and `utilities`. |
-| `src/error.rs`          | Defines the central `CliError`, `ConfigError`, `PodError`, `PslError`, and `SystemError` domain error types and implements `Error` and `Display`. |
+| `src/error.rs`          | Defines the central `CliError`, `ConfigError`, `PodError`, `PslError`, `RecipeError`, and `SystemError` domain error types and implements `Error` and `Display`. |
 
 ## Core Domain (`src/core/`)
 
@@ -293,8 +293,8 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 | `src/utilities/mod.rs`        | Declares and re-exports the utility submodules. |
 | `src/utilities/collection.rs` | Provides slice and vector helpers such as order-preserving deduplication and bounded pre-allocation utilities. |
 | `src/utilities/format.rs`     | Formats byte counts (`format_bytes`), parses human-readable sizes (`parse_size_to_bytes`), and aligns columns. |
-| `src/utilities/path.rs`       | Provides lexical path normalization (`normalize_lexical_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), target path validation (`is_valid_target_path`), extension matching (`matches_extension`), parent traversal checks (`has_parent_dir`), and `.conf` stem extraction (`extract_config_stem`). |
-| `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character sanitization (`sanitize_char`), identifier validation (`is_valid_identifier`, `is_valid_recipe_identifier`), and strict ASCII integer parsing (`parse_ascii_u32`). |
+| `src/utilities/path.rs`       | Provides lexical path normalization (`normalize_lexical_path`), full path construction (`build_full_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), directory and target path validation (`is_valid_directory_path`, `is_valid_target_path`), path token sanitization (`sanitize_path_token`), extension matching (`matches_extension`), parent traversal checks (`has_parent_dir`), and `.conf` stem extraction (`extract_config_stem`). |
+| `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character sanitization (`sanitize_char`), identifier and pod/container name validation and normalization (`is_valid_identifier`, `is_valid_pod_or_container_name`, `is_valid_recipe_identifier`, `normalize_name`), and strict ASCII integer parsing (`parse_ascii_u32`). |
 
 ## Execution Flow
 

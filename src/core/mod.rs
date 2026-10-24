@@ -17,13 +17,19 @@
 
 pub mod cli;
 pub mod config;
+pub mod container;
 pub mod context;
 pub mod log;
 pub mod modes;
+pub mod pod;
+pub mod recipe;
 
 pub use self::config::{Config, PodsConfig, RecipesConfig};
+pub use self::container::{Container, VolumeMount};
 pub use self::context::{
     CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, Flags, ImageAction,
     InitAction, LogsAction, Mode, ModeAction, RecipeAction,
 };
 pub use self::modes::dispatch_mode;
+pub use self::pod::{Pod, PodCommand};
+pub use self::recipe::Recipe;

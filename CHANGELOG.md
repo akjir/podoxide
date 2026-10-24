@@ -16,3 +16,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added PSL configuration loading, semantic validation, and host filesystem I/O helpers.
 - Added `init` mode (`pods init` and `pods init help`) for generating default `pods.conf` and `recipe.pod` template files with workspace directory logging.
 - Added default mode help output (`pods help` and parameterless `pods`).
+- Added PSL recipe loading, pod and container domain models, semantic validation, and container target resolution.
+- Added Podman pod and container lifecycle execution (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`, `pull`, and `update`), volume mount formatting, and shell-escaped `--simulate` command rendering.

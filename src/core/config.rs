@@ -15,18 +15,19 @@
 
 //! Configuration model (`pods.conf`), PSL configuration loading, and semantic validation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use crate::error::{ConfigError, ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError};
+use crate::error::{ConfigError, ConfigErrorKind, PodError};
 use crate::io::psl::{PslBlock, PslDirective, PslDocument, PslStatement, parse_psl};
 use crate::io::system::fs;
-use crate::utilities::path::{extract_config_stem, has_parent_dir};
+use crate::utilities::path::{
+    extract_config_stem, has_parent_dir, is_valid_directory_path, sanitize_path_token,
+};
 use crate::utilities::string::{
-    clamp_utf8_prefix, contains_control_or_whitespace, is_bidi_control, is_valid_identifier,
-    is_valid_recipe_identifier, sanitize_char,
+    contains_control_or_whitespace, is_valid_identifier, is_valid_recipe_identifier,
 };
 
 /// Default configuration name when `--config` is not specified.
@@ -139,14 +140,10 @@ impl Default for RecipesConfig {
 ///
 /// Returns [`PodError`] when reading, parsing, or validating the configuration fails.
 pub fn load(path: &Path) -> Result<Config, PodError> {
-    validate_load_path(path)?;
+    let config_name = validate_load_path(path)?;
     let content = read_config_file(path)?;
     let mut config = Config::from_str(&content)?;
-    config.name = path
-        .to_str()
-        .and_then(extract_config_stem)
-        .unwrap_or(DEFAULT_CONFIG_NAME)
-        .to_owned();
+    config.name = config_name.to_owned();
     config.path = path.to_path_buf();
     Ok(config)
 }
@@ -400,40 +397,17 @@ fn ensure_no_block_arguments(block: &PslBlock<'_>) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Evaluates whether `value` is a safe directory path for `pods.path` or `recipes.path`.
-fn is_valid_directory_path(value: &str) -> bool {
-    if value.is_empty()
-        || value != value.trim()
-        || value.starts_with('-')
-        || value.contains(':')
-        || value
-            .chars()
-            .any(|character| character.is_control() || is_bidi_control(character))
-    {
-        return false;
-    }
-    let path = Path::new(value);
-    if has_parent_dir(path) {
-        return false;
-    }
-    path.components()
-        .any(|component| matches!(component, Component::CurDir | Component::Normal(_)))
-}
-
 /// Evaluates whether `value` is a safe executable name or path for `general.editor`.
+#[must_use]
 fn is_valid_editor_value(value: &str) -> bool {
     if value.is_empty()
         || value.starts_with('-')
-        || value.ends_with('/')
         || contains_control_or_whitespace(value)
+        || has_parent_dir(Path::new(value))
     {
         return false;
     }
-    let path = Path::new(value);
-    if has_parent_dir(path) {
-        return false;
-    }
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+    let Some(file_name) = value.rsplit('/').next() else {
         return false;
     };
     !file_name.is_empty()
@@ -443,19 +417,12 @@ fn is_valid_editor_value(value: &str) -> bool {
 }
 
 /// Evaluates whether `target` is a valid `@<group>` reference or recipe stem identifier.
+#[must_use]
 fn is_valid_group_target(target: &str) -> bool {
     if let Some(group_name) = target.strip_prefix('@') {
         return is_valid_identifier(group_name);
     }
     is_valid_recipe_identifier(target)
-}
-
-/// Evaluates whether `path` is a safe configuration file path without `..` traversal or invalid filenames.
-fn is_valid_load_path(path: &Path) -> bool {
-    let Some(raw) = path.to_str() else {
-        return false;
-    };
-    !has_parent_dir(path) && extract_config_stem(raw).is_some()
 }
 
 /// Sets `flag` in `seen` or returns a duplicate block/directive [`ConfigError`] if already set.
@@ -588,26 +555,13 @@ fn read_config_file(path: &Path) -> Result<String, PodError> {
     }
 }
 
-/// Clamps and sanitizes a filesystem `path` into a bounded [`MAX_ERROR_TOKEN_BYTES`] error token.
-fn sanitize_path_token(path: &Path) -> String {
-    let raw_bytes = path.as_os_str().as_encoded_bytes();
-    let prefix_len = raw_bytes.len().min(MAX_ERROR_TOKEN_BYTES);
-    let lossy = String::from_utf8_lossy(&raw_bytes[..prefix_len]);
-    let clamped = clamp_utf8_prefix(&lossy, MAX_ERROR_TOKEN_BYTES);
-    let mut sanitized = String::with_capacity(clamped.len());
-    for character in clamped.chars() {
-        sanitized.push(sanitize_char(character));
-    }
-    sanitized
-}
-
 /// Verifies that `@<group>` references in `groups` form a directed acyclic graph (DAG) without cycles.
 fn validate_groups_acyclic(
     groups: &BTreeMap<String, Vec<String>>,
     line: usize,
 ) -> Result<(), ConfigError> {
-    let mut visiting = Vec::with_capacity(groups.len());
-    let mut verified = Vec::with_capacity(groups.len());
+    let mut visiting = BTreeSet::new();
+    let mut verified = BTreeSet::new();
     for group_name in groups.keys() {
         verify_group_acyclic(
             group_name.as_str(),
@@ -620,36 +574,38 @@ fn validate_groups_acyclic(
     Ok(())
 }
 
-/// Validates that `path` is a safe configuration file path before reading from disk.
-fn validate_load_path(path: &Path) -> Result<(), PodError> {
-    if !is_valid_load_path(path) {
-        return Err(PodError::from(ConfigError {
-            kind: ConfigErrorKind::InvalidPath,
-            line: None,
-            token: Some(sanitize_path_token(path)),
-        }));
-    }
-    Ok(())
+/// Validates that `path` is a safe configuration file path and returns its configuration stem.
+fn validate_load_path(path: &Path) -> Result<&str, PodError> {
+    path.to_str()
+        .filter(|_| !has_parent_dir(path))
+        .and_then(extract_config_stem)
+        .ok_or_else(|| {
+            PodError::from(ConfigError {
+                kind: ConfigErrorKind::InvalidPath,
+                line: None,
+                token: Some(sanitize_path_token(path)),
+            })
+        })
 }
 
 /// Performs depth-first cycle detection starting from `group_name`.
 fn verify_group_acyclic<'a>(
     group_name: &'a str,
     groups: &'a BTreeMap<String, Vec<String>>,
-    visiting: &mut Vec<&'a str>,
-    verified: &mut Vec<&'a str>,
+    visiting: &mut BTreeSet<&'a str>,
+    verified: &mut BTreeSet<&'a str>,
     line: usize,
 ) -> Result<(), ConfigError> {
-    if verified.contains(&group_name) {
+    if verified.contains(group_name) {
         return Ok(());
     }
     let Some(targets) = groups.get(group_name) else {
         return Ok(());
     };
-    visiting.push(group_name);
+    visiting.insert(group_name);
     verify_group_targets(targets, groups, visiting, verified, line)?;
-    visiting.pop();
-    verified.push(group_name);
+    visiting.remove(group_name);
+    verified.insert(group_name);
     Ok(())
 }
 
@@ -657,15 +613,15 @@ fn verify_group_acyclic<'a>(
 fn verify_group_targets<'a>(
     targets: &'a [String],
     groups: &'a BTreeMap<String, Vec<String>>,
-    visiting: &mut Vec<&'a str>,
-    verified: &mut Vec<&'a str>,
+    visiting: &mut BTreeSet<&'a str>,
+    verified: &mut BTreeSet<&'a str>,
     line: usize,
 ) -> Result<(), ConfigError> {
     for target in targets {
         let Some(subgroup) = target.strip_prefix('@') else {
             continue;
         };
-        if visiting.contains(&subgroup) {
+        if visiting.contains(subgroup) {
             return Err(ConfigError::with_token(
                 ConfigErrorKind::InvalidGroupTarget,
                 line,
@@ -779,6 +735,11 @@ recipes {
                 .to_string()
                 .contains(missing_path.to_str().unwrap())
         );
+
+        let directory_config_path = temp_dir.join("directory.conf");
+        fs::create_dir_all(&directory_config_path).unwrap();
+        let directory_error = Config::load(&directory_config_path).unwrap_err();
+        assert!(matches!(directory_error, PodError::Io(_)));
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
@@ -896,6 +857,8 @@ recipes {
             "/usr/bin/-vim",
             ".",
             "..",
+            "vim/.",
+            "/usr/bin/vim/.",
             "/usr/bin/",
             "../../bin/vim",
             "/usr/bin/../../etc/passwd",
@@ -931,21 +894,21 @@ recipes {
             "/tmp/staging.conf\n",
             "/tmp/\u{202E}staging.conf",
         ] {
-            let err = Config::load(Path::new(malicious_load_path)).unwrap_err();
-            match err {
-                PodError::Config(config_err) => {
-                    assert_eq!(config_err.kind, ConfigErrorKind::InvalidPath);
+            let error = Config::load(Path::new(malicious_load_path)).unwrap_err();
+            match error {
+                PodError::Config(config_error) => {
+                    assert_eq!(config_error.kind, ConfigErrorKind::InvalidPath);
                 }
                 other => panic!("expected PodError::Config(InvalidPath), got {other:?}"),
             }
         }
 
-        let injected_load_err =
+        let injected_load_error =
             Config::load(Path::new("/tmp/../bad\n\x1b[31m\u{202E}.conf")).unwrap_err();
-        match injected_load_err {
-            PodError::Config(config_err) => {
-                assert_eq!(config_err.kind, ConfigErrorKind::InvalidPath);
-                let token = config_err.token.as_deref().unwrap();
+        match injected_load_error {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::InvalidPath);
+                let token = config_error.token.as_deref().unwrap();
                 assert!(!token.contains('\n'));
                 assert!(!token.contains('\x1b'));
                 assert!(!token.contains('\u{202E}'));
@@ -954,20 +917,21 @@ recipes {
         }
 
         let oversized_path = format!("/tmp/../{}.conf", "a".repeat(MAX_ERROR_TOKEN_BYTES + 128));
-        let oversized_load_err = Config::load(Path::new(&oversized_path)).unwrap_err();
-        match oversized_load_err {
-            PodError::Config(config_err) => {
-                assert_eq!(config_err.kind, ConfigErrorKind::InvalidPath);
-                assert!(config_err.token.as_deref().unwrap().len() <= MAX_ERROR_TOKEN_BYTES);
+        let oversized_load_error = Config::load(Path::new(&oversized_path)).unwrap_err();
+        match oversized_load_error {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::InvalidPath);
+                assert!(config_error.token.as_deref().unwrap().len() <= MAX_ERROR_TOKEN_BYTES);
             }
             other => panic!("expected PodError::Config(InvalidPath), got {other:?}"),
         }
 
-        let invalid_utf8_os = OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff, 0xfe]);
-        let invalid_utf8_err = Config::load(Path::new(&invalid_utf8_os)).unwrap_err();
-        match invalid_utf8_err {
-            PodError::Config(config_err) => {
-                assert_eq!(config_err.kind, ConfigErrorKind::InvalidPath);
+        let invalid_utf8_os_string =
+            OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff, 0xfe]);
+        let invalid_utf8_error = Config::load(Path::new(&invalid_utf8_os_string)).unwrap_err();
+        match invalid_utf8_error {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::InvalidPath);
             }
             other => panic!("expected PodError::Config(InvalidPath), got {other:?}"),
         }

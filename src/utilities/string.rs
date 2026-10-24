@@ -15,6 +15,8 @@
 
 //! Zero-copy UTF-8 string clamping, character sanitization, identifier validation, and ASCII parsing helpers.
 
+use std::borrow::Cow;
+
 /// Truncates `input` at the largest valid UTF-8 character boundary not exceeding `max_bytes`.
 #[must_use]
 pub fn clamp_utf8_prefix(input: &str, max_bytes: usize) -> &str {
@@ -34,6 +36,28 @@ pub fn contains_control_or_whitespace(value: &str) -> bool {
     value.chars().any(|character| {
         character.is_whitespace() || character.is_control() || is_bidi_control(character)
     })
+}
+
+/// Escapes `value` with single quotes for safe command display when it is empty or contains non-token characters.
+#[must_use]
+pub fn escape_shell(value: &str) -> Cow<'_, str> {
+    if value.is_empty() {
+        return Cow::Borrowed("''");
+    }
+    if value.bytes().all(is_safe_shell_byte) {
+        return Cow::Borrowed(value);
+    }
+    let mut escaped = String::with_capacity(value.len() + 2);
+    escaped.push('\'');
+    for character in value.chars() {
+        if character == '\'' {
+            escaped.push_str("'\\''");
+        } else {
+            escaped.push(character);
+        }
+    }
+    escaped.push('\'');
+    Cow::Owned(escaped)
 }
 
 /// Evaluates whether `character` is a Unicode bidirectional formatting control character.
@@ -67,6 +91,14 @@ pub const fn is_identifier_start(byte: u8) -> bool {
     byte.is_ascii_alphabetic() || byte == b'_'
 }
 
+/// Evaluates whether `byte` can appear unquoted in a formatted shell command token (`[A-Za-z0-9_\-./:=@]`).
+#[inline]
+#[must_use]
+pub const fn is_safe_shell_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'=' | b'@')
+}
+
 /// Evaluates whether `identifier` is a valid PSL or group identifier (`[A-Za-z_][A-Za-z0-9_-]*`).
 #[must_use]
 pub fn is_valid_identifier(identifier: &str) -> bool {
@@ -74,6 +106,23 @@ pub fn is_valid_identifier(identifier: &str) -> bool {
         return false;
     };
     is_identifier_start(first) && rest.iter().copied().all(is_identifier_continue)
+}
+
+/// Evaluates whether `name` is a valid normalized pod or container name (`[a-z0-9_][a-z0-9_.-]*` without `..`).
+#[must_use]
+pub fn is_valid_pod_or_container_name(name: &str) -> bool {
+    let Some((&first, rest)) = name.as_bytes().split_first() else {
+        return false;
+    };
+    let valid_first = first.is_ascii_lowercase() || first.is_ascii_digit() || first == b'_';
+    let valid_rest = rest.iter().copied().all(|byte| {
+        byte.is_ascii_lowercase()
+            || byte.is_ascii_digit()
+            || byte == b'_'
+            || byte == b'-'
+            || byte == b'.'
+    });
+    valid_first && valid_rest && !name.contains("..")
 }
 
 /// Evaluates whether `identifier` is a valid recipe identifier (`[A-Za-z0-9_][A-Za-z0-9_-]*`).
@@ -84,6 +133,18 @@ pub fn is_valid_recipe_identifier(identifier: &str) -> bool {
     };
     (first.is_ascii_alphanumeric() || first == b'_')
         && rest.iter().copied().all(is_identifier_continue)
+}
+
+/// Normalizes `input` by trimming whitespace, lowercasing characters, and collapsing internal whitespace runs into `'_'`.
+#[must_use]
+pub fn normalize_name(input: &str) -> String {
+    let trimmed = input.trim();
+    let mut normalized = String::with_capacity(trimmed.len());
+    let mut in_whitespace = false;
+    for character in trimmed.chars() {
+        append_normalized_char(&mut normalized, character, &mut in_whitespace);
+    }
+    normalized
 }
 
 /// Parses a non-empty ASCII decimal digit slice into a `u32`, rejecting signs and non-digits.
@@ -105,12 +166,28 @@ pub const fn sanitize_char(character: char) -> char {
     character
 }
 
+/// Appends `character` (lowercased, or collapsed to `'_'` on whitespace transitions) to `normalized`.
+fn append_normalized_char(normalized: &mut String, character: char, in_whitespace: &mut bool) {
+    if character.is_whitespace() {
+        if !*in_whitespace {
+            normalized.push('_');
+            *in_whitespace = true;
+        }
+        return;
+    }
+    *in_whitespace = false;
+    for lower in character.to_lowercase() {
+        normalized.push(lower);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_utf8_prefix, contains_control_or_whitespace, is_bidi_control,
-        is_empty_value_literal, is_identifier_continue, is_identifier_start, is_valid_identifier,
-        is_valid_recipe_identifier, parse_ascii_u32, sanitize_char,
+        clamp_utf8_prefix, contains_control_or_whitespace, escape_shell, is_bidi_control,
+        is_empty_value_literal, is_identifier_continue, is_identifier_start, is_safe_shell_byte,
+        is_valid_identifier, is_valid_pod_or_container_name, is_valid_recipe_identifier,
+        normalize_name, parse_ascii_u32, sanitize_char,
     };
 
     #[test]
@@ -153,6 +230,19 @@ mod tests {
         assert!(is_empty_value_literal("''"));
         assert!(!is_empty_value_literal("a"));
         assert!(!is_empty_value_literal("\"'\""));
+
+        assert!(is_safe_shell_byte(b'a'));
+        assert!(is_safe_shell_byte(b'@'));
+        assert!(!is_safe_shell_byte(b' '));
+        assert!(!is_safe_shell_byte(b'\''));
+        assert_eq!(escape_shell(""), "''");
+        assert_eq!(escape_shell("registry.io/alpine:latest"), "registry.io/alpine:latest");
+        assert_eq!(escape_shell("O'Hara"), "'O'\\''Hara'");
+        assert_eq!(escape_shell("Hancock 2"), "'Hancock 2'");
+        assert_eq!(
+            escape_shell("echo 'hello world'"),
+            "'echo '\\''hello world'\\'''"
+        );
     }
 
     #[test]
@@ -189,5 +279,23 @@ mod tests {
         assert_eq!(parse_ascii_u32("-5"), None);
         assert_eq!(parse_ascii_u32("5a"), None);
         assert_eq!(parse_ascii_u32("999999999999999999999"), None);
+
+        assert_eq!(normalize_name("      si  po"), "si_po");
+        assert_eq!(normalize_name(" supR App  "), "supr_app");
+        assert_eq!(normalize_name("  *DB\t\tServer "), "*db_server");
+        assert_eq!(normalize_name(""), "");
+        assert_eq!(normalize_name("   "), "");
+
+        assert!(is_valid_pod_or_container_name("example-stack_1.0"));
+        assert!(is_valid_pod_or_container_name("10_db"));
+        assert!(is_valid_pod_or_container_name("_internal"));
+        assert!(!is_valid_pod_or_container_name(""));
+        assert!(!is_valid_pod_or_container_name("-flag"));
+        assert!(!is_valid_pod_or_container_name(".hidden"));
+        assert!(!is_valid_pod_or_container_name("*db"));
+        assert!(!is_valid_pod_or_container_name("Upper"));
+        assert!(!is_valid_pod_or_container_name("a..b"));
+        assert!(!is_valid_pod_or_container_name("a/b"));
+        assert!(!is_valid_pod_or_container_name("a:b"));
     }
 }

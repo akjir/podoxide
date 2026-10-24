@@ -192,6 +192,7 @@ pub enum PodError {
     Config(ConfigError),
     Io(io::Error),
     Psl(PslError),
+    Recipe(RecipeError),
     System(SystemError),
 }
 
@@ -205,6 +206,7 @@ impl Display for PodError {
                 write_sanitized_token(formatter, &error.to_string())
             }
             Self::Psl(error) => write!(formatter, "PSL error: {error}"),
+            Self::Recipe(error) => write!(formatter, "Recipe error: {error}"),
             Self::System(error) => write!(formatter, "{error}"),
         }
     }
@@ -217,6 +219,7 @@ impl Error for PodError {
             Self::Config(error) => Some(error),
             Self::Io(error) => Some(error),
             Self::Psl(error) => Some(error),
+            Self::Recipe(error) => Some(error),
             Self::System(error) => Some(error),
         }
     }
@@ -237,6 +240,12 @@ impl From<ConfigError> for PodError {
 impl From<PslError> for PodError {
     fn from(error: PslError) -> Self {
         Self::Psl(error)
+    }
+}
+
+impl From<RecipeError> for PodError {
+    fn from(error: RecipeError) -> Self {
+        Self::Recipe(error)
     }
 }
 
@@ -310,22 +319,135 @@ impl Display for PslErrorKind {
     }
 }
 
+/// Recipe semantic validation or target container resolution error (`*.pod`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecipeError {
+    pub kind: RecipeErrorKind,
+    pub line: Option<usize>,
+    pub token: Option<String>,
+}
+
+impl RecipeError {
+    /// Creates a new recipe error associated with a 1-based line number and offending token.
+    #[must_use]
+    pub fn with_token(kind: RecipeErrorKind, line: usize, token: impl AsRef<str>) -> Self {
+        Self {
+            kind,
+            line: Some(line),
+            token: Some(sanitize_error_token(token.as_ref())),
+        }
+    }
+}
+
+impl Display for RecipeError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        if let Some(line) = self.line {
+            write!(formatter, "line {line}: {}", self.kind)?;
+        } else {
+            write!(formatter, "{}", self.kind)?;
+        }
+        if let Some(token) = &self.token {
+            formatter.write_str(": '")?;
+            write_sanitized_token(formatter, token)?;
+            formatter.write_char('\'')?;
+        }
+        Ok(())
+    }
+}
+
+impl Error for RecipeError {}
+
+/// Specific failure category encountered while loading, validating, or resolving a `.pod` recipe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecipeErrorKind {
+    ContainerNotFound,
+    DuplicateBlock,
+    DuplicateDirective,
+    EmptyContainerBlock,
+    EmptyPodBlock,
+    InvalidArgumentCount,
+    InvalidBoolean,
+    InvalidCommand,
+    InvalidContainerName,
+    InvalidDescription,
+    InvalidImage,
+    InvalidOption,
+    InvalidPath,
+    InvalidPodId,
+    InvalidPublish,
+    InvalidRegistry,
+    InvalidRestartPolicy,
+    InvalidVolume,
+    MissingContainerImage,
+    MissingContainersBlock,
+    MissingPodBlock,
+    MissingPodName,
+    MissingPodPath,
+    MissingPodRegistry,
+    NotFound,
+    UnexpectedBlock,
+    UnknownDirective,
+}
+
+impl Display for RecipeErrorKind {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::ContainerNotFound => "container not found in recipe",
+            Self::DuplicateBlock => "duplicate block in recipe",
+            Self::DuplicateDirective => "duplicate directive in recipe",
+            Self::EmptyContainerBlock => "container block in recipe is empty",
+            Self::EmptyPodBlock => "pod block in recipe is empty",
+            Self::InvalidArgumentCount => "invalid number of arguments for block or directive",
+            Self::InvalidBoolean => "invalid boolean value (expected 'true' or 'false')",
+            Self::InvalidCommand => "invalid command definition in recipe",
+            Self::InvalidContainerName => "invalid container name in recipe",
+            Self::InvalidDescription => "invalid description in recipe",
+            Self::InvalidImage => "invalid container image in recipe",
+            Self::InvalidOption => "invalid option value in recipe",
+            Self::InvalidPath => "invalid path value in recipe",
+            Self::InvalidPodId => "invalid pod identifier in recipe",
+            Self::InvalidPublish => "invalid port publish specification in recipe",
+            Self::InvalidRegistry => "invalid registry in recipe",
+            Self::InvalidRestartPolicy => "invalid restart policy in recipe",
+            Self::InvalidVolume => "invalid volume mount in recipe",
+            Self::MissingContainerImage => "missing 'image' directive in container",
+            Self::MissingContainersBlock => "no 'container' blocks defined in recipe",
+            Self::MissingPodBlock => "missing 'pod' block in recipe",
+            Self::MissingPodName => "missing 'name' directive in 'pod' block",
+            Self::MissingPodPath => {
+                "missing 'path' directive in 'pod' block and no default 'pods.path' configured"
+            }
+            Self::MissingPodRegistry => "missing 'registry' directive in 'pod' block",
+            Self::NotFound => "recipe file not found",
+            Self::UnexpectedBlock => "unexpected block in recipe",
+            Self::UnknownDirective => "unknown directive in recipe",
+        };
+        formatter.write_str(message)
+    }
+}
+
 /// Host operating system, runtime dependency, or privilege verification error.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SystemError {
     AbortedExecution,
+    CommandFailed(Option<i32>),
     UnsupportedOs,
     UnsupportedPodmanVersion,
 }
 
 impl Display for SystemError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        let message = match self {
-            Self::AbortedExecution => "Aborting execution.",
-            Self::UnsupportedOs => "Only Linux is supported.",
-            Self::UnsupportedPodmanVersion => "Podman 5.8.0 or higher is required.",
-        };
-        formatter.write_str(message)
+        match self {
+            Self::AbortedExecution => formatter.write_str("Aborting execution."),
+            Self::CommandFailed(Some(code)) => {
+                write!(formatter, "Command exited with code '{code}'!")
+            }
+            Self::CommandFailed(None) => formatter.write_str("Command terminated by signal!"),
+            Self::UnsupportedOs => formatter.write_str("Only Linux is supported."),
+            Self::UnsupportedPodmanVersion => {
+                formatter.write_str("Podman 5.8.0 or higher is required.")
+            }
+        }
     }
 }
 
@@ -357,7 +479,7 @@ mod tests {
 
     use super::{
         CliError, CliErrorKind, ConfigError, ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError,
-        PslError, PslErrorKind, SystemError,
+        PslError, PslErrorKind, RecipeError, RecipeErrorKind, SystemError,
     };
 
     #[test]
@@ -472,9 +594,30 @@ mod tests {
     }
 
     #[test]
+    fn pod_error_recipe_display_and_source() {
+        let recipe_error =
+            RecipeError::with_token(RecipeErrorKind::UnknownDirective, 9, "unknown_key");
+        let pod_error = PodError::from(recipe_error.clone());
+
+        assert!(pod_error.to_string().contains("Recipe error"));
+        assert!(pod_error.to_string().contains("line 9"));
+        assert!(pod_error.to_string().contains("unknown_key"));
+        assert!(pod_error.source().is_some());
+        assert!(recipe_error.source().is_none());
+    }
+
+    #[test]
     fn pod_error_system_display_and_source() {
         let variants = [
             (SystemError::AbortedExecution, "Aborting execution."),
+            (
+                SystemError::CommandFailed(Some(125)),
+                "Command exited with code '125'!",
+            ),
+            (
+                SystemError::CommandFailed(None),
+                "Command terminated by signal!",
+            ),
             (SystemError::UnsupportedOs, "Only Linux is supported."),
             (
                 SystemError::UnsupportedPodmanVersion,
@@ -523,6 +666,101 @@ mod tests {
             let error = PslError::new(*kind, index + 1);
             let formatted = error.to_string();
             assert!(formatted.contains(expected_substring));
+        }
+    }
+
+    #[test]
+    fn recipe_error_kind_display_messages() {
+        let variants = [
+            (RecipeErrorKind::ContainerNotFound, "container not found"),
+            (RecipeErrorKind::DuplicateBlock, "duplicate block"),
+            (RecipeErrorKind::DuplicateDirective, "duplicate directive"),
+            (
+                RecipeErrorKind::EmptyContainerBlock,
+                "container block in recipe is empty",
+            ),
+            (
+                RecipeErrorKind::EmptyPodBlock,
+                "pod block in recipe is empty",
+            ),
+            (
+                RecipeErrorKind::InvalidArgumentCount,
+                "invalid number of arguments",
+            ),
+            (RecipeErrorKind::InvalidBoolean, "invalid boolean"),
+            (RecipeErrorKind::InvalidCommand, "invalid command"),
+            (
+                RecipeErrorKind::InvalidContainerName,
+                "invalid container name",
+            ),
+            (
+                RecipeErrorKind::InvalidDescription,
+                "invalid description in recipe",
+            ),
+            (RecipeErrorKind::InvalidImage, "invalid container image"),
+            (RecipeErrorKind::InvalidOption, "invalid option"),
+            (RecipeErrorKind::InvalidPath, "invalid path"),
+            (RecipeErrorKind::InvalidPodId, "invalid pod identifier"),
+            (
+                RecipeErrorKind::InvalidPublish,
+                "invalid port publish specification",
+            ),
+            (RecipeErrorKind::InvalidRegistry, "invalid registry"),
+            (
+                RecipeErrorKind::InvalidRestartPolicy,
+                "invalid restart policy",
+            ),
+            (RecipeErrorKind::InvalidVolume, "invalid volume mount"),
+            (
+                RecipeErrorKind::MissingContainerImage,
+                "missing 'image' directive",
+            ),
+            (
+                RecipeErrorKind::MissingContainersBlock,
+                "no 'container' blocks",
+            ),
+            (RecipeErrorKind::MissingPodBlock, "missing 'pod' block"),
+            (
+                RecipeErrorKind::MissingPodName,
+                "missing 'name' directive",
+            ),
+            (
+                RecipeErrorKind::MissingPodPath,
+                "missing 'path' directive",
+            ),
+            (
+                RecipeErrorKind::MissingPodRegistry,
+                "missing 'registry' directive",
+            ),
+            (RecipeErrorKind::NotFound, "recipe file not found"),
+            (RecipeErrorKind::UnexpectedBlock, "unexpected block"),
+            (RecipeErrorKind::UnknownDirective, "unknown directive"),
+        ];
+
+        for (index, (kind, expected_substring)) in variants.iter().enumerate() {
+            let plain = RecipeError {
+                kind: *kind,
+                line: None,
+                token: None,
+            };
+            assert!(plain.to_string().contains(expected_substring));
+            let line_only = RecipeError {
+                kind: *kind,
+                line: Some(index + 1),
+                token: None,
+            };
+            assert!(line_only.to_string().contains(expected_substring));
+            assert!(line_only.to_string().contains("line "));
+            let with_token = RecipeError::with_token(*kind, index + 1, "bad_token");
+            assert!(with_token.to_string().contains(expected_substring));
+            assert!(with_token.to_string().contains("bad_token"));
+            let token_no_line = RecipeError {
+                kind: *kind,
+                line: None,
+                token: Some(String::from("bad_token")),
+            };
+            assert!(token_no_line.to_string().contains(expected_substring));
+            assert!(token_no_line.to_string().contains("bad_token"));
         }
     }
 
@@ -584,14 +822,30 @@ mod tests {
 
         let multi_byte = format!("x{}", "ä".repeat((MAX_ERROR_TOKEN_BYTES / 2) + 20));
         let bounded_cli = CliError::with_argument(CliErrorKind::UnknownFlag, &multi_byte);
-        let bounded_arg = bounded_cli.argument.as_deref().unwrap();
-        assert!(bounded_arg.len() <= MAX_ERROR_TOKEN_BYTES);
-        assert!(bounded_arg.ends_with('ä'));
+        let bounded_argument = bounded_cli.argument.as_deref().unwrap();
+        assert!(bounded_argument.len() <= MAX_ERROR_TOKEN_BYTES);
+        assert!(bounded_argument.ends_with('ä'));
 
-        let bounded_config = ConfigError::with_token(ConfigErrorKind::UnknownDirective, 1, &multi_byte);
-        let bounded_tok = bounded_config.token.as_deref().unwrap();
-        assert!(bounded_tok.len() <= MAX_ERROR_TOKEN_BYTES);
-        assert!(bounded_tok.ends_with('ä'));
+        let bounded_config =
+            ConfigError::with_token(ConfigErrorKind::UnknownDirective, 1, &multi_byte);
+        let bounded_token = bounded_config.token.as_deref().unwrap();
+        assert!(bounded_token.len() <= MAX_ERROR_TOKEN_BYTES);
+        assert!(bounded_token.ends_with('ä'));
+
+        let recipe_error = RecipeError::with_token(RecipeErrorKind::InvalidPath, 4, injected);
+        let recipe_token = recipe_error.token.as_deref().unwrap();
+        assert!(!recipe_token.contains('\n'));
+        assert!(!recipe_token.contains('\r'));
+        assert!(!recipe_token.contains('\x1b'));
+        assert!(!recipe_token.contains('\0'));
+        assert!(!recipe_token.contains('\u{009b}'));
+        assert!(!recipe_token.contains('\u{202e}'));
+
+        let bounded_recipe =
+            RecipeError::with_token(RecipeErrorKind::UnknownDirective, 1, &multi_byte);
+        let bounded_recipe_token = bounded_recipe.token.as_deref().unwrap();
+        assert!(bounded_recipe_token.len() <= MAX_ERROR_TOKEN_BYTES);
+        assert!(bounded_recipe_token.ends_with('ä'));
 
         let direct_oversized = ConfigError {
             kind: ConfigErrorKind::UnknownDirective,

@@ -15,9 +15,33 @@
 
 //! File path lexical normalization, extension matching, and configuration stem extraction helpers.
 
+use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 
-use crate::utilities::string::is_bidi_control;
+use crate::error::MAX_ERROR_TOKEN_BYTES;
+use crate::utilities::string::{clamp_utf8_prefix, is_bidi_control, sanitize_char};
+
+/// Constructs a full file or directory path from `base_dir`, `file_name`, and `file_extension`.
+#[must_use]
+pub fn build_full_path(base_dir: &Path, file_name: &str, file_extension: &str) -> PathBuf {
+    let base_bytes = base_dir.as_os_str().as_encoded_bytes();
+    let leaf = format_leaf_name(file_name, file_extension);
+    let capacity = base_bytes
+        .len()
+        .saturating_add(leaf.len())
+        .saturating_add(4);
+    let mut full = PathBuf::with_capacity(capacity);
+    if !base_bytes.starts_with(b"/") && !has_dot_segment_prefix(base_bytes) {
+        full.push(".");
+    }
+    if !base_bytes.is_empty() {
+        full.push(base_dir);
+    }
+    if !leaf.is_empty() {
+        full.push(leaf.as_ref());
+    }
+    full
+}
 
 /// Extracts the configuration file stem from a raw `.conf` path string if it is structurally valid.
 #[must_use]
@@ -33,15 +57,11 @@ pub fn extract_config_stem(raw_value: &str) -> Option<&str> {
         return None;
     }
     let file_name = raw_value.rsplit('/').next().unwrap_or(raw_value);
+    if file_name.starts_with('-') {
+        return None;
+    }
     let stem = file_name.strip_suffix(".conf").unwrap_or(file_name);
-    if file_name.is_empty()
-        || file_name == "."
-        || file_name == ".."
-        || file_name.starts_with('-')
-        || stem.is_empty()
-        || stem == "."
-        || stem == ".."
-    {
+    if !has_valid_stem(stem) {
         return None;
     }
     Some(stem)
@@ -54,25 +74,55 @@ pub fn has_parent_dir(path: &Path) -> bool {
         .any(|component| matches!(component, Component::ParentDir))
 }
 
+/// Evaluates whether `value` is a safe directory path without `..` traversal, colons, or control characters.
+#[must_use]
+pub fn is_valid_directory_path(value: &str) -> bool {
+    if value.is_empty()
+        || value != value.trim()
+        || value.starts_with('-')
+        || value.contains(':')
+        || value
+            .chars()
+            .any(|character| character.is_control() || is_bidi_control(character))
+    {
+        return false;
+    }
+    let path = Path::new(value);
+    if has_parent_dir(path) {
+        return false;
+    }
+    path.components()
+        .any(|component| matches!(component, Component::CurDir | Component::Normal(_)))
+}
+
 /// Evaluates whether `path` is a structurally valid, UTF-8 target file path without `..` traversal.
 #[must_use]
 pub fn is_valid_target_path(path: &Path) -> bool {
     let Some(raw_path) = path.to_str() else {
         return false;
     };
-    !has_parent_dir(path) && extract_config_stem(raw_path).is_some()
-}
-
-/// Evaluates whether `file_name` ends with `extension` and retains a non-empty stem before it.
-#[must_use]
-pub fn matches_extension(file_name: &str, extension: Option<&str>) -> bool {
-    let Some(required_extension) = extension else {
-        return true;
-    };
-    let Some(stem) = file_name.strip_suffix(required_extension) else {
+    if has_parent_dir(path) {
+        return false;
+    }
+    let Some(config_stem) = extract_config_stem(raw_path) else {
         return false;
     };
-    !stem.is_empty()
+    let target_stem = config_stem.strip_suffix(".pod").unwrap_or(config_stem);
+    has_valid_stem(target_stem)
+}
+
+/// Evaluates whether `file_name` ends with `extension` and retains a non-empty, non-dot-only stem.
+#[must_use]
+pub fn matches_extension(file_name: &str, extension: Option<&str>) -> bool {
+    let stem = if let Some(required_extension) = extension {
+        let Some(stripped) = file_name.strip_suffix(required_extension) else {
+            return false;
+        };
+        stripped
+    } else {
+        file_name
+    };
+    has_valid_stem(stem)
 }
 
 /// Normalizes `path` lexically by resolving `.` and `..` components without accessing the filesystem.
@@ -125,7 +175,26 @@ pub fn relative_display_path<'a>(path: &'a Path, base_dir: &Path) -> &'a Path {
     } else {
         path
     };
-    relative.strip_prefix("./").unwrap_or(relative)
+    let stripped = relative.strip_prefix("./").unwrap_or(relative);
+    if stripped.as_os_str().is_empty() && !path.as_os_str().is_empty() {
+        return Path::new(".");
+    }
+    stripped
+}
+
+/// Clamps and sanitizes a filesystem `path` into a bounded [`MAX_ERROR_TOKEN_BYTES`] error token.
+#[must_use]
+pub fn sanitize_path_token(path: &Path) -> String {
+    if let Some(valid_str) = path.to_str() {
+        let clamped = clamp_utf8_prefix(valid_str, MAX_ERROR_TOKEN_BYTES);
+        return sanitize_clamped_str(clamped);
+    }
+    let raw_bytes = path.as_os_str().as_encoded_bytes();
+    let max_scan = MAX_ERROR_TOKEN_BYTES.saturating_add(3);
+    let prefix_bytes = raw_bytes.get(..max_scan).unwrap_or(raw_bytes);
+    let lossy = String::from_utf8_lossy(prefix_bytes);
+    let clamped = clamp_utf8_prefix(&lossy, MAX_ERROR_TOKEN_BYTES);
+    sanitize_clamped_str(clamped)
 }
 
 /// Applies a single `component` to `normalized` during lexical path normalization.
@@ -139,17 +208,98 @@ fn apply_lexical_component(normalized: &mut PathBuf, component: Component<'_>) {
     }
 }
 
+/// Appends `file_extension` to `file_name` when `file_extension` is non-empty and not already present.
+fn format_leaf_name<'a>(file_name: &'a str, file_extension: &str) -> Cow<'a, str> {
+    if file_name.is_empty() || file_extension.is_empty() || file_name.ends_with(file_extension) {
+        return Cow::Borrowed(file_name);
+    }
+    let mut combined = String::with_capacity(file_name.len().saturating_add(file_extension.len()));
+    combined.push_str(file_name);
+    combined.push_str(file_extension);
+    Cow::Owned(combined)
+}
+
+/// Evaluates whether `base_bytes` starts with an explicit `.` or `..` relative path segment.
+fn has_dot_segment_prefix(base_bytes: &[u8]) -> bool {
+    base_bytes == b"."
+        || base_bytes == b".."
+        || base_bytes.starts_with(b"./")
+        || base_bytes.starts_with(b"../")
+}
+
+/// Evaluates whether `stem` is non-empty and contains at least one non-dot byte.
+fn has_valid_stem(stem: &str) -> bool {
+    !stem.is_empty() && !stem.bytes().all(|byte| byte == b'.')
+}
+
+/// Replaces control and bidirectional characters in `clamped` with safe ASCII spaces.
+fn sanitize_clamped_str(clamped: &str) -> String {
+    let mut sanitized = String::with_capacity(clamped.len());
+    for character in clamped.chars() {
+        sanitized.push(sanitize_char(character));
+    }
+    sanitized
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
     use std::path::{Path, PathBuf};
 
+    use crate::error::MAX_ERROR_TOKEN_BYTES;
     use super::{
-        extract_config_stem, has_parent_dir, is_valid_target_path, matches_extension,
-        normalize_lexical_path, parent_or_cur_dir, pop_relative_or_absolute,
-        relative_display_path,
+        build_full_path, extract_config_stem, has_parent_dir, is_valid_directory_path,
+        is_valid_target_path, matches_extension, normalize_lexical_path, parent_or_cur_dir,
+        pop_relative_or_absolute, relative_display_path, sanitize_path_token,
     };
+
+    #[test]
+    fn build_full_path_and_directory_validation_and_sanitization() {
+        assert_eq!(
+            build_full_path(Path::new("."), "recipe", ".pod"),
+            PathBuf::from("./recipe.pod")
+        );
+        assert_eq!(
+            build_full_path(Path::new("./recipes"), "recipe.pod", ".pod"),
+            PathBuf::from("./recipes/recipe.pod")
+        );
+        assert_eq!(
+            build_full_path(Path::new("pods"), "si_po", ""),
+            PathBuf::from("./pods/si_po")
+        );
+        assert_eq!(
+            build_full_path(Path::new(".pods"), "si_po", ""),
+            PathBuf::from("./.pods/si_po")
+        );
+        assert_eq!(
+            build_full_path(Path::new(".recipes"), "recipe", ".pod"),
+            PathBuf::from("./.recipes/recipe.pod")
+        );
+        assert_eq!(
+            build_full_path(Path::new("/pods"), "nopathpod", ""),
+            PathBuf::from("/pods/nopathpod")
+        );
+        assert_eq!(
+            build_full_path(Path::new(""), "recipe", ".pod"),
+            PathBuf::from("./recipe.pod")
+        );
+
+        assert!(is_valid_directory_path("."));
+        assert!(is_valid_directory_path("./pods"));
+        assert!(is_valid_directory_path("/var/lib/pods"));
+        assert!(!is_valid_directory_path(""));
+        assert!(!is_valid_directory_path("/"));
+        assert!(!is_valid_directory_path("-pods"));
+        assert!(!is_valid_directory_path("../pods"));
+        assert!(!is_valid_directory_path("/var:pods"));
+        assert!(!is_valid_directory_path("/var/pods\n"));
+
+        assert_eq!(
+            sanitize_path_token(Path::new("/tmp/evil\x1b[31m.pod")),
+            "/tmp/evil [31m.pod"
+        );
+    }
 
     #[test]
     fn extract_config_stem_handles_valid_and_invalid_paths() {
@@ -180,10 +330,13 @@ mod tests {
             "configs/",
             ".",
             "..",
+            "...",
             ".conf",
             "/tmp/.conf",
             "..conf",
+            "...conf",
             "/tmp/..conf",
+            "/tmp/...conf",
             "pods\u{202E}.conf",
             "/tmp/\u{2066}pods.conf",
         ] {
@@ -206,10 +359,17 @@ mod tests {
         assert!(matches_extension("app.pod", Some(".pod")));
         assert!(matches_extension(".hidden.pod", Some(".pod")));
         assert!(!matches_extension(".pod", Some(".pod")));
+        assert!(!matches_extension("..pod", Some(".pod")));
+        assert!(!matches_extension("...pod", Some(".pod")));
         assert!(!matches_extension("app.txt", Some(".pod")));
         assert!(matches_extension("anything", None));
+        assert!(!matches_extension("", None));
+        assert!(!matches_extension(".", None));
+        assert!(!matches_extension("..", None));
 
         assert_eq!(normalize_lexical_path(Path::new("")), PathBuf::new());
+        assert_eq!(normalize_lexical_path(Path::new("/..")), PathBuf::from("/"));
+        assert_eq!(normalize_lexical_path(Path::new("..")), PathBuf::from(".."));
         assert_eq!(normalize_lexical_path(Path::new("./a/..")), PathBuf::from("."));
         assert_eq!(
             normalize_lexical_path(Path::new("a/../../b")),
@@ -223,10 +383,28 @@ mod tests {
         let mut dot_path = PathBuf::from(".");
         pop_relative_or_absolute(&mut dot_path);
         assert_eq!(dot_path, PathBuf::from(".."));
+        pop_relative_or_absolute(&mut dot_path);
+        assert_eq!(dot_path, PathBuf::from("../.."));
+
+        let mut empty_path = PathBuf::new();
+        pop_relative_or_absolute(&mut empty_path);
+        assert_eq!(empty_path, PathBuf::from(".."));
+
+        let mut root_path = PathBuf::from("/");
+        pop_relative_or_absolute(&mut root_path);
+        assert_eq!(root_path, PathBuf::from("/"));
 
         assert!(is_valid_target_path(Path::new("./recipe.pod")));
         assert!(is_valid_target_path(Path::new("./pods.conf")));
+        assert!(is_valid_target_path(Path::new("./.hidden.pod")));
         assert!(!is_valid_target_path(Path::new("")));
+        assert!(!is_valid_target_path(Path::new(".pod")));
+        assert!(!is_valid_target_path(Path::new("./.pod")));
+        assert!(!is_valid_target_path(Path::new("/tmp/.pod")));
+        assert!(!is_valid_target_path(Path::new("..pod")));
+        assert!(!is_valid_target_path(Path::new("./...pod")));
+        assert!(!is_valid_target_path(Path::new("..conf")));
+        assert!(!is_valid_target_path(Path::new("...conf")));
         assert!(!is_valid_target_path(Path::new("../pods.conf")));
         assert!(!is_valid_target_path(Path::new("/tmp/../pods.conf")));
         let non_utf8_path = PathBuf::from(OsString::from_vec(vec![b'.', b'/', 0xFF, b'.', b'c']));
@@ -239,6 +417,14 @@ mod tests {
             Path::new("/tmp/workspace")
         );
 
+        assert_eq!(
+            relative_display_path(Path::new("."), Path::new(".")),
+            Path::new(".")
+        );
+        assert_eq!(
+            relative_display_path(Path::new("/tmp/workspace"), Path::new("/tmp/workspace")),
+            Path::new(".")
+        );
         assert_eq!(
             relative_display_path(Path::new("./recipe.pod"), Path::new(".")),
             Path::new("recipe.pod")
@@ -258,5 +444,35 @@ mod tests {
             relative_display_path(Path::new("/etc/pods/staging.conf"), Path::new(".")),
             Path::new("/etc/pods/staging.conf")
         );
+    }
+
+    #[test]
+    fn sanitize_path_token_respects_utf8_boundaries_and_non_utf8_osstr() {
+        let exact = "a".repeat(MAX_ERROR_TOKEN_BYTES);
+        assert_eq!(
+            sanitize_path_token(Path::new(&exact)).len(),
+            MAX_ERROR_TOKEN_BYTES
+        );
+
+        let over = "a".repeat(MAX_ERROR_TOKEN_BYTES + 1);
+        assert_eq!(
+            sanitize_path_token(Path::new(&over)).len(),
+            MAX_ERROR_TOKEN_BYTES
+        );
+
+        let mut boundary_str = "a".repeat(MAX_ERROR_TOKEN_BYTES - 3);
+        boundary_str.push('\u{1F980}');
+        let sanitized_boundary = sanitize_path_token(Path::new(&boundary_str));
+        assert_eq!(sanitized_boundary.len(), MAX_ERROR_TOKEN_BYTES - 3);
+        assert!(!sanitized_boundary.contains('\u{FFFD}'));
+
+        let mut raw_non_utf8 = vec![b'a'; MAX_ERROR_TOKEN_BYTES - 3];
+        raw_non_utf8.extend_from_slice("\u{1F980}".as_bytes());
+        raw_non_utf8[0] = 0xFF;
+        let non_utf8_path = PathBuf::from(OsString::from_vec(raw_non_utf8));
+        let sanitized_non_utf8 = sanitize_path_token(&non_utf8_path);
+        assert!(sanitized_non_utf8.len() <= MAX_ERROR_TOKEN_BYTES);
+        assert!(sanitized_non_utf8.starts_with('\u{FFFD}'));
+        assert!(!sanitized_non_utf8.ends_with('\u{FFFD}'));
     }
 }
