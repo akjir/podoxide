@@ -25,6 +25,7 @@ podoxide/
 ├── .pods-completion.bash
 ├── AGENTS.md
 ├── ARCHITECTURE.md
+├── build.rs
 ├── Cargo.toml
 ├── CHANGELOG.md
 ├── LICENSE
@@ -39,6 +40,7 @@ podoxide/
     ├── core/
     │   ├── cli.rs
     │   ├── config.rs
+    │   ├── constants.rs
     │   ├── container.rs
     │   ├── context.rs
     │   ├── log.rs
@@ -73,7 +75,8 @@ podoxide/
     │       │   ├── status.rs
     │       │   ├── stop.rs
     │       │   ├── up.rs
-    │       │   └── update.rs
+    │       │   ├── update.rs
+    │       │   └── version.rs
     │       ├── image/
     │       │   ├── help.rs
     │       │   ├── mod.rs
@@ -121,6 +124,7 @@ podoxide/
 | File                    | Function |
 | :---------------------- | :------- |
 | `Cargo.toml`            | Defines crate metadata, the `podoxide` library target, the `pods` binary target, and release optimizations. |
+| `build.rs`              | Generates the compile-time application version string with Git commit count, short hash, and dirty-tree build metadata. |
 | `pods.conf`             | Provides the root configuration template embedded and written by `pods init`. |
 | `recipe.pod`            | Provides the root recipe template embedded and written by `pods init`. |
 | `.pods-completion.bash` | Provides Bash autocompletion for all CLI modes, actions, and flags. |
@@ -137,6 +141,7 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/mod.rs`       | Declares and re-exports the core domain modules and the `modes` submodule. |
 | `src/core/cli.rs`       | Parses CLI arguments (`OsStr` / `OsString`), extracts global and mode-specific flags (`--config`, `--debug`, `--simulate`), and selects modes. |
 | `src/core/config.rs`    | Defines the configuration model (`pods.conf`), collects active recipes, checks recipe membership, and expands `@group` targets. |
+| `src/core/constants.rs` | Defines global application metadata and the compile-time build version constant (`APP_NAME`, `APP_VERSION`). |
 | `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and builds Podman commands. |
 | `src/core/context.rs`   | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
 | `src/core/log.rs`       | Provides structured output and diagnostic logging (`debug`, `info`, `pod_error`, `print`, `write_*`) with debug state control. |
@@ -201,6 +206,7 @@ Executes primary pod lifecycle operations and displays container runtime status 
 | `src/core/modes/default/stop.rs`    | Stops running target containers in reverse bottom-to-top order and stops the parent pod without removing them. |
 | `src/core/modes/default/up.rs`      | Loads and validates target recipes, then creates and starts pods and containers in top-to-bottom order (`create` + `start`). |
 | `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes and rebuilds the pods (`image update` + `reload`). |
+| `src/core/modes/default/version.rs` | Formats and outputs the application version string for `pods version`. |
 
 ### Image Mode (`src/core/modes/image/`)
 
@@ -292,7 +298,7 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 | :---------------------------- | :------- |
 | `src/utilities/mod.rs`        | Declares and re-exports the utility submodules. |
 | `src/utilities/collection.rs` | Provides slice and vector helpers such as option token splitting (`append_option_tokens`), order-preserving deduplication (`dedup_preserve_order`), and bounded pre-allocation utilities (`bounded_capacity`). |
-| `src/utilities/format.rs`     | Formats shell-escaped command strings (`format_command`), byte counts (`format_bytes`), parses human-readable sizes (`parse_size_to_bytes`), and aligns status columns (`format_line`). |
+| `src/utilities/format.rs`     | Formats shell-escaped command strings (`format_command`), byte counts (`format_bytes`), parses human-readable sizes (`parse_size_to_bytes`), aligns status columns (`format_line`), and formats CLI version headers (`format_version_header`). |
 | `src/utilities/path.rs`       | Provides lexical path normalization (`normalize_lexical_path`), full path construction (`build_full_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), directory, editor, and target path validation (`has_regular_target_name`, `is_valid_directory`, `is_valid_directory_path`, `is_valid_editor_value`, `is_valid_target_path`), path token sanitization (`sanitize_path_token`), extension matching (`matches_extension`), parent traversal checks (`has_parent_dir`), and `.conf` stem/path resolution (`extract_config_stem`, `resolve_config_name`, `resolve_config_path`). |
 | `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character detection and sanitization (`contains_control_or_bidi`, `contains_control_or_whitespace`, `sanitize_char`, `sanitize_text`), shell quoting (`escape_shell`), identifier, target, token, text, and pod/container name validation and normalization (`is_valid_group_target`, `is_valid_identifier`, `is_valid_pod_or_container_name`, `is_valid_recipe_identifier`, `is_valid_target_segment`, `is_valid_text`, `is_valid_token`, `normalize_name`), and strict ASCII integer parsing (`parse_ascii_u32`). |
 
@@ -301,6 +307,6 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 1. **Entry (`src/main.rs`):** Invokes the library runner and maps the result to `std::process::ExitCode`.
 2. **Environment Verification (`src/io/system/env.rs`, `src/io/exec/podman.rs`):** Verifies Linux OS, checks Podman `5.8.0+`, and prompts for confirmation when running as `root`.
 3. **CLI Parsing (`src/core/cli.rs`):** Scans CLI arguments into `Context` (`src/core/context.rs`), extracting global flags (`--config`, `--debug`, `--simulate`), mode selection, action, and targets.
-4. **Configuration Loading (`src/io/psl/`, `src/core/config.rs`):** Loads and parses `pods.conf` unless bypassed by standalone actions (`init`, `image prune`, `help`, or parameterless mode calls).
+4. **Configuration Loading (`src/io/psl/`, `src/core/config.rs`):** Loads and parses `pods.conf` unless bypassed by standalone actions (`init`, `image prune`, `version`, `help`, or parameterless mode calls).
 5. **Mode Dispatch (`src/core/modes/mod.rs`):** Routes `Context` to the selected mode handler (`default`, `command`, `config`, `connect`, `image`, `init`, `logs`, or `recipe`).
 6. **Recipe Resolution & Execution (`src/core/recipe.rs`, `src/core/pod.rs`, `src/io/exec/`):** Expands `@group` targets, parses and validates `.pod` recipes via `src/io/psl/`, and executes or simulates the resulting `podman` commands.

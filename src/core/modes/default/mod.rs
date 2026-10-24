@@ -26,6 +26,7 @@ pub mod status;
 pub mod stop;
 pub mod up;
 pub mod update;
+pub mod version;
 
 use crate::core::context::{Context, DefaultAction, ModeAction};
 use crate::core::log;
@@ -53,14 +54,14 @@ pub fn execute_lifecycle_action(
     Ok(())
 }
 
-/// Dispatches default mode execution to the resolved lifecycle, status, or help action.
+/// Dispatches default mode execution to the resolved lifecycle, status, help, or version action.
 ///
 /// # Workflow
 ///
 /// 1. Log that `default` mode is active when debug logging is enabled.
 /// 2. Route [`ModeAction::Default`] in enum declaration order (`Create`, `Down`, `Help`,
-///    `Reload`, `Remove`, `Restart`, `Start`, `Status`, `Stop`, `Up`, `Update`) to the
-///    corresponding action module.
+///    `Reload`, `Remove`, `Restart`, `Start`, `Status`, `Stop`, `Up`, `Update`, `Version`)
+///    to the corresponding action module.
 ///
 /// # Errors
 ///
@@ -80,6 +81,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
         ModeAction::Default(DefaultAction::Stop) => stop::handle(context),
         ModeAction::Default(DefaultAction::Up) => up::handle(context),
         ModeAction::Default(DefaultAction::Update) => update::handle(context),
+        ModeAction::Default(DefaultAction::Version) => version::handle(context),
         _ => Err(PodError::from(CliError::with_argument(
             CliErrorKind::UnknownAction,
             context.action().to_string(),
@@ -133,6 +135,7 @@ mod tests {
             DefaultAction::Stop,
             DefaultAction::Up,
             DefaultAction::Update,
+            DefaultAction::Version,
         ];
 
         for action in actions {

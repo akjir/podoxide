@@ -15,6 +15,7 @@
 
 //! Command-line formatting, byte size formatting, human-readable size parsing, and table column alignment helpers.
 
+use crate::core::constants::{APP_NAME, APP_VERSION};
 use crate::core::log::MAX_LOG_MESSAGE_BYTES;
 use crate::utilities::string::escape_shell;
 
@@ -58,10 +59,20 @@ pub fn format_line(line: &str, status: &str, target_column: usize) -> String {
     formatted
 }
 
+/// Formats the application version header (`Podoxide v<version>`), appending ` - <title>` when `mode_title` is non-empty.
+#[must_use]
+pub fn format_version_header(mode_title: Option<&str>) -> String {
+    match mode_title {
+        Some(title) if !title.is_empty() => format!("{APP_NAME} {APP_VERSION} - {title}"),
+        _ => format!("{APP_NAME} {APP_VERSION}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::core::constants::{APP_NAME, APP_VERSION};
     use crate::core::log::MAX_LOG_MESSAGE_BYTES;
-    use super::{DEFAULT_TARGET_COLUMN, format_command, format_line};
+    use super::{DEFAULT_TARGET_COLUMN, format_command, format_line, format_version_header};
 
     #[test]
     fn format_command_escapes_shell_arguments() {
@@ -91,5 +102,16 @@ mod tests {
 
         let clamped = format_line("x", "[OK]", usize::MAX);
         assert_eq!(clamped.chars().count(), MAX_LOG_MESSAGE_BYTES + 4);
+    }
+
+    #[test]
+    fn format_version_header_formats_default_and_mode_headers() {
+        let expected_base = format!("{APP_NAME} {APP_VERSION}");
+        assert_eq!(format_version_header(None), expected_base);
+        assert_eq!(format_version_header(Some("")), expected_base);
+        assert_eq!(
+            format_version_header(Some("Command Mode")),
+            format!("{expected_base} - Command Mode")
+        );
     }
 }

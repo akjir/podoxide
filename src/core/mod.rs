@@ -17,6 +17,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod constants;
 pub mod container;
 pub mod context;
 pub mod log;
@@ -25,6 +26,7 @@ pub mod pod;
 pub mod recipe;
 
 pub use self::config::{Config, PodsConfig, RecipesConfig};
+pub use self::constants::{APP_NAME, APP_VERSION};
 pub use self::container::{Container, VolumeMount};
 pub use self::context::{
     CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, Flags, ImageAction,

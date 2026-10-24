@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added Rust-compiler-style (`rustc`) diagnostic error output (`--> file:line:col`, line gutter, caret span annotations, and `= help:` hints) for PSL syntax, configuration (`pods.conf`), and recipe (`*.pod`) errors.
 - Added `command` mode (`pods command` / `pods cmd`) with `exec`, `list`, and `help` actions for listing and executing maintenance commands defined in `.pod` recipes by name or 1-based numeric index.
 - Added `config` mode (`pods config` / `pods cfg`) with `show`, `edit`, and `help` actions for inspecting configuration settings, directory status, group hierarchy trees, and recipe validation summaries, and editing `pods.conf`.
+- Added `connect` mode (`pods connect` / `pods con`) with `shell` and `help` actions for opening interactive shell sessions (`bash` with `sh` fallback) inside running managed or unmanaged containers.
+- Added compile-time SemVer 2.0.0 Git build metadata (`v<version>+<count>.<hash>[.dev]`), the `pods version` default mode action, and unified version headers across CLI help outputs.
 
 ### Changed
 

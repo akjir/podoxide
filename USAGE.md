@@ -63,21 +63,21 @@ Argument parsing follows these rules:
 - **Mode Aliases:** Every mode except `init` provides a 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`) as an exact drop-in replacement for the first positional mode argument (for example, `pods cmd exec <recipe> <command>` is identical to `pods command exec <recipe> <command>`).
 - **No Arguments:** Running `pods` without arguments executes `pods help`.
 - **Option Placement:** Options prefixed with `--` can appear anywhere in the command line.
-- **Configuration Bypass:** The `init` mode, `pods image prune`, all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading `pods.conf`.
+- **Configuration Bypass:** The `init` mode, `pods image prune`, `pods version`, all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading `pods.conf`.
 - **Privilege Check:** When executed with elevated privileges (`sudo` or `root`), Podoxide prints a warning and requires interactive confirmation (`yes`) before running.
 
 ### Modes Overview
 
-| Mode              | Actions                                                                                          | Target                        | Description                                                       |
-| :---------------- | :----------------------------------------------------------------------------------------------- | :---------------------------- | :---------------------------------------------------------------- |
-| `(default)`       | `up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help` | `<recipe>`, `@<group>`        | Manage pod lifecycles and inspect runtime container status.       |
-| `logs` (`log`)    | `show`, `follow`, `help`                                                                         | `<recipe>[/<container>]`      | Display or follow logs for a pod or a specific container.         |
-| `connect` (`con`) | `shell`, `help`                                                                                  | `<recipe>[/<container>]`      | Open an interactive shell inside a running container.             |
-| `command` (`cmd`) | `list`, `exec`, `help`                                                                           | `<recipe> [<command>\|<idx>]` | List or execute maintenance commands defined in a recipe.         |
-| `recipe` (`rec`)  | `list`, `show`, `edit`, `help`                                                                   | `[<recipe>]`                  | List configured recipes, or display and edit a recipe file.       |
-| `config` (`cfg`)  | `show`, `edit`, `help`                                                                           | `-`                           | Validate and display the active configuration tree or edit it.    |
-| `image` (`img`)   | `update`, `prune`, `help`                                                                        | `[<recipe>, @<group>]`        | Pull recipe container images or preview and remove unused images. |
-| `init`            | `create`, `help`                                                                                 | `-`                           | Generate initial `pods.conf` and `recipe.pod` template files.     |
+| Mode              | Actions                                                                                                     | Target                        | Description                                                       |
+| :---------------- | :---------------------------------------------------------------------------------------------------------- | :---------------------------- | :---------------------------------------------------------------- |
+| `(default)`       | `up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help`, `version` | `<recipe>`, `@<group>`        | Manage pod lifecycles and inspect runtime container status.       |
+| `logs` (`log`)    | `show`, `follow`, `help`                                                                                    | `<recipe>[/<container>]`      | Display or follow logs for a pod or a specific container.         |
+| `connect` (`con`) | `shell`, `help`                                                                                             | `<recipe>[/<container>]`      | Open an interactive shell inside a running container.             |
+| `command` (`cmd`) | `list`, `exec`, `help`                                                                                      | `<recipe> [<command>\|<idx>]` | List or execute maintenance commands defined in a recipe.         |
+| `recipe` (`rec`)  | `list`, `show`, `edit`, `help`                                                                              | `[<recipe>]`                  | List configured recipes, or display and edit a recipe file.       |
+| `config` (`cfg`)  | `show`, `edit`, `help`                                                                                      | `-`                           | Validate and display the active configuration tree or edit it.    |
+| `image` (`img`)   | `update`, `prune`, `help`                                                                                   | `[<recipe>, @<group>]`        | Pull recipe container images or preview and remove unused images. |
+| `init`            | `create`, `help`                                                                                            | `-`                           | Generate initial `pods.conf` and `recipe.pod` template files.     |
 
 ### Global Options
 
@@ -277,6 +277,7 @@ pods [OPTIONS] <action> [TARGETS...]
 | `stop <target...>`    | Stop a running pod and its containers in reverse bottom-to-top order without removing them.                  |
 | `up <target...>`      | Create and start the pod and its containers in deterministic top-to-bottom order (`create` + `start`).       |
 | `update <target...>`  | Pull the latest container images and rebuild the pod (`image update` + `reload`).                            |
+| `version`             | Display the application version with Git build metadata and exit.                                            |
 
 ### Options
 
@@ -291,8 +292,9 @@ pods [OPTIONS] <action> [TARGETS...]
 ### Usage
 
 ```bash
-# Display general help (or run 'pods' without arguments)
+# Display general help or version information (or run 'pods' without arguments)
 pods help
+pods version
 
 # Create and start a pod and its containers from a single recipe
 pods up example-app

@@ -190,17 +190,19 @@ impl Context {
     /// Returns `true` if this context's mode and action require loading `pods.conf`.
     #[must_use]
     pub const fn requires_config(&self) -> bool {
-        if self.flags.version || self.action.is_help() {
+        if self.action.is_help() {
             return false;
         }
         !matches!(
             self.action,
-            ModeAction::Image(ImageAction::Prune) | ModeAction::Init(_)
+            ModeAction::Default(DefaultAction::Version)
+                | ModeAction::Image(ImageAction::Prune)
+                | ModeAction::Init(_)
         )
     }
 }
 
-/// Lifecycle and status actions supported by [`Mode::Default`].
+/// Lifecycle, status, help, and version actions supported by [`Mode::Default`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DefaultAction {
     Create,
@@ -215,13 +217,14 @@ pub enum DefaultAction {
     Stop,
     Up,
     Update,
+    Version,
 }
 
 impl DefaultAction {
     /// Returns `true` if this default action requires at least one target argument.
     #[must_use]
     pub const fn requires_targets(self) -> bool {
-        !matches!(self, Self::Help | Self::Status)
+        !matches!(self, Self::Help | Self::Status | Self::Version)
     }
 }
 
@@ -239,6 +242,7 @@ impl Display for DefaultAction {
             Self::Stop => "stop",
             Self::Up => "up",
             Self::Update => "update",
+            Self::Version => "version",
         };
         formatter.write_str(label)
     }
@@ -260,6 +264,7 @@ impl FromStr for DefaultAction {
             "stop" => Ok(Self::Stop),
             "up" => Ok(Self::Up),
             "update" => Ok(Self::Update),
+            "version" => Ok(Self::Version),
             _ => Err(CliError::with_argument(CliErrorKind::UnknownAction, input)),
         }
     }
@@ -279,7 +284,6 @@ pub struct Flags {
     pub tail: Option<String>,
     pub timestamps: bool,
     pub until: Option<String>,
-    pub version: bool,
 }
 
 impl Flags {
@@ -690,6 +694,10 @@ mod tests {
             "shell"
         );
         assert_eq!(ModeAction::Default(DefaultAction::Up).to_string(), "up");
+        assert_eq!(
+            ModeAction::Default(DefaultAction::Version).to_string(),
+            "version"
+        );
         assert_eq!(ModeAction::Image(ImageAction::Prune).to_string(), "prune");
         assert_eq!(ModeAction::Init(InitAction::Create).to_string(), "create");
         assert_eq!(ModeAction::Logs(LogsAction::Follow).to_string(), "follow");

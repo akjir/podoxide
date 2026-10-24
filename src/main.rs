@@ -46,12 +46,6 @@ where
     }
 }
 
-/// Prints the application name and version string to standard output.
-fn handle_version() -> Result<(), PodError> {
-    log::print(concat!("Podoxide v", env!("CARGO_PKG_VERSION")));
-    Ok(())
-}
-
 /// Entry point of the `pods` binary that forwards process command-line arguments to [`execute`].
 fn main() -> ExitCode {
     execute(env::args_os().skip(1))
@@ -74,9 +68,6 @@ where
             "Config '{}' is used.",
             context.config.path.display()
         ));
-    }
-    if context.flags.version {
-        return handle_version();
     }
 
     // Load pods.conf only when required by the selected mode and action.
@@ -204,7 +195,7 @@ mod tests {
     fn execute_pipeline_handles_valid_and_invalid_arguments() {
         assert_eq!(execute(Vec::<String>::new()), ExitCode::SUCCESS);
         assert_eq!(execute(["help"]), ExitCode::SUCCESS);
-        assert_eq!(execute(["--version"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["version"]), ExitCode::SUCCESS);
         assert_eq!(
             execute(["--debug", "--config=pods", "up", "recipe"]),
             ExitCode::SUCCESS

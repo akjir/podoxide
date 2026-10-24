@@ -20,6 +20,7 @@ use std::io::{self, Write};
 use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
+use crate::utilities::format::format_version_header;
 
 /// Formats and outputs the CLI help text for `pods command` (`pods cmd`).
 ///
@@ -54,10 +55,7 @@ fn write_actions_section<W: Write>(writer: &mut W) {
 
 /// Writes the `pods command` help text to `writer`.
 fn write_help<W: Write>(writer: &mut W) {
-    log::write_print(
-        writer,
-        concat!("Podoxide v", env!("CARGO_PKG_VERSION"), " - Command Mode"),
-    );
+    log::write_print(writer, &format_version_header(Some("Command Mode")));
     log::write_print(writer, "");
     log::write_print(
         writer,
@@ -103,6 +101,7 @@ fn write_options_section<W: Write>(writer: &mut W) {
 #[cfg(test)]
 mod tests {
     use crate::core::context::Context;
+    use crate::utilities::format::format_version_header;
     use super::{handle, write_help};
 
     #[test]
@@ -111,10 +110,9 @@ mod tests {
         write_help(&mut buffer);
         let output = String::from_utf8(buffer).unwrap();
 
-        assert!(output.contains(concat!(
-            "Podoxide v",
-            env!("CARGO_PKG_VERSION"),
-            " - Command Mode\n"
+        assert!(output.contains(&format!(
+            "{}\n",
+            format_version_header(Some("Command Mode"))
         )));
         assert!(output.contains("Execute a command defined in a recipe for a container.\n"));
         assert!(output.contains("Usage: pods command [OPTIONS] [ACTION] RECIPE [COMMAND|INDEX]\n"));
