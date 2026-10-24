@@ -45,10 +45,6 @@ where
     }
 }
 
-fn handle_help(_context: &Context) -> Result<(), PodError> {
-    Ok(())
-}
-
 fn handle_version() -> Result<(), PodError> {
     log::print(concat!("Podoxide v", env!("CARGO_PKG_VERSION")));
     Ok(())
@@ -78,10 +74,9 @@ where
     if context.flags.version {
         return handle_version();
     }
-    if context.flags.help {
-        return handle_help(&context);
-    }
 
+    // Load pods.conf only when required by the selected mode and action.
+    // Bypassed for --help, help actions, status help, init, and image prune.
     context.load_config_if_required()?;
     modes::dispatch_mode(&context)
 }
@@ -138,8 +133,12 @@ mod tests {
         assert_eq!(execute(["--help"]), ExitCode::SUCCESS);
         assert_eq!(execute(["--version"]), ExitCode::SUCCESS);
         assert_eq!(
-            execute(["--debug", "--config=staging", "up", "example-app"]),
+            execute(["--debug", "--config=pods", "up", "example-app"]),
             ExitCode::SUCCESS
+        );
+        assert_eq!(
+            execute(["--debug", "--config=staging", "up", "example-app"]),
+            ExitCode::FAILURE
         );
         assert_eq!(execute(["up", "example-app"]), ExitCode::SUCCESS);
         assert_eq!(execute(["cmd", "list", "example-app"]), ExitCode::SUCCESS);

@@ -13,3 +13,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added CLI argument scanner, flag validator, runtime context, and O(1) mode dispatcher with 3-letter mode aliases.
 - Added host environment verification for Linux OS, Podman 5.8.0+, and interactive root privilege confirmation.
 - Added structured diagnostic logging (`DEBUG`, `INFO`, `WARNING`, `ERROR`), standard output helper, and `--debug` state control.
+- Added PSL configuration loading, semantic validation, and host filesystem I/O helpers.

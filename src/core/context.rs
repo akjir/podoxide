@@ -598,16 +598,18 @@ mod tests {
         assert!(context.requires_config());
 
         context.config.simulate = false;
-        context.load_config_if_required().unwrap();
-        assert_eq!(context.config.name, "staging");
-        assert_eq!(context.config.path, PathBuf::from("./staging.conf"));
-        assert!(context.config.simulate);
+        assert!(context.load_config_if_required().is_err());
 
         let mut sim_context = Context::new();
         parse_args(&mut sim_context, ["--simulate", "up", "example-app"]).unwrap();
         assert!(sim_context.flags.simulate);
         assert!(sim_context.config.simulate);
+        sim_context.config.simulate = false;
         sim_context.load_config_if_required().unwrap();
+        assert_eq!(sim_context.config.editor, "vim");
+        assert_eq!(sim_context.config.name, "pods");
+        assert_eq!(sim_context.config.path, PathBuf::from("./pods.conf"));
+        assert_eq!(sim_context.config.pods.path, PathBuf::from("./pods"));
         assert!(sim_context.config.simulate);
 
         let mut init_context = Context::new();
