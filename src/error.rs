@@ -80,6 +80,7 @@ pub enum CliErrorKind {
     LimitExceeded,
     MissingFlagValue,
     MissingTarget,
+    TargetNotFound,
     TooManyArguments,
     UnexpectedFlag,
     UnknownAction,
@@ -96,6 +97,7 @@ impl Display for CliErrorKind {
             Self::LimitExceeded => "command-line argument limit exceeded",
             Self::MissingFlagValue => "missing value for command-line flag",
             Self::MissingTarget => "missing required target argument",
+            Self::TargetNotFound => "target does not exist",
             Self::TooManyArguments => "too many positional arguments",
             Self::UnexpectedFlag => "flag is not valid for the selected mode",
             Self::UnknownAction => "unknown mode or action",
@@ -685,6 +687,7 @@ impl Error for RecipeError {}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecipeErrorKind {
     ContainerNotFound,
+    ContainerNotRunning,
     DuplicateBlock,
     DuplicateDirective,
     EmptyContainerBlock,
@@ -707,6 +710,7 @@ pub enum RecipeErrorKind {
     MissingPodName,
     MissingPodPath,
     MissingPodRegistry,
+    MultipleContainers,
     NotFound,
     UnexpectedBlock,
     UnknownDirective,
@@ -718,6 +722,7 @@ impl RecipeErrorKind {
     pub const fn annotation_text(self) -> &'static str {
         match self {
             Self::ContainerNotFound => "target container does not match any container in this recipe",
+            Self::ContainerNotRunning => "resolved container is not currently running in Podman",
             Self::DuplicateBlock => "block is already defined in this recipe",
             Self::DuplicateDirective => "directive may only appear once in this block",
             Self::EmptyContainerBlock => {
@@ -756,6 +761,9 @@ impl RecipeErrorKind {
                 "no 'path' directive in 'pod' block and no default 'pods.path' configured"
             }
             Self::MissingPodRegistry => "'pod' block is missing the required 'registry' directive",
+            Self::MultipleContainers => {
+                "recipe defines multiple containers; a specific container target is required"
+            }
             Self::NotFound => "recipe file does not exist on disk",
             Self::UnexpectedBlock => "block is not permitted at this location in a '.pod' recipe",
             Self::UnknownDirective => "unrecognized directive in this recipe block",
@@ -768,6 +776,9 @@ impl RecipeErrorKind {
         match self {
             Self::ContainerNotFound => {
                 "specify a valid 1-based container index, '*suffix', or container name."
+            }
+            Self::ContainerNotRunning => {
+                "start the pod first with 'pods up <recipe>' or 'pods start <recipe>'."
             }
             Self::DuplicateBlock => {
                 "define only one 'pod' block and use unique names for 'command' blocks."
@@ -827,6 +838,9 @@ impl RecipeErrorKind {
             Self::MissingPodRegistry => {
                 "add 'registry <hostname>' (for example: 'registry docker.io') inside the 'pod' block."
             }
+            Self::MultipleContainers => {
+                "specify a container explicitly using '<recipe>/<container>' (by index, '*suffix', or name)."
+            }
             Self::NotFound => {
                 "verify that the '.pod' file exists in the configured 'recipes.path' directory."
             }
@@ -844,6 +858,7 @@ impl RecipeErrorKind {
     pub const fn message(self) -> &'static str {
         match self {
             Self::ContainerNotFound => "container not found in recipe",
+            Self::ContainerNotRunning => "container is not running or does not exist",
             Self::DuplicateBlock => "duplicate block in recipe",
             Self::DuplicateDirective => "duplicate directive in recipe",
             Self::EmptyContainerBlock => "container block in recipe is empty",
@@ -868,6 +883,7 @@ impl RecipeErrorKind {
                 "missing 'path' directive in 'pod' block and no default 'pods.path' configured"
             }
             Self::MissingPodRegistry => "missing 'registry' directive in 'pod' block",
+            Self::MultipleContainers => "recipe has multiple containers; specify one explicitly",
             Self::NotFound => "recipe file not found",
             Self::UnexpectedBlock => "unexpected block in recipe",
             Self::UnknownDirective => "unknown directive in recipe",
@@ -1417,6 +1433,7 @@ mod tests {
             (CliErrorKind::LimitExceeded, "limit exceeded"),
             (CliErrorKind::MissingFlagValue, "missing value"),
             (CliErrorKind::MissingTarget, "missing required target"),
+            (CliErrorKind::TargetNotFound, "target does not exist"),
             (CliErrorKind::TooManyArguments, "too many positional"),
             (CliErrorKind::UnexpectedFlag, "not valid for the selected mode"),
             (CliErrorKind::UnknownAction, "unknown mode or action"),
@@ -1753,6 +1770,10 @@ mod tests {
     fn recipe_error_kind_display_and_diagnostics() {
         let variants = [
             (RecipeErrorKind::ContainerNotFound, "container not found"),
+            (
+                RecipeErrorKind::ContainerNotRunning,
+                "container is not running",
+            ),
             (RecipeErrorKind::DuplicateBlock, "duplicate block"),
             (RecipeErrorKind::DuplicateDirective, "duplicate directive"),
             (
@@ -1810,6 +1831,10 @@ mod tests {
             (
                 RecipeErrorKind::MissingPodRegistry,
                 "missing 'registry' directive",
+            ),
+            (
+                RecipeErrorKind::MultipleContainers,
+                "recipe has multiple containers",
             ),
             (RecipeErrorKind::NotFound, "recipe file not found"),
             (RecipeErrorKind::UnexpectedBlock, "unexpected block"),

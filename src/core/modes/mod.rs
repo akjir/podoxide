@@ -196,6 +196,8 @@ mod tests {
             context.action = action;
             context.parameters = if action == ModeAction::Command(CommandAction::Exec) {
                 vec![String::from("recipe"), String::from("migrate")]
+            } else if action == ModeAction::Connect(ConnectAction::Shell) {
+                vec![String::from("recipe/db")]
             } else {
                 vec![String::from("recipe")]
             };

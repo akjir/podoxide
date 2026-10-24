@@ -16,7 +16,7 @@
 //! Podman CLI version verification and runtime inspection queries.
 
 use crate::io::exec::command;
-use crate::utilities::string::parse_ascii_u32;
+use crate::utilities::string::{is_valid_token, parse_ascii_u32};
 
 /// Maximum number of lines scanned in `podman --version` output.
 const MAX_VERSION_LINES: usize = 32;
@@ -34,6 +34,33 @@ pub fn check_podman_version() -> bool {
         return false;
     };
     is_supported_podman_version(&output)
+}
+
+/// Evaluates whether the Podman container named `container_name` exists and is in the `"running"` state.
+#[must_use]
+pub fn container_exists(container_name: &str) -> bool {
+    if !is_valid_token(container_name) {
+        return false;
+    }
+    let Some(output) = command::exec_capture(
+        "podman",
+        &[
+            "container",
+            "inspect",
+            "-f",
+            "{{.State.Status}}",
+            container_name,
+        ],
+    ) else {
+        return false;
+    };
+    is_running_container_status(&output)
+}
+
+/// Evaluates whether `podman container inspect -f '{{.State.Status}}'` output indicates a running container.
+#[must_use]
+pub fn is_running_container_status(output: &str) -> bool {
+    output.lines().next() == Some("running")
 }
 
 /// Evaluates whether a `podman --version` output string satisfies version 5.8.0 or higher.
@@ -119,8 +146,8 @@ fn parse_podman_major_minor(output: &str) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_VERSION_LINES, MAX_VERSION_OUTPUT_BYTES, check_podman_version,
-        is_supported_podman_version,
+        MAX_VERSION_LINES, MAX_VERSION_OUTPUT_BYTES, check_podman_version, container_exists,
+        is_running_container_status, is_supported_podman_version,
     };
 
     #[test]
@@ -142,6 +169,26 @@ mod tests {
         assert!(!is_supported_podman_version("podman version"));
         assert!(!is_supported_podman_version("podman 5.8.0"));
         assert!(!is_supported_podman_version(""));
+    }
+
+    #[test]
+    fn container_exists_and_running_status_checks() {
+        assert!(is_running_container_status("running"));
+        assert!(is_running_container_status("running\n"));
+        assert!(is_running_container_status("running\r\n"));
+        assert!(!is_running_container_status("exited\n"));
+        assert!(!is_running_container_status("created\n"));
+        assert!(!is_running_container_status("paused\n"));
+        assert!(!is_running_container_status("running extra\n"));
+        assert!(!is_running_container_status("\nrunning\n"));
+        assert!(!is_running_container_status(""));
+
+        assert!(!container_exists(""));
+        assert!(!container_exists("--help"));
+        assert!(!container_exists("bad name"));
+        assert!(!container_exists(
+            "podoxide_nonexistent_test_container_999999"
+        ));
     }
 
     #[test]

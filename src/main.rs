@@ -218,7 +218,8 @@ mod tests {
         assert_eq!(execute(["up", "example-app"]), ExitCode::FAILURE);
         assert_eq!(execute(["cmd", "list", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["cfg", "show"]), ExitCode::SUCCESS);
-        assert_eq!(execute(["con", "recipe"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["con", "recipe/db"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["con", "recipe"]), ExitCode::FAILURE);
         assert_eq!(execute(["img", "prune"]), ExitCode::SUCCESS);
         assert_eq!(execute(["img", "update", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init", "help"]), ExitCode::SUCCESS);

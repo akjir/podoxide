@@ -45,3 +45,39 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
+    use crate::core::context::{ConnectAction, Context, DefaultAction, Mode, ModeAction};
+    use crate::error::{CliErrorKind, PodError};
+    use super::handle;
+
+    #[test]
+    fn handle_routes_connect_actions_and_rejects_mismatched_action() {
+        let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
+
+        let mut help_context = Context::new();
+        help_context.mode = Mode::Connect;
+        help_context.action = ModeAction::Connect(ConnectAction::Help);
+        assert!(handle(&help_context).is_ok());
+
+        let mut shell_context = Context::new();
+        shell_context.config = root_config;
+        shell_context.mode = Mode::Connect;
+        shell_context.action = ModeAction::Connect(ConnectAction::Shell);
+        shell_context.parameters = vec![String::from("recipe/db")];
+        assert!(handle(&shell_context).is_ok());
+
+        let mut invalid_context = Context::new();
+        invalid_context.mode = Mode::Connect;
+        invalid_context.action = ModeAction::Default(DefaultAction::Help);
+        let error = handle(&invalid_context).unwrap_err();
+        match error {
+            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::UnknownAction),
+            other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
+        }
+    }
+}
