@@ -28,9 +28,7 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// # Workflow
 ///
 /// 1. Log that `image` mode is active when debug logging is enabled.
-/// 2. If `--help` (`context.flags.help`) is set, route directly to [`help::handle`]
-///    without reading `pods.conf` or any `.pod` recipe files.
-/// 3. Route [`ModeAction::Image`] in enum declaration order (`Help`, `Prune`, `Update`)
+/// 2. Route [`ModeAction::Image`] in enum declaration order (`Help`, `Prune`, `Update`)
 ///    to the corresponding action module ([`help::handle`], [`prune::handle`], [`update::handle`]).
 ///
 /// # Errors
@@ -39,9 +37,6 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// selected action handler fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
     log::debug("Image mode is used.");
-    if context.flags.help {
-        return help::handle(context);
-    }
     match context.action() {
         ModeAction::Image(ImageAction::Help) => help::handle(context),
         ModeAction::Image(ImageAction::Prune) => prune::handle(context),

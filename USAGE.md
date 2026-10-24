@@ -63,7 +63,7 @@ Argument parsing follows these rules:
 - **Mode Aliases:** Every mode except `init` provides a 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`) as an exact drop-in replacement for the first positional mode argument (for example, `pods cmd exec <recipe> <command>` is identical to `pods command exec <recipe> <command>`).
 - **No Arguments:** Running `pods` without arguments executes `pods help`.
 - **Option Placement:** Options prefixed with `--` can appear anywhere in the command line.
-- **Configuration Bypass:** The `init` mode, `pods image prune`, all `help` actions (`pods help`, `pods <mode> help`, `pods status help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading `pods.conf`.
+- **Configuration Bypass:** The `init` mode, `pods image prune`, all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading `pods.conf`.
 - **Privilege Check:** When executed with elevated privileges (`sudo` or `root`), Podoxide prints a warning and requires interactive confirmation (`yes`) before running.
 
 ### Modes Overview
@@ -276,7 +276,7 @@ pods [OPTIONS] <action> [TARGETS...]
 | `remove <target...>`  | Remove all containers in reverse bottom-to-top order and remove the pod without stopping them first.         |
 | `restart <target...>` | Stop and start an existing pod and its containers (`stop` + `start`) without removing or recreating them.    |
 | `start <target...>`   | Start an existing stopped pod and its containers in top-to-bottom order without recreating them.             |
-| `status`              | Display a formatted status table of managed containers (or status help via `pods status help`).              |
+| `status`              | Display a formatted status table of managed containers.                                                      |
 | `stop <target...>`    | Stop a running pod and its containers in reverse bottom-to-top order without removing them.                  |
 | `up <target...>`      | Create and start the pod and its containers in deterministic top-to-bottom order (`create` + `start`).       |
 | `update <target...>`  | Pull the latest container images and rebuild the pod (`image update` + `reload`).                            |
@@ -329,9 +329,6 @@ pods status --full example-app
 
 # Show status for all containers on the host, including unmanaged containers
 pods status --all
-
-# Display help specific to the status action
-pods status help
 
 # Run lifecycle actions using an alternative configuration and debug logging
 pods --config=staging --debug reload example-app

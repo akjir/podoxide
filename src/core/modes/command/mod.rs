@@ -28,9 +28,7 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// # Workflow
 ///
 /// 1. Log that `command` mode is active when debug logging is enabled.
-/// 2. If `--help` (`context.flags.help`) is set, route directly to [`help::handle`]
-///    without reading `pods.conf` or any `.pod` recipe files.
-/// 3. Route [`ModeAction::Command`] in enum declaration order (`Exec`, `Help`, `List`)
+/// 2. Route [`ModeAction::Command`] in enum declaration order (`Exec`, `Help`, `List`)
 ///    to the corresponding action module ([`exec::handle`], [`help::handle`], [`list::handle`]).
 ///
 /// # Errors
@@ -39,9 +37,6 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// selected action handler fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
     log::debug("Command mode is used.");
-    if context.flags.help {
-        return help::handle(context);
-    }
     match context.action() {
         ModeAction::Command(CommandAction::Exec) => exec::handle(context),
         ModeAction::Command(CommandAction::Help) => help::handle(context),

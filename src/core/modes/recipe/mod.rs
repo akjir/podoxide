@@ -30,9 +30,7 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// # Workflow
 ///
 /// 1. Log that `recipe` mode is active when debug logging is enabled.
-/// 2. If `--help` (`context.flags.help`) is set, route directly to [`help::handle`]
-///    without reading `pods.conf` or any `.pod` recipe files.
-/// 3. Route [`ModeAction::Recipe`] in enum declaration order (`Edit`, `Help`, `List`, `Show`)
+/// 2. Route [`ModeAction::Recipe`] in enum declaration order (`Edit`, `Help`, `List`, `Show`)
 ///    to the corresponding action module ([`edit::handle`], [`help::handle`], [`list::handle`],
 ///    [`show::handle`]).
 ///
@@ -42,9 +40,6 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// selected action handler fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
     log::debug("Recipe mode is used.");
-    if context.flags.help {
-        return help::handle(context);
-    }
     match context.action() {
         ModeAction::Recipe(RecipeAction::Edit) => edit::handle(context),
         ModeAction::Recipe(RecipeAction::Help) => help::handle(context),

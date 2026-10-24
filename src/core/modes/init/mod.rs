@@ -27,9 +27,7 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// # Workflow
 ///
 /// 1. Log that `init` mode is active when debug logging is enabled.
-/// 2. If `--help` (`context.flags.help`) is set, route directly to [`help::handle`]
-///    without reading any files.
-/// 3. Route [`ModeAction::Init`] in enum declaration order (`Create`, `Help`)
+/// 2. Route [`ModeAction::Init`] in enum declaration order (`Create`, `Help`)
 ///    to the corresponding action module ([`create::handle`], [`help::handle`]).
 ///
 /// # Errors
@@ -38,9 +36,6 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// selected action handler fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
     log::debug("Init mode is used.");
-    if context.flags.help {
-        return help::handle(context);
-    }
     match context.action() {
         ModeAction::Init(InitAction::Create) => create::handle(context),
         ModeAction::Init(InitAction::Help) => help::handle(context),
@@ -63,12 +58,6 @@ mod tests {
         help_context.mode = Mode::Init;
         help_context.action = ModeAction::Init(InitAction::Help);
         assert!(handle(&help_context).is_ok());
-
-        let mut flag_help_context = Context::new();
-        flag_help_context.mode = Mode::Init;
-        flag_help_context.action = ModeAction::Init(InitAction::Create);
-        flag_help_context.flags.help = true;
-        assert!(handle(&flag_help_context).is_ok());
 
         let mut create_context = Context::new();
         create_context.mode = Mode::Init;

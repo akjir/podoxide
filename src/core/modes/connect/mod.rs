@@ -27,9 +27,7 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// # Workflow
 ///
 /// 1. Log that `connect` mode is active when debug logging is enabled.
-/// 2. If `--help` (`context.flags.help`) is set, route directly to [`help::handle`]
-///    without reading `pods.conf` or any `.pod` recipe files.
-/// 3. Route [`ModeAction::Connect`] in enum declaration order (`Help`, `Shell`)
+/// 2. Route [`ModeAction::Connect`] in enum declaration order (`Help`, `Shell`)
 ///    to the corresponding action module ([`help::handle`], [`shell::handle`]).
 ///
 /// # Errors
@@ -38,9 +36,6 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// selected action handler fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
     log::debug("Connect mode is used.");
-    if context.flags.help {
-        return help::handle(context);
-    }
     match context.action() {
         ModeAction::Connect(ConnectAction::Help) => help::handle(context),
         ModeAction::Connect(ConnectAction::Shell) => shell::handle(context),

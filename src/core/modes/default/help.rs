@@ -139,6 +139,10 @@ fn write_options_section<W: Write>(writer: &mut W) {
         writer,
         "  --all              include all unmanaged podman containers (status only)",
     );
+    log::write_print(
+        writer,
+        "  --full             display extended container information (status only)",
+    );
 }
 
 #[cfg(test)]
@@ -179,6 +183,9 @@ mod tests {
         ));
         assert!(output.contains(
             "  --all              include all unmanaged podman containers (status only)\n"
+        ));
+        assert!(output.contains(
+            "  --full             display extended container information (status only)\n"
         ));
         assert!(output.contains("Valid in default mode only:\n"));
         assert!(output.contains("ACTIONS:\n"));

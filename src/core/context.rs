@@ -189,17 +189,14 @@ impl Context {
 
     /// Returns `true` if this context's mode and action require loading `pods.conf`.
     #[must_use]
-    pub fn requires_config(&self) -> bool {
-        if self.flags.help || self.flags.version || self.action.is_help() {
+    pub const fn requires_config(&self) -> bool {
+        if self.flags.version || self.action.is_help() {
             return false;
         }
-        match self.action {
-            ModeAction::Default(DefaultAction::Status) => {
-                !self.parameters.first().is_some_and(|parameter| parameter == "help")
-            }
-            ModeAction::Image(ImageAction::Prune) | ModeAction::Init(_) => false,
-            _ => true,
-        }
+        !matches!(
+            self.action,
+            ModeAction::Image(ImageAction::Prune) | ModeAction::Init(_)
+        )
     }
 }
 
@@ -276,7 +273,6 @@ pub struct Flags {
     pub debug: bool,
     pub force: bool,
     pub full: bool,
-    pub help: bool,
     pub preview: bool,
     pub simulate: bool,
     pub since: Option<String>,

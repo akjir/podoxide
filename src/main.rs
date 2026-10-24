@@ -80,7 +80,7 @@ where
     }
 
     // Load pods.conf only when required by the selected mode and action.
-    // Bypassed for --help, help actions, status help, init, and image prune.
+    // Bypassed for help actions, init, and image prune.
     context.load_config_if_required()?;
     modes::dispatch_mode(&context)
 }
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn execute_pipeline_handles_valid_and_invalid_arguments() {
         assert_eq!(execute(Vec::<String>::new()), ExitCode::SUCCESS);
-        assert_eq!(execute(["--help"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["help"]), ExitCode::SUCCESS);
         assert_eq!(execute(["--version"]), ExitCode::SUCCESS);
         assert_eq!(
             execute(["--debug", "--config=pods", "up", "example-app"]),

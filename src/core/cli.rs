@@ -46,8 +46,7 @@ where
 {
     context.flags = Flags::new();
     let positionals = scan_raw_arguments(&mut context.flags, arguments)?;
-    let (mode, action, parameters) =
-        parse_mode(&positionals, context.flags.help, context.flags.version)?;
+    let (mode, action, parameters) = parse_mode(&positionals, context.flags.version)?;
     context.mode = mode;
     context.action = action;
     context.parameters = parameters;
@@ -300,17 +299,9 @@ fn parse_config_path(flag_name: &str, raw_value: &str) -> Result<PathBuf, CliErr
 }
 
 /// Parses positional arguments for `config` (`cfg`) mode.
-fn parse_config_positionals(
-    positionals: &[String],
-    bypass_targets: bool,
-) -> Result<(ModeAction, Vec<String>), CliError> {
+fn parse_config_positionals(positionals: &[String]) -> Result<(ModeAction, Vec<String>), CliError> {
     let Some(first) = positionals.first() else {
-        let default_action = if bypass_targets {
-            ConfigAction::Help
-        } else {
-            ConfigAction::Show
-        };
-        return Ok((ModeAction::Config(default_action), Vec::new()));
+        return Ok((ModeAction::Config(ConfigAction::Show), Vec::new()));
     };
     let action = ConfigAction::from_str(first)?;
     ensure_no_extra_arguments(positionals, 1)?;
@@ -369,12 +360,6 @@ fn parse_default_positionals(
     if action == DefaultAction::Help {
         ensure_no_extra_arguments(parameters, 0)?;
     }
-    if action == DefaultAction::Status
-        && parameters.first().is_some_and(|parameter| parameter == "help")
-    {
-        ensure_no_extra_arguments(parameters, 1)?;
-        return Ok((ModeAction::Default(DefaultAction::Status), parameters.to_vec()));
-    }
     if action.requires_targets() && parameters.is_empty() && !bypass_targets {
         return Err(CliError::new(CliErrorKind::MissingTarget));
     }
@@ -392,13 +377,11 @@ fn parse_equals_flag(
         "--config" | "-c" | "--since" | "--tail" | "--until" => {
             apply_flag_value(flags, flag_name, raw_value)
         }
-        "--all" | "--debug" | "--force" | "--full" | "--help" | "-h" | "--preview"
-        | "--simulate" | "--timestamps" | "--version" | "-v" => {
-            Err(CliError::with_argument(
-                CliErrorKind::InvalidFlagValue,
-                flag_name,
-            ))
-        }
+        "--all" | "--debug" | "--force" | "--full" | "--preview" | "--simulate"
+        | "--timestamps" | "--version" | "-v" => Err(CliError::with_argument(
+            CliErrorKind::InvalidFlagValue,
+            flag_name,
+        )),
         _ => Err(CliError::with_argument(CliErrorKind::UnknownFlag, flag_name)),
     }
 }
@@ -440,7 +423,6 @@ where
         "--debug" => flags.debug = true,
         "--force" => flags.force = true,
         "--full" => flags.full = true,
-        "--help" | "-h" => flags.help = true,
         "--preview" => flags.preview = true,
         "--simulate" => flags.simulate = true,
         "--timestamps" => flags.timestamps = true,
@@ -477,17 +459,9 @@ fn parse_image_positionals(
 }
 
 /// Parses positional arguments for `init` mode.
-fn parse_init_positionals(
-    positionals: &[String],
-    bypass_targets: bool,
-) -> Result<(ModeAction, Vec<String>), CliError> {
+fn parse_init_positionals(positionals: &[String]) -> Result<(ModeAction, Vec<String>), CliError> {
     let Some(first) = positionals.first() else {
-        let default_action = if bypass_targets {
-            InitAction::Help
-        } else {
-            InitAction::Create
-        };
-        return Ok((ModeAction::Init(default_action), Vec::new()));
+        return Ok((ModeAction::Init(InitAction::Create), Vec::new()));
     };
     let action = InitAction::from_str(first)?;
     ensure_no_extra_arguments(positionals, 1)?;
@@ -548,8 +522,7 @@ fn parse_logs_target(
 /// Resolves the top-level [`Mode`], [`ModeAction`], and remaining target parameters from `positionals`.
 fn parse_mode(
     positionals: &[String],
-    help: bool,
-    version: bool,
+    bypass_targets: bool,
 ) -> Result<(Mode, ModeAction, Vec<String>), CliError> {
     let Some(first) = positionals.first() else {
         return Ok((
@@ -559,10 +532,10 @@ fn parse_mode(
         ));
     };
     if let Ok(mode) = Mode::from_str(first) {
-        let (action, parameters) = parse_mode_action(mode, &positionals[1..], help, version)?;
+        let (action, parameters) = parse_mode_action(mode, &positionals[1..], bypass_targets)?;
         return Ok((mode, action, parameters));
     }
-    let (action, parameters) = parse_default_positionals(positionals, help || version)?;
+    let (action, parameters) = parse_default_positionals(positionals, bypass_targets)?;
     Ok((Mode::Default, action, parameters))
 }
 
@@ -570,19 +543,17 @@ fn parse_mode(
 fn parse_mode_action(
     mode: Mode,
     positionals: &[String],
-    help: bool,
-    version: bool,
+    bypass_targets: bool,
 ) -> Result<(ModeAction, Vec<String>), CliError> {
-    let bypass = help || version;
     match mode {
-        Mode::Command => parse_command_positionals(positionals, bypass),
-        Mode::Config => parse_config_positionals(positionals, bypass),
-        Mode::Connect => parse_connect_positionals(positionals, bypass),
-        Mode::Default => parse_default_positionals(positionals, bypass),
-        Mode::Image => parse_image_positionals(positionals, bypass),
-        Mode::Init => parse_init_positionals(positionals, bypass),
-        Mode::Logs => parse_logs_positionals(positionals, bypass),
-        Mode::Recipe => parse_recipe_positionals(positionals, bypass),
+        Mode::Command => parse_command_positionals(positionals, bypass_targets),
+        Mode::Config => parse_config_positionals(positionals),
+        Mode::Connect => parse_connect_positionals(positionals, bypass_targets),
+        Mode::Default => parse_default_positionals(positionals, bypass_targets),
+        Mode::Image => parse_image_positionals(positionals, bypass_targets),
+        Mode::Init => parse_init_positionals(positionals),
+        Mode::Logs => parse_logs_positionals(positionals, bypass_targets),
+        Mode::Recipe => parse_recipe_positionals(positionals, bypass_targets),
     }
 }
 
@@ -592,12 +563,7 @@ fn parse_recipe_positionals(
     bypass_targets: bool,
 ) -> Result<(ModeAction, Vec<String>), CliError> {
     let Some(first) = positionals.first() else {
-        let default_action = if bypass_targets {
-            RecipeAction::Help
-        } else {
-            RecipeAction::List
-        };
-        return Ok((ModeAction::Recipe(default_action), Vec::new()));
+        return Ok((ModeAction::Recipe(RecipeAction::List), Vec::new()));
     };
     match first.as_str() {
         "edit" => parse_recipe_target(RecipeAction::Edit, positionals, 1, bypass_targets),
@@ -937,14 +903,6 @@ mod tests {
         assert!(status_default.flags.full);
         assert!(status_default.requires_config());
 
-        let mut status_help = Context::new();
-        parse_args(&mut status_help, ["status", "help"]).unwrap();
-        assert_eq!(
-            status_help.action,
-            ModeAction::Default(DefaultAction::Status)
-        );
-        assert!(!status_help.requires_config());
-
         let mut empty_invocation = Context::new();
         parse_args(&mut empty_invocation, Vec::<String>::new()).unwrap();
         assert_eq!(empty_invocation, Context::new());
@@ -1010,11 +968,6 @@ mod tests {
         assert!(logs_equals.flags.timestamps);
         assert_eq!(logs_equals.parameters, vec!["example-app/1"]);
 
-        let mut help_short = Context::new();
-        parse_args(&mut help_short, ["-h"]).unwrap();
-        assert!(help_short.flags.help);
-        assert!(!help_short.requires_config());
-
         let mut version_short = Context::new();
         parse_args(&mut version_short, ["-v"]).unwrap();
         assert!(version_short.flags.version);
@@ -1044,7 +997,7 @@ mod tests {
             assert_eq!(error.kind, CliErrorKind::MissingFlagValue);
         }
 
-        for unknown_flag in ["--unknown", "--foo=bar", "-x", "-"] {
+        for unknown_flag in ["--unknown", "--foo=bar", "--help", "-h", "-x", "-"] {
             let mut unknown_context = Context::new();
             let error = parse_args(&mut unknown_context, [unknown_flag]).unwrap_err();
             assert_eq!(error.kind, CliErrorKind::UnknownFlag);
@@ -1346,32 +1299,38 @@ mod tests {
             assert_eq!(cmd_error.kind, CliErrorKind::InvalidTarget);
         }
 
-        let mut status_help_extra = Context::new();
-        let extra_error =
-            parse_args(&mut status_help_extra, ["status", "help", "../../etc/passwd"]).unwrap_err();
+        let mut help_extra = Context::new();
+        let extra_error = parse_args(&mut help_extra, ["help", "../../etc/passwd"]).unwrap_err();
         assert_eq!(extra_error.kind, CliErrorKind::TooManyArguments);
+
+        let mut status_help_flag = Context::new();
+        let status_flag_err =
+            parse_args(&mut status_help_flag, ["status", "--help"]).unwrap_err();
+        assert_eq!(status_flag_err.kind, CliErrorKind::UnknownFlag);
 
         for valid_bypass in [
             ["command", "exec", "--version"].as_slice(),
-            ["command", "exec", "example-app", "--help"].as_slice(),
+            ["command", "exec", "example-app", "--version"].as_slice(),
             ["command", "list", "--version"].as_slice(),
             ["connect", "shell", "--version"].as_slice(),
             ["logs", "show", "--version"].as_slice(),
-            ["logs", "follow", "--help"].as_slice(),
+            ["logs", "follow", "--version"].as_slice(),
             ["recipe", "show", "--version"].as_slice(),
-            ["recipe", "edit", "--help"].as_slice(),
+            ["recipe", "edit", "--version"].as_slice(),
         ] {
             let mut context = Context::new();
             parse_args(&mut context, valid_bypass).unwrap();
             assert!(!context.requires_config());
         }
 
-        let mut bad_cfg_help = Context::new();
-        let cfg_err = parse_args(&mut bad_cfg_help, ["config", "bogus", "--help"]).unwrap_err();
+        let mut bad_cfg_version = Context::new();
+        let cfg_err =
+            parse_args(&mut bad_cfg_version, ["config", "bogus", "--version"]).unwrap_err();
         assert_eq!(cfg_err.kind, CliErrorKind::UnknownAction);
 
-        let mut bad_init_help = Context::new();
-        let init_err = parse_args(&mut bad_init_help, ["init", "bogus", "--help"]).unwrap_err();
+        let mut bad_init_version = Context::new();
+        let init_err =
+            parse_args(&mut bad_init_version, ["init", "bogus", "--version"]).unwrap_err();
         assert_eq!(init_err.kind, CliErrorKind::UnknownAction);
     }
 }

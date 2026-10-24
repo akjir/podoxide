@@ -197,7 +197,7 @@ Executes primary pod lifecycle operations and displays container runtime status 
 | `src/core/modes/default/remove.rs`  | Removes target containers in reverse startup order and removes the parent pod without stopping them first. |
 | `src/core/modes/default/restart.rs` | Stops and starts existing target pods and containers without removing or recreating them (`stop` + `start`). |
 | `src/core/modes/default/start.rs`   | Starts existing stopped target pods and their containers in top-to-bottom declaration order. |
-| `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes, and formats the runtime status table and `status help`. |
+| `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes, and formats the runtime status table. |
 | `src/core/modes/default/stop.rs`    | Stops running target containers in reverse bottom-to-top order and stops the parent pod without removing them. |
 | `src/core/modes/default/up.rs`      | Loads and validates target recipes, then creates and starts pods and containers in top-to-bottom order (`create` + `start`). |
 | `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes and rebuilds the pods (`image update` + `reload`). |

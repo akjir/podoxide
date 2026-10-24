@@ -85,8 +85,6 @@ mod tests {
             &["restart", "example-app"],
             &["start", "example-app"],
             &["status"],
-            &["status", "help"],
-            &["status", "--help"],
             &["stop", "example-app"],
             &["up", "example-app"],
             &["update", "example-app"],
@@ -109,14 +107,6 @@ mod tests {
             &["recipe", "edit", "example-app"],
             &["recipe", "list"],
             &["recipe", "show", "example-app"],
-            &["--help"],
-            &["command", "list", "--help"],
-            &["config", "show", "--help"],
-            &["connect", "shell", "--help"],
-            &["image", "prune", "--help"],
-            &["init", "--help"],
-            &["logs", "show", "--help"],
-            &["recipe", "list", "--help"],
         ];
 
         for arguments in invocations {

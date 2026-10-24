@@ -36,11 +36,7 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// # Workflow
 ///
 /// 1. Log that `default` mode is active when debug logging is enabled.
-/// 2. If `--help` (`context.flags.help`) is set and the action is not [`DefaultAction::Status`],
-///    route directly to [`help::handle`] without reading `pods.conf` or any `.pod` files.
-///    (When `context.action` is [`DefaultAction::Status`] and `--help` is set, [`status::handle`]
-///    routes to status-specific help without reading any files.)
-/// 3. Route [`ModeAction::Default`] in enum declaration order (`Create`, `Down`, `Help`,
+/// 2. Route [`ModeAction::Default`] in enum declaration order (`Create`, `Down`, `Help`,
 ///    `Reload`, `Remove`, `Restart`, `Start`, `Status`, `Stop`, `Up`, `Update`) to the
 ///    corresponding action module.
 ///
@@ -50,9 +46,6 @@ use crate::error::{CliError, CliErrorKind, PodError};
 /// selected action handler fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
     log::debug("Default mode is used.");
-    if context.flags.help && context.action() != ModeAction::Default(DefaultAction::Status) {
-        return help::handle(context);
-    }
     match context.action() {
         ModeAction::Default(DefaultAction::Create) => create::handle(context),
         ModeAction::Default(DefaultAction::Down) => down::handle(context),
@@ -100,18 +93,6 @@ mod tests {
             context.action = ModeAction::Default(action);
             assert!(handle(&context).is_ok());
         }
-
-        let mut flag_help_context = Context::new();
-        flag_help_context.mode = Mode::Default;
-        flag_help_context.action = ModeAction::Default(DefaultAction::Up);
-        flag_help_context.flags.help = true;
-        assert!(handle(&flag_help_context).is_ok());
-
-        let mut status_help_context = Context::new();
-        status_help_context.mode = Mode::Default;
-        status_help_context.action = ModeAction::Default(DefaultAction::Status);
-        status_help_context.flags.help = true;
-        assert!(handle(&status_help_context).is_ok());
 
         let mut invalid_context = Context::new();
         invalid_context.mode = Mode::Default;
