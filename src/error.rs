@@ -198,6 +198,7 @@ pub enum ConfigErrorKind {
     InvalidBoolean,
     InvalidGroupTarget,
     InvalidPath,
+    MissingEditor,
     MissingGroupsBlock,
     MissingRecipesBlock,
     NotFound,
@@ -221,6 +222,7 @@ impl ConfigErrorKind {
                 "group target is malformed or forms a circular '@group' reference"
             }
             Self::InvalidPath => "path must be a safe directory or editor path without '..' or ':'",
+            Self::MissingEditor => "no external editor is configured in 'general.editor'",
             Self::MissingGroupsBlock => "'recipes' block does not contain a 'groups' sub-block",
             Self::MissingRecipesBlock => "configuration is missing the required 'recipes' block",
             Self::NotFound => "configuration file was not found at this path",
@@ -249,6 +251,9 @@ impl ConfigErrorKind {
             }
             Self::InvalidPath => {
                 "provide a valid path without parent traversal ('..'), colons (':'), or flags."
+            }
+            Self::MissingEditor => {
+                "set 'editor <command>' inside the 'general { ... }' block in 'pods.conf'."
             }
             Self::MissingGroupsBlock => {
                 "add a 'groups { ... }' sub-block inside the 'recipes' block."
@@ -285,6 +290,7 @@ impl ConfigErrorKind {
             Self::InvalidBoolean => "invalid boolean value (expected 'true' or 'false')",
             Self::InvalidGroupTarget => "invalid target in recipe group",
             Self::InvalidPath => "invalid path value in configuration",
+            Self::MissingEditor => "no editor configured in configuration",
             Self::MissingGroupsBlock => "missing 'groups' block in 'recipes'",
             Self::MissingRecipesBlock => "missing 'recipes' block in configuration",
             Self::NotFound => "configuration file not found",
@@ -1437,6 +1443,7 @@ mod tests {
             (ConfigErrorKind::InvalidBoolean, "invalid boolean"),
             (ConfigErrorKind::InvalidGroupTarget, "invalid target"),
             (ConfigErrorKind::InvalidPath, "invalid path"),
+            (ConfigErrorKind::MissingEditor, "no editor configured"),
             (ConfigErrorKind::MissingGroupsBlock, "missing 'groups'"),
             (ConfigErrorKind::MissingRecipesBlock, "missing 'recipes'"),
             (ConfigErrorKind::NotFound, "configuration file not found"),
