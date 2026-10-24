@@ -24,7 +24,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::error::{PodError, PslError, PslErrorKind};
 use crate::io::psl::MAX_FILE_BYTES;
 use crate::utilities::path::{
-    matches_extension, normalize_lexical_path, pop_relative_or_absolute,
+    matches_extension, normalize_lexical_path, parent_or_cur_dir, pop_relative_or_absolute,
 };
 
 const INITIAL_DIRECTORY_CAPACITY: usize = 16;
@@ -196,10 +196,7 @@ fn directory_limit_error() -> PodError {
 
 /// Verifies that the parent directory of `path` exists on disk.
 fn ensure_parent_directory(path: &Path) -> Result<(), PodError> {
-    let parent = match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    };
+    let parent = parent_or_cur_dir(path);
     if !directory_exists(parent) {
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::NotFound,

@@ -54,6 +54,15 @@ pub fn has_parent_dir(path: &Path) -> bool {
         .any(|component| matches!(component, Component::ParentDir))
 }
 
+/// Evaluates whether `path` is a structurally valid, UTF-8 target file path without `..` traversal.
+#[must_use]
+pub fn is_valid_target_path(path: &Path) -> bool {
+    let Some(raw_path) = path.to_str() else {
+        return false;
+    };
+    !has_parent_dir(path) && extract_config_stem(raw_path).is_some()
+}
+
 /// Evaluates whether `file_name` ends with `extension` and retains a non-empty stem before it.
 #[must_use]
 pub fn matches_extension(file_name: &str, extension: Option<&str>) -> bool {
@@ -79,6 +88,15 @@ pub fn normalize_lexical_path(path: &Path) -> PathBuf {
     normalized
 }
 
+/// Returns the non-empty parent directory of `path`, or `"."` when `path` has no non-empty parent.
+#[must_use]
+pub fn parent_or_cur_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
 /// Pops the last normal component from `path` or appends `..` when `path` is relative and cannot be popped.
 pub fn pop_relative_or_absolute(path: &mut PathBuf) {
     match path.components().next_back() {
@@ -99,6 +117,17 @@ pub fn pop_relative_or_absolute(path: &mut PathBuf) {
     }
 }
 
+/// Formats `path` relative to `base_dir` without a leading `./` prefix for display and log output.
+#[must_use]
+pub fn relative_display_path<'a>(path: &'a Path, base_dir: &Path) -> &'a Path {
+    let relative = if base_dir != Path::new(".") {
+        path.strip_prefix(base_dir).unwrap_or(path)
+    } else {
+        path
+    };
+    relative.strip_prefix("./").unwrap_or(relative)
+}
+
 /// Applies a single `component` to `normalized` during lexical path normalization.
 fn apply_lexical_component(normalized: &mut PathBuf, component: Component<'_>) {
     match component {
@@ -112,11 +141,14 @@ fn apply_lexical_component(normalized: &mut PathBuf, component: Component<'_>) {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
     use std::path::{Path, PathBuf};
 
     use super::{
-        extract_config_stem, has_parent_dir, matches_extension, normalize_lexical_path,
-        pop_relative_or_absolute,
+        extract_config_stem, has_parent_dir, is_valid_target_path, matches_extension,
+        normalize_lexical_path, parent_or_cur_dir, pop_relative_or_absolute,
+        relative_display_path,
     };
 
     #[test]
@@ -191,5 +223,40 @@ mod tests {
         let mut dot_path = PathBuf::from(".");
         pop_relative_or_absolute(&mut dot_path);
         assert_eq!(dot_path, PathBuf::from(".."));
+
+        assert!(is_valid_target_path(Path::new("./recipe.pod")));
+        assert!(is_valid_target_path(Path::new("./pods.conf")));
+        assert!(!is_valid_target_path(Path::new("")));
+        assert!(!is_valid_target_path(Path::new("../pods.conf")));
+        assert!(!is_valid_target_path(Path::new("/tmp/../pods.conf")));
+        let non_utf8_path = PathBuf::from(OsString::from_vec(vec![b'.', b'/', 0xFF, b'.', b'c']));
+        assert!(!is_valid_target_path(&non_utf8_path));
+
+        assert_eq!(parent_or_cur_dir(Path::new("./recipe.pod")), Path::new("."));
+        assert_eq!(parent_or_cur_dir(Path::new("recipe.pod")), Path::new("."));
+        assert_eq!(
+            parent_or_cur_dir(Path::new("/tmp/workspace/recipe.pod")),
+            Path::new("/tmp/workspace")
+        );
+
+        assert_eq!(
+            relative_display_path(Path::new("./recipe.pod"), Path::new(".")),
+            Path::new("recipe.pod")
+        );
+        assert_eq!(
+            relative_display_path(Path::new("./pods.conf"), Path::new(".")),
+            Path::new("pods.conf")
+        );
+        assert_eq!(
+            relative_display_path(
+                Path::new("/tmp/workspace/recipe.pod"),
+                Path::new("/tmp/workspace")
+            ),
+            Path::new("recipe.pod")
+        );
+        assert_eq!(
+            relative_display_path(Path::new("/etc/pods/staging.conf"), Path::new(".")),
+            Path::new("/etc/pods/staging.conf")
+        );
     }
 }

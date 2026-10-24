@@ -692,6 +692,9 @@ fn validate_mode_flags(context: &Context) -> Result<(), CliError> {
     if context.flags.all && !matches!(context.mode, Mode::Default | Mode::Image | Mode::Recipe) {
         return unexpected_flag("--all");
     }
+    if context.flags.config.is_some() && context.mode == Mode::Init {
+        return unexpected_flag("--config");
+    }
     if context.flags.full && context.mode != Mode::Default {
         return unexpected_flag("--full");
     }
@@ -1004,6 +1007,7 @@ mod tests {
         }
 
         for (mode_arg, bad_flag) in [
+            ("init", "--config=staging"),
             ("logs", "--all"),
             ("recipe", "--full"),
             ("status", "--force"),
@@ -1103,6 +1107,9 @@ mod tests {
 
         let mut init_create = Context::new();
         parse_args(&mut init_create, ["init"]).unwrap();
+        let mut init_explicit_create = Context::new();
+        parse_args(&mut init_explicit_create, ["init", "create"]).unwrap();
+        assert_eq!(init_create, init_explicit_create);
         assert_eq!(init_create.mode, Mode::Init);
         assert_eq!(init_create.action, ModeAction::Init(InitAction::Create));
         assert!(!init_create.requires_config());

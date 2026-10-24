@@ -140,7 +140,7 @@ mod tests {
     fn binary_in_usr_local_bin_uses_current_working_directory() {
         if env::var_os("PODOXIDE_TEST_SUBPROCESS_CWD").is_some() {
             assert_eq!(execute(["init"]), ExitCode::SUCCESS);
-            assert_eq!(execute(["init"]), ExitCode::FAILURE);
+            assert_eq!(execute(["init"]), ExitCode::SUCCESS);
             assert_eq!(execute(["up", "recipe"]), ExitCode::SUCCESS);
             assert_eq!(execute(["cfg", "show"]), ExitCode::SUCCESS);
             assert_eq!(execute(["rec", "list"]), ExitCode::SUCCESS);
@@ -167,11 +167,20 @@ mod tests {
             ])
             .output()
             .unwrap();
+        let stderr_output = String::from_utf8_lossy(&output.stderr);
         assert!(
             output.status.success(),
-            "subprocess failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            "subprocess failed: {stderr_output}"
         );
+        let canonical_working_dir = fs::canonicalize(&working_dir).unwrap();
+        assert!(stderr_output.contains(&format!(
+            "INFO: Initializing workspace '{}'.",
+            canonical_working_dir.display()
+        )));
+        assert!(stderr_output.contains("INFO: Created 'recipe.pod'."));
+        assert!(stderr_output.contains("INFO: Created 'pods.conf'."));
+        assert!(stderr_output.contains("WARNING: File 'recipe.pod' already exists."));
+        assert!(stderr_output.contains("WARNING: File 'pods.conf' already exists."));
         assert!(working_dir.join("recipe.pod").is_file());
         assert!(working_dir.join("pods.conf").is_file());
         assert!(!bin_dir.join("recipe.pod").exists());
@@ -199,7 +208,8 @@ mod tests {
         assert_eq!(execute(["con", "example-app"]), ExitCode::SUCCESS);
         assert_eq!(execute(["img", "prune"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init", "help"]), ExitCode::SUCCESS);
-        assert_eq!(execute(["init"]), ExitCode::FAILURE);
+        assert_eq!(execute(["init"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["init", "--config=staging"]), ExitCode::FAILURE);
         assert_eq!(execute(["log", "example-app"]), ExitCode::SUCCESS);
         assert_eq!(execute(["rec", "list"]), ExitCode::SUCCESS);
 

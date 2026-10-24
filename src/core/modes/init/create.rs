@@ -23,46 +23,58 @@ use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
 use crate::io::system::fs;
-use crate::utilities::path::{extract_config_stem, has_parent_dir};
+use crate::utilities::path::{is_valid_target_path, parent_or_cur_dir, relative_display_path};
 
 const CONFIG_TEMPLATE: &str = include_str!("../../../../pods.conf");
 const DEFAULT_RECIPE_PATH: &str = "./recipe.pod";
 const RECIPE_TEMPLATE: &str = include_str!("../../../../recipe.pod");
 
-/// Verifies that target files or directories do not exist and writes the root `recipe.pod`
-/// and `pods.conf` templates to disk.
+/// Initializes the current working directory by writing the root `recipe.pod` and `pods.conf`
+/// templates to disk.
 ///
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any existing `.pod` files from disk; use the embedded
-///    compile-time template strings (`recipe.pod` and `pods.conf`).
-/// 2. Check whether `./recipe.pod` or `context.config.path` (`./pods.conf` or custom
-///    `--config` path) already exists on disk as a file or directory; abort with an error
-///    before writing if either path already exists.
-/// 3. Write `./recipe.pod` and log `"Created './recipe.pod'."` via [`log::write_info`].
-/// 4. Write `context.config.path` and log `"Created '<config.path>'."` via [`log::write_info`].
+///    compile-time template strings (`recipe.pod` and `pods.conf`) and ignore
+///    `context.config.path`.
+/// 2. Check whether `./recipe.pod` or `./pods.conf` already exists as a directory or symlink;
+///    abort with an error before writing if either target cannot be created as a file.
+/// 3. Resolve the absolute workspace directory path and log
+///    `"Initializing workspace '<workspace>'."` via [`log::write_info`].
+/// 4. Write `./recipe.pod` and log `"Created 'recipe.pod'."` via [`log::write_info`], or log
+///    `"File 'recipe.pod' already exists."` via [`log::write_warning`] without overwriting if
+///    the file already exists.
+/// 5. Write `./pods.conf` and log `"Created 'pods.conf'."` via [`log::write_info`], or log
+///    `"File 'pods.conf' already exists."` via [`log::write_warning`] without overwriting if
+///    the file already exists.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if either target path already exists as a file or directory, if a
-/// target path is invalid, or if writing either template file fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+/// Returns [`PodError`] if either target path is an existing directory, symlink, or invalid
+/// path, or if writing either template file fails.
+pub fn handle(_context: &Context) -> Result<(), PodError> {
     let recipe_path = Path::new(DEFAULT_RECIPE_PATH);
-    let config_path = resolve_config_target(&context.config.path);
+    let config_path = Path::new(DEFAULT_CONFIG_PATH);
     create_files(recipe_path, config_path, &mut io::stderr().lock())
 }
 
-/// Validates availability of `recipe_path` and `config_path`, writes both embedded templates, and logs creation to `stderr_writer`.
+/// Validates that `recipe_path` and `config_path` are creatable files, logs workspace initialization, and writes or skips both embedded templates.
 fn create_files<W: Write>(
     recipe_path: &Path,
     config_path: &Path,
     stderr_writer: &mut W,
 ) -> Result<(), PodError> {
-    ensure_target_available(recipe_path)?;
-    ensure_target_available(config_path)?;
+    let workspace_dir = parent_or_cur_dir(recipe_path);
+    ensure_target_creatable(recipe_path, workspace_dir)?;
+    ensure_target_creatable(config_path, workspace_dir)?;
     ensure_distinct_targets(recipe_path, config_path)?;
-    write_template_file(recipe_path, RECIPE_TEMPLATE, stderr_writer)?;
-    write_template_file(config_path, CONFIG_TEMPLATE, stderr_writer)?;
+    let workspace_abs = fs::get_absolute_path(workspace_dir);
+    log::write_info(
+        stderr_writer,
+        &format!("Initializing workspace '{}'.", workspace_abs.display()),
+    );
+    write_template_file(recipe_path, workspace_dir, RECIPE_TEMPLATE, stderr_writer)?;
+    write_template_file(config_path, workspace_dir, CONFIG_TEMPLATE, stderr_writer)?;
     Ok(())
 }
 
@@ -81,53 +93,47 @@ fn ensure_distinct_targets(recipe_path: &Path, config_path: &Path) -> Result<(),
     Ok(())
 }
 
-/// Verifies that `path` is a safe target path and does not already exist as a directory, file, or symlink.
-fn ensure_target_available(path: &Path) -> Result<(), PodError> {
+/// Verifies that `path` is a safe target path and not an existing directory, symlink, or special file.
+fn ensure_target_creatable(path: &Path, workspace_dir: &Path) -> Result<(), PodError> {
     if !is_valid_target_path(path) {
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("Invalid target path '{}'!", path.display()),
         )));
     }
+    let display_path = relative_display_path(path, workspace_dir);
     if fs::directory_exists(path) {
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::AlreadyExists,
-            format!("Directory '{}' already exists!", path.display()),
-        )));
-    }
-    if fs::file_exists(path) {
-        return Err(PodError::from(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("File '{}' already exists!", path.display()),
+            format!(
+                "Cannot create file '{}': a directory with the same name already exists!",
+                display_path.display()
+            ),
         )));
     }
     fs::ensure_writable_target(path)
 }
 
-/// Evaluates whether `path` is a structurally valid, UTF-8 target file path without `..` traversal.
-fn is_valid_target_path(path: &Path) -> bool {
-    let Some(raw_path) = path.to_str() else {
-        return false;
-    };
-    !has_parent_dir(path) && extract_config_stem(raw_path).is_some()
-}
-
-/// Returns `path` if non-empty, or falls back to [`DEFAULT_CONFIG_PATH`] (`"./pods.conf"`).
-fn resolve_config_target(path: &Path) -> &Path {
-    if path.as_os_str().is_empty() {
-        return Path::new(DEFAULT_CONFIG_PATH);
-    }
-    path
-}
-
-/// Writes `content` to `path` and logs the created file path to `stderr_writer`.
+/// Writes `content` to `path` and logs creation to `stderr_writer`, or logs a warning without overwriting if the file already exists.
 fn write_template_file<W: Write>(
     path: &Path,
+    workspace_dir: &Path,
     content: &str,
     stderr_writer: &mut W,
 ) -> Result<(), PodError> {
+    let display_path = relative_display_path(path, workspace_dir);
+    if fs::file_exists(path) {
+        log::write_warning(
+            stderr_writer,
+            &format!("File '{}' already exists.", display_path.display()),
+        );
+        return Ok(());
+    }
     fs::write_file(path, content)?;
-    log::write_info(stderr_writer, &format!("Created '{}'.", path.display()));
+    log::write_info(
+        stderr_writer,
+        &format!("Created '{}'.", display_path.display()),
+    );
     Ok(())
 }
 
@@ -149,7 +155,7 @@ mod tests {
     use crate::io::system::fs;
     use super::{
         CONFIG_TEMPLATE, DEFAULT_RECIPE_PATH, RECIPE_TEMPLATE, create_files,
-        ensure_target_available, handle, resolve_config_target,
+        ensure_target_creatable, handle,
     };
 
     fn create_temp_test_dir(suffix: &str) -> PathBuf {
@@ -160,64 +166,62 @@ mod tests {
     }
 
     #[test]
-    fn create_files_rejects_existing_files_and_directories() {
+    fn create_files_warns_on_existing_files_and_rejects_directories() {
         let temp_dir = create_temp_test_dir("existing");
         let recipe_path = temp_dir.join("recipe.pod");
         let config_path = temp_dir.join("pods.conf");
 
-        // 1. Existing recipe.pod file
+        // 1. Existing recipe.pod file: warns and still creates pods.conf
         fs::write_file(&recipe_path, "existing recipe").unwrap();
         let mut stderr = Vec::new();
-        let recipe_file_err = create_files(&recipe_path, &config_path, &mut stderr).unwrap_err();
-        match &recipe_file_err {
-            PodError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
-            other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
-        }
-        assert!(
-            recipe_file_err
-                .to_string()
-                .contains(&format!("File '{}' already exists!", recipe_path.display()))
-        );
+        create_files(&recipe_path, &config_path, &mut stderr).unwrap();
+        let output_first = String::from_utf8(stderr).unwrap();
+        assert!(output_first.contains("WARNING: File 'recipe.pod' already exists.\n"));
+        assert!(output_first.contains("INFO: Created 'pods.conf'.\n"));
         assert_eq!(fs::read_file(&recipe_path).unwrap(), "existing recipe");
-        assert!(!fs::file_exists(&config_path));
-        assert!(stderr.is_empty());
+        assert_eq!(fs::read_file(&config_path).unwrap(), CONFIG_TEMPLATE);
         std_fs::remove_file(&recipe_path).unwrap();
-
-        // 2. Existing pods.conf file (verify recipe.pod is not created)
-        fs::write_file(&config_path, "existing config").unwrap();
-        let config_file_err = create_files(&recipe_path, &config_path, &mut stderr).unwrap_err();
-        match &config_file_err {
-            PodError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
-            other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
-        }
-        assert!(
-            config_file_err
-                .to_string()
-                .contains(&format!("File '{}' already exists!", config_path.display()))
-        );
-        assert!(!fs::file_exists(&recipe_path));
-        assert_eq!(fs::read_file(&config_path).unwrap(), "existing config");
-        assert!(stderr.is_empty());
         std_fs::remove_file(&config_path).unwrap();
 
-        // 3. Existing recipe.pod directory/folder
+        // 2. Existing pods.conf file: creates recipe.pod and warns for pods.conf
+        fs::write_file(&config_path, "existing config").unwrap();
+        let mut stderr = Vec::new();
+        create_files(&recipe_path, &config_path, &mut stderr).unwrap();
+        let output_second = String::from_utf8(stderr).unwrap();
+        assert!(output_second.contains("INFO: Created 'recipe.pod'.\n"));
+        assert!(output_second.contains("WARNING: File 'pods.conf' already exists.\n"));
+        assert_eq!(fs::read_file(&recipe_path).unwrap(), RECIPE_TEMPLATE);
+        assert_eq!(fs::read_file(&config_path).unwrap(), "existing config");
+
+        // 3. Both files already exist: warns for both and preserves contents
+        let mut stderr = Vec::new();
+        create_files(&recipe_path, &config_path, &mut stderr).unwrap();
+        let output_both = String::from_utf8(stderr).unwrap();
+        assert!(output_both.contains("WARNING: File 'recipe.pod' already exists.\n"));
+        assert!(output_both.contains("WARNING: File 'pods.conf' already exists.\n"));
+        assert_eq!(fs::read_file(&recipe_path).unwrap(), RECIPE_TEMPLATE);
+        assert_eq!(fs::read_file(&config_path).unwrap(), "existing config");
+        std_fs::remove_file(&recipe_path).unwrap();
+        std_fs::remove_file(&config_path).unwrap();
+
+        // 4. Existing recipe.pod directory/folder: returns error without creating pods.conf
         std_fs::create_dir_all(&recipe_path).unwrap();
+        let mut stderr = Vec::new();
         let recipe_dir_err = create_files(&recipe_path, &config_path, &mut stderr).unwrap_err();
         match &recipe_dir_err {
             PodError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
             other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
         }
         assert!(
-            recipe_dir_err.to_string().contains(&format!(
-                "Directory '{}' already exists!",
-                recipe_path.display()
-            ))
+            recipe_dir_err
+                .to_string()
+                .contains("Cannot create file 'recipe.pod': a directory with the same name already exists!")
         );
         assert!(!fs::file_exists(&config_path));
         assert!(stderr.is_empty());
         std_fs::remove_dir_all(&recipe_path).unwrap();
 
-        // 4. Existing pods.conf directory/folder (verify recipe.pod is not created)
+        // 5. Existing pods.conf directory/folder: returns error without creating recipe.pod
         std_fs::create_dir_all(&config_path).unwrap();
         let config_dir_err = create_files(&recipe_path, &config_path, &mut stderr).unwrap_err();
         match &config_dir_err {
@@ -225,10 +229,9 @@ mod tests {
             other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
         }
         assert!(
-            config_dir_err.to_string().contains(&format!(
-                "Directory '{}' already exists!",
-                config_path.display()
-            ))
+            config_dir_err
+                .to_string()
+                .contains("Cannot create file 'pods.conf': a directory with the same name already exists!")
         );
         assert!(!fs::file_exists(&recipe_path));
         assert!(stderr.is_empty());
@@ -246,8 +249,13 @@ mod tests {
         create_files(&recipe_path, &config_path, &mut stderr).unwrap();
 
         let log_output = String::from_utf8(stderr).unwrap();
-        assert!(log_output.contains(&format!("INFO: Created '{}'.\n", recipe_path.display())));
-        assert!(log_output.contains(&format!("INFO: Created '{}'.\n", config_path.display())));
+        let workspace_abs = fs::get_absolute_path(&temp_dir);
+        assert!(log_output.contains(&format!(
+            "INFO: Initializing workspace '{}'.\n",
+            workspace_abs.display()
+        )));
+        assert!(log_output.contains("INFO: Created 'recipe.pod'.\n"));
+        assert!(log_output.contains("INFO: Created 'pods.conf'.\n"));
 
         let written_recipe = fs::read_file(&recipe_path).unwrap();
         let written_config = fs::read_file(&config_path).unwrap();
@@ -278,26 +286,13 @@ mod tests {
 
     #[test]
     fn handle_and_path_edge_cases_and_symlink_protection() {
-        let context = Context::new();
-        let handle_err = handle(&context).unwrap_err();
-        assert!(
-            handle_err
-                .to_string()
-                .contains("File './recipe.pod' already exists!")
-        );
+        let mut context = Context::new();
+        context.config.path = PathBuf::from("/nonexistent_ignored_dir/custom.conf");
+        assert!(handle(&context).is_ok());
 
-        assert_eq!(
-            resolve_config_target(Path::new("")),
-            Path::new(DEFAULT_CONFIG_PATH)
-        );
-        assert_eq!(
-            resolve_config_target(Path::new("./staging.conf")),
-            Path::new("./staging.conf")
-        );
-
-        assert!(ensure_target_available(Path::new("")).is_err());
-        assert!(ensure_target_available(Path::new("../pods.conf")).is_err());
-        assert!(ensure_target_available(Path::new("/tmp/../pods.conf")).is_err());
+        assert!(ensure_target_creatable(Path::new(""), Path::new(".")).is_err());
+        assert!(ensure_target_creatable(Path::new("../pods.conf"), Path::new(".")).is_err());
+        assert!(ensure_target_creatable(Path::new("/tmp/../pods.conf"), Path::new(".")).is_err());
         for malformed in [
             "./pods.conf/",
             "./-pods.conf",
@@ -307,12 +302,12 @@ mod tests {
             "./pods\u{202e}.conf",
         ] {
             assert!(
-                ensure_target_available(Path::new(malformed)).is_err(),
+                ensure_target_creatable(Path::new(malformed), Path::new(".")).is_err(),
                 "expected error for malformed path {malformed:?}"
             );
         }
         let non_utf8_path = PathBuf::from(OsString::from_vec(vec![b'.', b'/', 0xFF, b'.', b'c']));
-        assert!(ensure_target_available(&non_utf8_path).is_err());
+        assert!(ensure_target_creatable(&non_utf8_path, Path::new(".")).is_err());
 
         let temp_dir = create_temp_test_dir("symlinks");
         let dangling_target = temp_dir.join("missing_target.pod");
@@ -349,16 +344,16 @@ mod tests {
         assert!(!fs::file_exists(&dangling_recipe));
         assert!(stderr.is_empty());
 
-        // Write-only existing file must be rejected as AlreadyExists without overwriting
+        // Write-only existing file must warn without overwriting
         fs::write_file(&config_path, "protected write-only").unwrap();
         std_fs::set_permissions(&config_path, std_fs::Permissions::from_mode(0o200)).unwrap();
-        let write_only_err = create_files(&dangling_recipe, &config_path, &mut stderr).unwrap_err();
-        match &write_only_err {
-            PodError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
-            other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
-        }
-        assert!(!fs::file_exists(&dangling_recipe));
-        assert!(stderr.is_empty());
+        create_files(&dangling_recipe, &config_path, &mut stderr).unwrap();
+        assert!(fs::file_exists(&dangling_recipe));
+        assert!(
+            String::from_utf8(stderr)
+                .unwrap()
+                .contains("WARNING: File 'pods.conf' already exists.\n")
+        );
         std_fs::set_permissions(&config_path, std_fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(fs::read_file(&config_path).unwrap(), "protected write-only");
 

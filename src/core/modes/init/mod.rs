@@ -62,12 +62,7 @@ mod tests {
         let mut create_context = Context::new();
         create_context.mode = Mode::Init;
         create_context.action = ModeAction::Init(InitAction::Create);
-        let create_err = handle(&create_context).unwrap_err();
-        assert!(
-            create_err
-                .to_string()
-                .contains("File './recipe.pod' already exists!")
-        );
+        assert!(handle(&create_context).is_ok());
 
         let mut invalid_context = Context::new();
         invalid_context.mode = Mode::Init;

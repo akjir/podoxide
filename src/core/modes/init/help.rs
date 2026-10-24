@@ -26,8 +26,8 @@ use crate::error::PodError;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header, `pods init` usage synopsis, options (`--config`, `--debug`),
-///    and actions (`help`) via [`log::write_print`].
+/// 2. Output the version header, `pods init` usage synopsis, options (`--debug`),
+///    and actions (`create`, `help`) via [`log::write_print`].
 ///
 /// # Errors
 ///
@@ -41,16 +41,16 @@ pub fn handle(_context: &Context) -> Result<(), PodError> {
 fn write_help<W: Write>(writer: &mut W) {
     log::write_print(writer, concat!("Podoxide v", env!("CARGO_PKG_VERSION")));
     log::write_print(writer, "");
-    log::write_print(writer, "Usage: pods init [OPTIONS]");
+    log::write_print(writer, "Usage: pods init [OPTIONS] [ACTION]");
     log::write_print(writer, "");
     log::write_print(writer, "OPTIONS:");
-    log::write_print(
-        writer,
-        "  --config=NAME      use config with given name or path",
-    );
     log::write_print(writer, "  --debug            enable debug output");
     log::write_print(writer, "");
     log::write_print(writer, "ACTIONS:");
+    log::write_print(
+        writer,
+        "  create             initialize default configuration and recipe (default)",
+    );
     log::write_print(writer, "  help               display this help and exit");
 }
 
@@ -66,11 +66,14 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
 
         assert!(output.contains(concat!("Podoxide v", env!("CARGO_PKG_VERSION"))));
-        assert!(output.contains("Usage: pods init [OPTIONS]\n"));
+        assert!(output.contains("Usage: pods init [OPTIONS] [ACTION]\n"));
         assert!(output.contains("OPTIONS:\n"));
-        assert!(output.contains("  --config=NAME      use config with given name or path\n"));
+        assert!(!output.contains("--config"));
         assert!(output.contains("  --debug            enable debug output\n"));
         assert!(output.contains("ACTIONS:\n"));
+        assert!(output.contains(
+            "  create             initialize default configuration and recipe (default)\n"
+        ));
         assert!(output.contains("  help               display this help and exit\n"));
 
         let context = Context::new();

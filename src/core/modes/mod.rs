@@ -99,6 +99,7 @@ mod tests {
             &["image", "help"],
             &["image", "prune"],
             &["image", "update", "example-app"],
+            &["init"],
             &["init", "help"],
             &["logs", "help"],
             &["logs", "follow", "example-app/db"],
@@ -170,6 +171,7 @@ mod tests {
             (Mode::Image, ModeAction::Image(ImageAction::Help)),
             (Mode::Image, ModeAction::Image(ImageAction::Prune)),
             (Mode::Image, ModeAction::Image(ImageAction::Update)),
+            (Mode::Init, ModeAction::Init(InitAction::Create)),
             (Mode::Init, ModeAction::Init(InitAction::Help)),
             (Mode::Logs, ModeAction::Logs(LogsAction::Follow)),
             (Mode::Logs, ModeAction::Logs(LogsAction::Help)),
@@ -186,13 +188,5 @@ mod tests {
             context.action = action;
             assert!(dispatch_mode(&context).is_ok());
         }
-
-        let mut init_create = Context::new();
-        init_create.mode = Mode::Init;
-        init_create.action = ModeAction::Init(InitAction::Create);
-        assert!(matches!(
-            dispatch_mode(&init_create),
-            Err(PodError::Io(_))
-        ));
     }
 }

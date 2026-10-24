@@ -56,19 +56,24 @@ _pods_completions() {
 
     # Complete global and mode-specific flags
     if [[ "$cur" == -* ]]; then
-        local opts="--config --debug --simulate"
+        local opts="--debug"
         case "$mode" in
+            init)
+                ;;
             default)
-                opts+=" --all --full"
+                opts+=" --config --simulate --all --full"
                 ;;
             logs)
-                opts+=" --tail --since --until --timestamps"
+                opts+=" --config --simulate --tail --since --until --timestamps"
                 ;;
             image)
-                opts+=" --all --force --preview"
+                opts+=" --config --simulate --all --force --preview"
                 ;;
             recipe)
-                opts+=" --all"
+                opts+=" --config --simulate --all"
+                ;;
+            *)
+                opts+=" --config --simulate"
                 ;;
         esac
         readarray -t COMPREPLY < <(compgen -W "${opts}" -- "${cur}")
@@ -87,7 +92,7 @@ _pods_completions() {
         case "$mode" in
             connect) sub_actions="shell help" ;;
             logs)    sub_actions="show follow help" ;;
-            init)    sub_actions="help" ;;
+            init)    sub_actions="create help" ;;
             command) sub_actions="exec list help" ;;
             config)  sub_actions="show edit help" ;;
             recipe)  sub_actions="edit help list show" ;;

@@ -346,6 +346,7 @@ impl FromStr for InitAction {
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         match input {
+            "create" => Ok(Self::Create),
             "help" => Ok(Self::Help),
             _ => Err(CliError::with_argument(CliErrorKind::UnknownAction, input)),
         }
@@ -654,6 +655,8 @@ mod tests {
             ImageAction::from_str("unknown").unwrap_err().kind,
             CliErrorKind::UnknownAction
         );
+        assert_eq!(InitAction::from_str("create").unwrap(), InitAction::Create);
+        assert_eq!(InitAction::from_str("help").unwrap(), InitAction::Help);
         assert_eq!(
             InitAction::from_str("unknown").unwrap_err().kind,
             CliErrorKind::UnknownAction

@@ -77,7 +77,7 @@ Argument parsing follows these rules:
 | `recipe` (`rec`)  | `list`, `show`, `edit`, `help`                                                                   | `[<recipe>]`                  | List configured recipes, or display and edit a recipe file.       |
 | `config` (`cfg`)  | `show`, `edit`, `help`                                                                           | `-`                           | Validate and display the active configuration tree or edit it.    |
 | `image` (`img`)   | `update`, `prune`, `help`                                                                        | `[<recipe>, @<group>]`        | Pull recipe container images or preview and remove unused images. |
-| `init`            | `help`                                                                                           | `-`                           | Generate initial `pods.conf` and `recipe.pod` template files.     |
+| `init`            | `create`, `help`                                                                                 | `-`                           | Generate initial `pods.conf` and `recipe.pod` template files.     |
 
 ### Global Options
 
@@ -630,7 +630,7 @@ pods --debug image prune --all --simulate
 
 ## Init Mode
 
-The `init` mode initializes a directory by creating `recipe.pod` and `pods.conf`. If either target file already exists, `pods init` aborts with an error without overwriting existing files.
+The `init` mode initializes a workspace in the current working directory by creating `recipe.pod` and `pods.conf`. If a target file already exists, `pods init` logs a warning and skips overwriting it; if a directory with the same name exists, `pods init` aborts with an error.
 
 ```bash
 pods init [OPTIONS] [ACTION]
@@ -640,14 +640,13 @@ pods init [OPTIONS] [ACTION]
 
 | Action   | Description                                                                             |
 | :------- | :-------------------------------------------------------------------------------------- |
-| `(none)` | Create `./recipe.pod` and `./pods.conf` (default when called without an action).        |
+| `create` | Create `./recipe.pod` and `./pods.conf` (default when called without an action).        |
 | `help`   | Display command-line help for `init` mode.                                              |
 
 ### Options
 
 | Option            | Description                                                                             |
 | :---------------- | :-------------------------------------------------------------------------------------- |
-| `--config=<name>` | Create the configuration file under the specified name or path instead of `pods.conf`.  |
 | `--debug`         | Enable verbose debug logging.                                                           |
 
 ### Usage
@@ -655,9 +654,10 @@ pods init [OPTIONS] [ACTION]
 ```bash
 # Generate default pods.conf and recipe.pod in the current directory
 pods init
+pods init create
 
-# Generate recipe.pod and a custom staging.conf configuration file
-pods --config=staging --debug init
+# Generate default pods.conf and recipe.pod with debug output enabled
+pods --debug init
 
 # Display init mode help
 pods init help
