@@ -84,6 +84,7 @@ pub enum PodError {
     Cli(CliError),
     Io(io::Error),
     Psl(PslError),
+    System(SystemError),
 }
 
 impl Display for PodError {
@@ -92,6 +93,7 @@ impl Display for PodError {
             Self::Cli(error) => write!(formatter, "CLI error: {error}"),
             Self::Io(error) => write!(formatter, "I/O error: {error}"),
             Self::Psl(error) => write!(formatter, "PSL error: {error}"),
+            Self::System(error) => write!(formatter, "{error}"),
         }
     }
 }
@@ -102,6 +104,7 @@ impl Error for PodError {
             Self::Cli(error) => Some(error),
             Self::Io(error) => Some(error),
             Self::Psl(error) => Some(error),
+            Self::System(error) => Some(error),
         }
     }
 }
@@ -115,6 +118,12 @@ impl From<CliError> for PodError {
 impl From<PslError> for PodError {
     fn from(error: PslError) -> Self {
         Self::Psl(error)
+    }
+}
+
+impl From<SystemError> for PodError {
+    fn from(error: SystemError) -> Self {
+        Self::System(error)
     }
 }
 
@@ -182,12 +191,33 @@ impl Display for PslErrorKind {
     }
 }
 
+/// Host operating system, runtime dependency, or privilege verification error.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SystemError {
+    AbortedExecution,
+    UnsupportedOs,
+    UnsupportedPodmanVersion,
+}
+
+impl Display for SystemError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        let message = match self {
+            Self::AbortedExecution => "Aborting execution.",
+            Self::UnsupportedOs => "Only Linux is supported.",
+            Self::UnsupportedPodmanVersion => "Podman 5.8.0 or higher is required.",
+        };
+        formatter.write_str(message)
+    }
+}
+
+impl Error for SystemError {}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
     use std::io;
 
-    use super::{CliError, CliErrorKind, PodError, PslError, PslErrorKind};
+    use super::{CliError, CliErrorKind, PodError, PslError, PslErrorKind, SystemError};
 
     #[test]
     fn cli_error_kind_display_messages() {
@@ -246,6 +276,27 @@ mod tests {
         assert!(pod_error.to_string().contains("root level"));
         assert!(pod_error.source().is_some());
         assert!(psl_error.source().is_none());
+    }
+
+    #[test]
+    fn pod_error_system_display_and_source() {
+        let variants = [
+            (SystemError::AbortedExecution, "Aborting execution."),
+            (SystemError::UnsupportedOs, "Only Linux is supported."),
+            (
+                SystemError::UnsupportedPodmanVersion,
+                "Podman 5.8.0 or higher is required.",
+            ),
+        ];
+
+        for (system_error, expected_message) in variants {
+            assert_eq!(system_error.to_string(), expected_message);
+            assert!(system_error.source().is_none());
+
+            let pod_error = PodError::from(system_error);
+            assert_eq!(pod_error.to_string(), expected_message);
+            assert!(pod_error.source().is_some());
+        }
     }
 
     #[test]

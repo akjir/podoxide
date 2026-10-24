@@ -6,4 +6,4 @@ pub mod core;
 pub mod error;
 pub mod io;
 
-pub use crate::core::{Context, cli, config, context, modes};
+pub use crate::core::{Context, cli, config, context, log, modes};

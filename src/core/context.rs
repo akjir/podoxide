@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::core::config::Config;
+use crate::core::log;
 use crate::error::{CliError, CliErrorKind, PodError};
 
 /// Sub-actions supported by [`Mode::Command`] (`command` / `cmd`).
@@ -150,6 +151,9 @@ impl Context {
             loaded.path = mem::take(&mut self.config.path);
             loaded.simulate |= self.flags.simulate;
             self.config = loaded;
+            if self.config.simulate {
+                log::info("Simulate mode is active.");
+            }
         }
         Ok(())
     }

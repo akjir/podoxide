@@ -3,6 +3,7 @@
 pub mod cli;
 pub mod config;
 pub mod context;
+pub mod log;
 pub mod modes;
 
 pub use self::config::{Config, PodsConfig, RecipesConfig};

@@ -126,7 +126,7 @@ podoxide/
 | `.pods-completion.bash` | Provides Bash autocompletion for all CLI modes, actions, and flags. |
 | `src/main.rs`           | Serves as the binary entry point (`pods`), delegates execution to `podoxide`, and returns `ExitCode`. |
 | `src/lib.rs`            | Serves as the library root, enforces `#![forbid(unsafe_code)]`, and exports `core`, `error`, `io`, and `utilities`. |
-| `src/error.rs`          | Defines the central `PodError`, `PslError`, and `PslErrorKind` domain error types and implements `Error` and `Display`. |
+| `src/error.rs`          | Defines the central `CliError`, `PodError`, `PslError`, and `SystemError` domain error types and implements `Error` and `Display`. |
 
 ## Core Domain (`src/core/`)
 

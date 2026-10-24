@@ -5,6 +5,7 @@ pub use crate::core::context::{
     LogsAction, Mode, ModeAction, RecipeAction,
 };
 use crate::core::context::Context;
+use crate::core::log;
 use crate::error::PodError;
 
 const MODE_COUNT: usize = 8;
@@ -32,33 +33,41 @@ pub fn dispatch_mode(context: &Context) -> Result<(), PodError> {
 }
 
 fn handle_command(_context: &Context) -> Result<(), PodError> {
+    log::debug("Command mode is used.");
     Ok(())
 }
 
 fn handle_config(_context: &Context) -> Result<(), PodError> {
+    log::debug("Config mode is used.");
     Ok(())
 }
 
 fn handle_connect(_context: &Context) -> Result<(), PodError> {
+    log::debug("Connect mode is used.");
     Ok(())
 }
 
 fn handle_default(_context: &Context) -> Result<(), PodError> {
+    log::debug("Default mode is used.");
     Ok(())
 }
 
 fn handle_image(_context: &Context) -> Result<(), PodError> {
+    log::debug("Image mode is used.");
     Ok(())
 }
 
 fn handle_init(_context: &Context) -> Result<(), PodError> {
+    log::debug("Init mode is used.");
     Ok(())
 }
 
 fn handle_logs(_context: &Context) -> Result<(), PodError> {
+    log::debug("Logs mode is used.");
     Ok(())
 }
 
 fn handle_recipe(_context: &Context) -> Result<(), PodError> {
+    log::debug("Recipe mode is used.");
     Ok(())
 }
