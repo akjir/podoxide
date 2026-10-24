@@ -16,6 +16,7 @@
 //! Configuration model (`pods.conf`), PSL configuration loading, and semantic validation.
 
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
@@ -139,7 +140,7 @@ impl Default for RecipesConfig {
 /// Returns [`PodError`] when reading, parsing, or validating the configuration fails.
 pub fn load(path: &Path) -> Result<Config, PodError> {
     validate_load_path(path)?;
-    let content = fs::read_file(path)?;
+    let content = read_config_file(path)?;
     let mut config = Config::from_str(&content)?;
     config.name = path
         .to_str()
@@ -572,6 +573,21 @@ fn parse_single_argument<'a>(directive: &'a PslDirective<'a>) -> Result<&'a str,
     Ok(directive.arguments[0].as_ref())
 }
 
+/// Reads the configuration file at `path`, mapping a missing file to [`ConfigErrorKind::NotFound`].
+fn read_config_file(path: &Path) -> Result<String, PodError> {
+    match fs::read_file(path) {
+        Ok(content) => Ok(content),
+        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+            Err(PodError::from(ConfigError {
+                kind: ConfigErrorKind::NotFound,
+                line: None,
+                token: Some(sanitize_path_token(path)),
+            }))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Clamps and sanitizes a filesystem `path` into a bounded [`MAX_ERROR_TOKEN_BYTES`] error token.
 fn sanitize_path_token(path: &Path) -> String {
     let raw_bytes = path.as_os_str().as_encoded_bytes();
@@ -740,7 +756,29 @@ recipes {
             Some(&vec![String::from("@backend"), String::from("web-frontend")])
         );
 
-        assert!(Config::load(&temp_dir.join("missing.conf")).is_err());
+        let missing_path = temp_dir.join("missing.conf");
+        let missing_error = Config::load(&missing_path).unwrap_err();
+        match &missing_error {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::NotFound);
+                assert_eq!(config_error.line, None);
+                assert_eq!(
+                    config_error.token.as_deref(),
+                    Some(missing_path.to_str().unwrap())
+                );
+            }
+            other => panic!("expected PodError::Config(NotFound), got {other:?}"),
+        }
+        assert!(
+            missing_error
+                .to_string()
+                .contains("Config error: configuration file not found:")
+        );
+        assert!(
+            missing_error
+                .to_string()
+                .contains(missing_path.to_str().unwrap())
+        );
 
         let _ = fs::remove_dir_all(&temp_dir);
     }

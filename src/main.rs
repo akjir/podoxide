@@ -139,8 +139,10 @@ mod tests {
     #[test]
     fn binary_in_usr_local_bin_uses_current_working_directory() {
         if env::var_os("PODOXIDE_TEST_SUBPROCESS_CWD").is_some() {
+            assert_eq!(execute(["status"]), ExitCode::FAILURE);
             assert_eq!(execute(["init"]), ExitCode::SUCCESS);
             assert_eq!(execute(["init"]), ExitCode::SUCCESS);
+            assert_eq!(execute(["status"]), ExitCode::SUCCESS);
             assert_eq!(execute(["up", "recipe"]), ExitCode::SUCCESS);
             assert_eq!(execute(["cfg", "show"]), ExitCode::SUCCESS);
             assert_eq!(execute(["rec", "list"]), ExitCode::SUCCESS);
@@ -173,6 +175,9 @@ mod tests {
             "subprocess failed: {stderr_output}"
         );
         let canonical_working_dir = fs::canonicalize(&working_dir).unwrap();
+        assert!(stderr_output.contains(
+            "ERROR: Config error: configuration file not found: './pods.conf'"
+        ));
         assert!(stderr_output.contains(&format!(
             "INFO: Initializing workspace '{}'.",
             canonical_working_dir.display()

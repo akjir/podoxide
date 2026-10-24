@@ -160,6 +160,7 @@ pub enum ConfigErrorKind {
     InvalidPath,
     MissingGroupsBlock,
     MissingRecipesBlock,
+    NotFound,
     UnexpectedBlock,
     UnknownDirective,
 }
@@ -176,6 +177,7 @@ impl Display for ConfigErrorKind {
             Self::InvalidPath => "invalid path value in configuration",
             Self::MissingGroupsBlock => "missing 'groups' block in 'recipes'",
             Self::MissingRecipesBlock => "missing 'recipes' block in configuration",
+            Self::NotFound => "configuration file not found",
             Self::UnexpectedBlock => "unexpected block in configuration",
             Self::UnknownDirective => "unknown directive in configuration",
         };
@@ -396,6 +398,7 @@ mod tests {
             (ConfigErrorKind::InvalidPath, "invalid path"),
             (ConfigErrorKind::MissingGroupsBlock, "missing 'groups'"),
             (ConfigErrorKind::MissingRecipesBlock, "missing 'recipes'"),
+            (ConfigErrorKind::NotFound, "configuration file not found"),
             (ConfigErrorKind::UnexpectedBlock, "unexpected block"),
             (ConfigErrorKind::UnknownDirective, "unknown directive"),
         ];

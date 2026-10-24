@@ -31,6 +31,7 @@ const INITIAL_DIRECTORY_CAPACITY: usize = 16;
 const INITIAL_FILE_CAPACITY: usize = 256;
 /// Maximum number of entries collected from a single directory listing.
 pub const MAX_DIRECTORY_ENTRIES: usize = 4096;
+const MAX_SYMLINK_DEPTH: usize = 40;
 
 /// Evaluates whether a directory exists at `path`.
 #[must_use]
@@ -50,19 +51,19 @@ pub fn directory_exists(path: &Path) -> bool {
 /// Returns [`PodError::Io`] if `path` is a symlink, directory, or special file, or if its parent
 /// directory does not exist.
 pub fn ensure_writable_target(path: &Path) -> Result<(), PodError> {
+    if !has_regular_target_name(path) {
+        return Err(invalid_target_error(path));
+    }
     let working_path = resolve_working_path(path);
     let metadata = match fs::symlink_metadata(working_path.as_ref()) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return ensure_parent_directory(working_path.as_ref());
         }
-        Err(error) => return Err(PodError::from(error)),
+        Err(error) => return Err(io_path_error(path, error)),
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(PodError::from(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "target path must be a regular file and not a symlink",
-        )));
+        return Err(invalid_target_error(path));
     }
     Ok(())
 }
@@ -102,7 +103,7 @@ pub fn get_absolute_path(path: &Path) -> PathBuf {
 /// exceeds [`MAX_DIRECTORY_ENTRIES`].
 pub fn list_directory(path: &Path, extension: Option<&str>) -> Result<Vec<String>, PodError> {
     let working_path = resolve_working_path(path);
-    let read_dir = fs::read_dir(working_path.as_ref())?;
+    let read_dir = fs::read_dir(working_path.as_ref()).map_err(|error| io_path_error(path, error))?;
     let mut entries = Vec::with_capacity(INITIAL_DIRECTORY_CAPACITY.min(MAX_DIRECTORY_ENTRIES));
     for (scanned_count, entry_result) in read_dir.enumerate() {
         if scanned_count >= MAX_DIRECTORY_ENTRIES {
@@ -123,10 +124,12 @@ pub fn list_directory(path: &Path, extension: Option<&str>) -> Result<Vec<String
 /// with [`PslErrorKind::LimitExceeded`] if the file size exceeds [`MAX_FILE_BYTES`].
 pub fn read_file(path: &Path) -> Result<String, PodError> {
     let working_path = resolve_working_path(path);
-    ensure_regular_file(&fs::metadata(working_path.as_ref())?)?;
-    let file = File::open(working_path.as_ref())?;
-    let metadata = file.metadata()?;
-    ensure_regular_file(&metadata)?;
+    let path_metadata =
+        fs::metadata(working_path.as_ref()).map_err(|error| io_path_error(path, error))?;
+    ensure_regular_file(path, &path_metadata)?;
+    let file = File::open(working_path.as_ref()).map_err(|error| io_path_error(path, error))?;
+    let metadata = file.metadata().map_err(|error| io_path_error(path, error))?;
+    ensure_regular_file(path, &metadata)?;
     if metadata.len() > MAX_FILE_BYTES as u64 {
         return Err(PodError::from(PslError::new(
             PslErrorKind::LimitExceeded,
@@ -145,22 +148,34 @@ pub fn read_file(path: &Path) -> Result<String, PodError> {
 pub fn write_file(path: &Path, content: &str) -> Result<(), PodError> {
     ensure_writable_target(path)?;
     let working_path = resolve_working_path(path);
-    fs::write(working_path.as_ref(), content)?;
+    fs::write(working_path.as_ref(), content).map_err(|error| io_path_error(path, error))?;
     Ok(())
 }
 
-/// Applies a path component to `resolved` and canonicalizes existing directory prefixes to resolve symlinks before `..`.
-fn apply_resolved_component(resolved: &mut PathBuf, component: Component<'_>) {
+/// Appends and resolves all components of `path` onto `resolved` with bounded symlink expansion.
+fn append_resolved_path(resolved: &mut PathBuf, path: &Path, remaining_symlinks: &mut usize) {
+    for component in path.components() {
+        apply_resolved_component(resolved, component, remaining_symlinks);
+    }
+}
+
+/// Applies a path component to `resolved` and resolves existing or symlinked prefixes before `..`.
+fn apply_resolved_component(
+    resolved: &mut PathBuf,
+    component: Component<'_>,
+    remaining_symlinks: &mut usize,
+) {
     match component {
         Component::Prefix(prefix) => resolved.push(prefix.as_os_str()),
-        Component::RootDir => resolved.push(component.as_os_str()),
+        Component::RootDir => {
+            resolved.clear();
+            resolved.push(component.as_os_str());
+        }
         Component::CurDir => {}
         Component::ParentDir => pop_relative_or_absolute(resolved),
         Component::Normal(part) => {
             resolved.push(part);
-            if let Ok(canonical) = fs::canonicalize(&*resolved) {
-                *resolved = canonical;
-            }
+            resolve_normal_component(resolved, remaining_symlinks);
         }
     }
 }
@@ -207,14 +222,39 @@ fn ensure_parent_directory(path: &Path) -> Result<(), PodError> {
 }
 
 /// Verifies that `metadata` describes a regular file, rejecting directories, FIFOs, and device nodes.
-fn ensure_regular_file(metadata: &Metadata) -> Result<(), PodError> {
+fn ensure_regular_file(path: &Path, metadata: &Metadata) -> Result<(), PodError> {
     if !metadata.is_file() {
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "path is not a regular file",
+            format!("'{}' is not a regular file", path.display()),
         )));
     }
     Ok(())
+}
+
+/// Evaluates whether `path` names a terminal file entry without a trailing slash or dot segment.
+fn has_regular_target_name(path: &Path) -> bool {
+    let raw_bytes = path.as_os_str().as_encoded_bytes();
+    path.file_name().is_some() && !raw_bytes.ends_with(b"/") && !raw_bytes.ends_with(b"/.")
+}
+
+/// Creates a [`PodError::Io`] indicating that `path` is not a valid regular-file write target.
+fn invalid_target_error(path: &Path) -> PodError {
+    PodError::from(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "target path '{}' must be a regular file and not a symlink",
+            path.display()
+        ),
+    ))
+}
+
+/// Annotates an [`io::Error`] with the offending `path` while preserving its [`io::ErrorKind`].
+fn io_path_error(path: &Path, error: io::Error) -> PodError {
+    PodError::from(io::Error::new(
+        error.kind(),
+        format!("'{}': {error}", path.display()),
+    ))
 }
 
 /// Reads at most [`MAX_FILE_BYTES`] bytes from `reader` and decodes the buffer as UTF-8.
@@ -232,13 +272,29 @@ fn read_bounded_utf8<R: Read>(reader: R, initial_capacity: usize) -> Result<Stri
         .map_err(|error| PodError::from(io::Error::new(io::ErrorKind::InvalidData, error)))
 }
 
-/// Resolves `path` component by component, canonicalizing existing prefixes along the way.
+/// Resolves `path` component by component, canonicalizing existing prefixes and expanding symlinks along the way.
 fn resolve_absolute_components(path: &Path) -> PathBuf {
     let mut resolved = PathBuf::with_capacity(path.as_os_str().len());
-    for component in path.components() {
-        apply_resolved_component(&mut resolved, component);
-    }
+    let mut remaining_symlinks = MAX_SYMLINK_DEPTH;
+    append_resolved_path(&mut resolved, path, &mut remaining_symlinks);
     resolved
+}
+
+/// Resolves the most recently appended normal component in `resolved` via canonicalization or bounded symlink expansion.
+fn resolve_normal_component(resolved: &mut PathBuf, remaining_symlinks: &mut usize) {
+    if let Ok(canonical) = fs::canonicalize(&*resolved) {
+        *resolved = canonical;
+        return;
+    }
+    if *remaining_symlinks == 0 {
+        return;
+    }
+    let Ok(link_target) = fs::read_link(&*resolved) else {
+        return;
+    };
+    *remaining_symlinks -= 1;
+    let _ = resolved.pop();
+    append_resolved_path(resolved, &link_target, remaining_symlinks);
 }
 
 /// Anchors a relative `path` to the process current working directory (`env::current_dir()`),
@@ -330,7 +386,13 @@ mod tests {
         let missing_ext = list_directory(&temp_dir, Some(".missing")).unwrap();
         assert!(missing_ext.is_empty());
 
-        assert!(list_directory(&temp_dir.join("does_not_exist"), None).is_err());
+        let missing_dir = temp_dir.join("does_not_exist");
+        let missing_dir_err = list_directory(&missing_dir, None).unwrap_err();
+        assert!(
+            missing_dir_err
+                .to_string()
+                .contains(missing_dir.to_str().unwrap())
+        );
 
         assert!(matches_extension("app.pod", Some(".pod")));
         assert!(!matches_extension(".pod", Some(".pod")));
@@ -361,7 +423,13 @@ mod tests {
         let loaded = read_file(&file_path).unwrap();
         assert_eq!(loaded, content);
 
-        assert!(read_file(&temp_dir.join("missing.conf")).is_err());
+        let missing_file = temp_dir.join("missing.conf");
+        let missing_file_err = read_file(&missing_file).unwrap_err();
+        assert!(
+            missing_file_err
+                .to_string()
+                .contains(missing_file.to_str().unwrap())
+        );
 
         let oversized_path = temp_dir.join("oversized.conf");
         let oversized_content = "a".repeat(MAX_FILE_BYTES + 1);
@@ -405,8 +473,36 @@ mod tests {
         let dangling_target = temp_dir.join("dangling_target.conf");
         let dangling_link = temp_dir.join("dangling.conf");
         unix_fs::symlink(&dangling_target, &dangling_link).unwrap();
+        let canonical_temp = fs::canonicalize(&temp_dir).unwrap();
+        assert_eq!(
+            get_absolute_path(&dangling_link),
+            canonical_temp.join("dangling_target.conf")
+        );
+
+        let dangling_rel_dir = temp_dir.join("dangling_rel_dir");
+        unix_fs::symlink(Path::new("nested/missing_sub"), &dangling_rel_dir).unwrap();
+        assert_eq!(
+            get_absolute_path(&dangling_rel_dir.join("../escaped.pod")),
+            canonical_nested.join("escaped.pod")
+        );
+
+        let dangling_abs_dir = temp_dir.join("dangling_abs_dir");
+        unix_fs::symlink(canonical_nested.join("missing_abs"), &dangling_abs_dir).unwrap();
+        assert_eq!(
+            get_absolute_path(&dangling_abs_dir.join("../abs_escaped.pod")),
+            canonical_nested.join("abs_escaped.pod")
+        );
+
+        let loop_a = temp_dir.join("loop_a");
+        let loop_b = temp_dir.join("loop_b");
+        unix_fs::symlink(&loop_b, &loop_a).unwrap();
+        unix_fs::symlink(&loop_a, &loop_b).unwrap();
+        assert!(get_absolute_path(&loop_a.join("cycle.pod")).ends_with("cycle.pod"));
+
         assert!(!file_exists(&dangling_link));
         assert!(ensure_writable_target(&dangling_link).is_err());
+        assert!(ensure_writable_target(&temp_dir.join("dangling.conf/")).is_err());
+        assert!(ensure_writable_target(&temp_dir.join("dangling.conf/.")).is_err());
         assert!(write_file(&dangling_link, "overwrite").is_err());
         assert!(!file_exists(&dangling_target));
 
@@ -417,9 +513,15 @@ mod tests {
         assert!(ensure_writable_target(&active_link).is_err());
         assert!(write_file(&active_link, "overwrite").is_err());
         assert_eq!(read_file(&protected_target).unwrap(), "safe");
+        assert!(ensure_writable_target(Path::new("")).is_err());
+        assert!(ensure_writable_target(Path::new(".")).is_err());
+        assert!(ensure_writable_target(Path::new("..")).is_err());
         assert!(ensure_writable_target(&temp_dir).is_err());
         assert!(write_file(&temp_dir, "overwrite_dir").is_err());
         assert!(ensure_writable_target(&temp_dir.join("missing_parent/pods.conf")).is_err());
+        assert!(ensure_writable_target(&temp_dir.join("new_target.conf/")).is_err());
+        assert!(ensure_writable_target(&temp_dir.join("new_target.conf/.")).is_err());
+        assert!(ensure_writable_target(&temp_dir.join("new_target.conf/..")).is_err());
         assert!(ensure_writable_target(&temp_dir.join("new_target.conf")).is_ok());
         assert!(ensure_writable_target(Path::new("nonexistent_relative_target.conf")).is_ok());
 
