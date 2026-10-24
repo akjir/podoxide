@@ -15,6 +15,7 @@
 
 //! Recipe model (`.pod`), PSL recipe loading, container name resolution, and semantic validation.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -97,9 +98,7 @@ impl FromStr for Recipe {
     type Err = PodError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let document = parse_psl(input)?;
-        let recipe = build_recipe(&document)?;
-        Ok(recipe)
+        parse_recipe_with_path(input, "<input>")
     }
 }
 
@@ -112,7 +111,8 @@ pub fn load(recipes_dir: &Path, recipe_name: &str) -> Result<Recipe, PodError> {
     validate_load_target(recipes_dir, recipe_name)?;
     let path = build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION);
     let content = read_recipe_file(&path)?;
-    Recipe::from_str(&content)
+    let display_path = sanitize_path_token(&path);
+    parse_recipe_with_path(&content, &display_path)
 }
 
 /// Resolves a container reference (`1..=N`, `*suffix`, or name) against `recipe.containers`.
@@ -121,10 +121,13 @@ pub fn load(recipes_dir: &Path, recipe_name: &str) -> Result<Recipe, PodError> {
 ///
 /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
 pub fn resolve_container_name(recipe: &Recipe, container_spec: &str) -> Result<String, RecipeError> {
-    if !is_valid_text(container_spec) {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::ContainerNotFound,
+    if !recipe.has_pod
+        || !is_valid_pod_or_container_name(&recipe.pod.id)
+        || !is_valid_text(container_spec)
+    {
+        return Err(pod_error_at_line(
             recipe.pod.line,
+            RecipeErrorKind::ContainerNotFound,
             container_spec,
         ));
     }
@@ -139,9 +142,9 @@ pub fn resolve_container_name(recipe: &Recipe, container_spec: &str) -> Result<S
         if let Some(found) = find_container_by_name(&recipe.containers, &recipe.pod.id, &target) {
             return Ok(found);
         }
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::ContainerNotFound,
+        return Err(pod_error_at_line(
             recipe.pod.line,
+            RecipeErrorKind::ContainerNotFound,
             container_spec,
         ));
     }
@@ -154,9 +157,9 @@ pub fn resolve_container_name(recipe: &Recipe, container_spec: &str) -> Result<S
     ) {
         return Ok(found);
     }
-    Err(RecipeError::with_token(
-        RecipeErrorKind::ContainerNotFound,
+    Err(pod_error_at_line(
         recipe.pod.line,
+        RecipeErrorKind::ContainerNotFound,
         container_spec,
     ))
 }
@@ -167,23 +170,8 @@ pub fn resolve_container_name(recipe: &Recipe, container_spec: &str) -> Result<S
 ///
 /// Returns [`PodError`] when required blocks or directives are missing or invalid.
 pub fn validate(recipe: &mut Recipe, config: &Config, file_name: &str) -> Result<(), PodError> {
-    if !recipe.has_pod || recipe.pod.id.is_empty() {
-        return Err(PodError::from(RecipeError::with_token(
-            RecipeErrorKind::MissingPodBlock,
-            recipe.pod.line,
-            file_name,
-        )));
-    }
-    validate_pod_fields(&mut recipe.pod, config, file_name)?;
-    if recipe.containers.is_empty() {
-        return Err(PodError::from(RecipeError::with_token(
-            RecipeErrorKind::MissingContainersBlock,
-            recipe.pod.line,
-            file_name,
-        )));
-    }
-    validate_and_resolve_containers(&mut recipe.containers, &recipe.pod.id)?;
-    Ok(())
+    validate_recipe_inner(recipe, config, file_name)
+        .map_err(|error| attach_validate_diagnostic(error, config, file_name))
 }
 
 /// Validates and applies a directive inside a `command <name>` sub-block.
@@ -192,58 +180,37 @@ fn apply_command_directive(
     directive: &PslDirective<'_>,
     seen: &mut u8,
 ) -> Result<(), RecipeError> {
+    let kind = RecipeErrorKind::InvalidCommand;
     match directive.name {
         "container" => {
-            mark_seen(
-                seen,
-                SEEN_COMMAND_CONTAINER,
-                RecipeErrorKind::DuplicateDirective,
-                directive.line,
-                directive.name,
-            )?;
-            command.container = parse_text_directive(directive, RecipeErrorKind::InvalidCommand)?;
-            Ok(())
+            command.container =
+                parse_unique_text_directive(directive, seen, SEEN_COMMAND_CONTAINER, kind)?;
         }
         "description" => {
-            mark_seen(
-                seen,
-                SEEN_COMMAND_DESCRIPTION,
-                RecipeErrorKind::DuplicateDirective,
-                directive.line,
-                directive.name,
-            )?;
-            command.description = parse_text_directive(directive, RecipeErrorKind::InvalidCommand)?;
-            Ok(())
+            command.description =
+                parse_unique_text_directive(directive, seen, SEEN_COMMAND_DESCRIPTION, kind)?;
         }
         "execute" => {
-            mark_seen(
-                seen,
-                SEEN_COMMAND_EXECUTE,
-                RecipeErrorKind::DuplicateDirective,
-                directive.line,
-                directive.name,
-            )?;
-            command.execute = parse_text_directive(directive, RecipeErrorKind::InvalidCommand)?;
-            Ok(())
+            command.execute =
+                parse_unique_text_directive(directive, seen, SEEN_COMMAND_EXECUTE, kind)?;
         }
         "user" => {
-            mark_seen(
+            command.user = Some(parse_unique_token_directive(
+                directive,
                 seen,
                 SEEN_COMMAND_USER,
-                RecipeErrorKind::DuplicateDirective,
+                kind,
+            )?);
+        }
+        _ => {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::UnknownDirective,
                 directive.line,
                 directive.name,
-            )?;
-            let user = parse_token_directive(directive, RecipeErrorKind::InvalidCommand)?;
-            command.user = Some(user);
-            Ok(())
+            ));
         }
-        _ => Err(RecipeError::with_token(
-            RecipeErrorKind::UnknownDirective,
-            directive.line,
-            directive.name,
-        )),
     }
+    Ok(())
 }
 
 /// Validates and applies a statement inside a `command <name>` sub-block.
@@ -273,58 +240,37 @@ fn apply_container_directive(
             &mut container.commands,
             directive,
             RecipeErrorKind::InvalidCommand,
-        ),
+        )?,
         "image" => {
-            mark_seen(
-                seen,
-                SEEN_CONTAINER_IMAGE,
-                RecipeErrorKind::DuplicateDirective,
-                directive.line,
-                directive.name,
-            )?;
-            container.image = parse_token_directive(directive, RecipeErrorKind::InvalidImage)?;
-            Ok(())
+            let kind = RecipeErrorKind::InvalidImage;
+            container.image =
+                parse_unique_token_directive(directive, seen, SEEN_CONTAINER_IMAGE, kind)?;
         }
         "option" => parse_multi_text_directive(
             &mut container.options,
             directive,
             RecipeErrorKind::InvalidOption,
-        ),
+        )?,
         "registry" => {
-            mark_seen(
-                seen,
-                SEEN_CONTAINER_REGISTRY,
-                RecipeErrorKind::DuplicateDirective,
-                directive.line,
-                directive.name,
-            )?;
+            let kind = RecipeErrorKind::InvalidRegistry;
             container.registry =
-                parse_token_directive(directive, RecipeErrorKind::InvalidRegistry)?;
-            Ok(())
+                parse_unique_token_directive(directive, seen, SEEN_CONTAINER_REGISTRY, kind)?;
         }
         "restart" => {
-            mark_seen(
-                seen,
-                SEEN_CONTAINER_RESTART,
-                RecipeErrorKind::DuplicateDirective,
+            let kind = RecipeErrorKind::InvalidRestartPolicy;
+            container.restart =
+                parse_unique_token_directive(directive, seen, SEEN_CONTAINER_RESTART, kind)?;
+        }
+        "volume" => container.volumes.push(parse_volume_directive(directive)?),
+        _ => {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::UnknownDirective,
                 directive.line,
                 directive.name,
-            )?;
-            container.restart =
-                parse_token_directive(directive, RecipeErrorKind::InvalidRestartPolicy)?;
-            Ok(())
+            ));
         }
-        "volume" => {
-            let volume = parse_volume_directive(directive)?;
-            container.volumes.push(volume);
-            Ok(())
-        }
-        _ => Err(RecipeError::with_token(
-            RecipeErrorKind::UnknownDirective,
-            directive.line,
-            directive.name,
-        )),
     }
+    Ok(())
 }
 
 /// Validates and applies a statement inside a `container` block.
@@ -351,64 +297,29 @@ fn apply_pod_directive(
 ) -> Result<(), RecipeError> {
     match directive.name {
         "description" => {
-            mark_seen(
-                seen,
-                SEEN_POD_DESCRIPTION,
-                RecipeErrorKind::DuplicateDirective,
-                directive.line,
-                directive.name,
-            )?;
+            let kind = RecipeErrorKind::InvalidDescription;
             pod.description =
-                parse_text_directive(directive, RecipeErrorKind::InvalidDescription)?;
-            Ok(())
+                parse_unique_text_directive(directive, seen, SEEN_POD_DESCRIPTION, kind)?;
         }
-        "name" => {
-            mark_seen(
-                seen,
-                SEEN_POD_NAME,
-                RecipeErrorKind::DuplicateDirective,
-                directive.line,
-                directive.name,
-            )?;
-            pod.name = parse_pod_name_directive(directive)?;
-            Ok(())
-        }
+        "name" => pod.name = parse_pod_name_directive(directive, seen)?,
         "option" => {
-            parse_multi_text_directive(&mut pod.options, directive, RecipeErrorKind::InvalidOption)
+            parse_multi_text_directive(&mut pod.options, directive, RecipeErrorKind::InvalidOption)?
         }
-        "path" => {
-            mark_seen(
-                seen,
-                SEEN_POD_PATH,
-                RecipeErrorKind::DuplicateDirective,
-                directive.line,
-                directive.name,
-            )?;
-            pod.path = parse_pod_path_directive(directive)?;
-            Ok(())
-        }
-        "publish" => {
-            let entry = parse_publish_directive(directive)?;
-            pod.publish.push(entry);
-            Ok(())
-        }
+        "path" => pod.path = parse_pod_path_directive(directive, seen)?,
+        "publish" => pod.publish.push(parse_publish_directive(directive)?),
         "registry" => {
-            mark_seen(
-                seen,
-                SEEN_POD_REGISTRY,
-                RecipeErrorKind::DuplicateDirective,
+            let kind = RecipeErrorKind::InvalidRegistry;
+            pod.registry = parse_unique_token_directive(directive, seen, SEEN_POD_REGISTRY, kind)?;
+        }
+        _ => {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::UnknownDirective,
                 directive.line,
                 directive.name,
-            )?;
-            pod.registry = parse_token_directive(directive, RecipeErrorKind::InvalidRegistry)?;
-            Ok(())
+            ));
         }
-        _ => Err(RecipeError::with_token(
-            RecipeErrorKind::UnknownDirective,
-            directive.line,
-            directive.name,
-        )),
     }
+    Ok(())
 }
 
 /// Validates and applies a statement (`command` sub-block or directive) inside the `pod` block.
@@ -426,14 +337,7 @@ fn apply_pod_statement(
                     block.name,
                 ));
             }
-            let command = parse_command_block(block)?;
-            if pod.commands.contains_key(&command.name) {
-                return Err(RecipeError::with_token(
-                    RecipeErrorKind::DuplicateBlock,
-                    block.line,
-                    &command.name,
-                ));
-            }
+            let command = parse_command_block(block, &pod.commands)?;
             pod.commands.insert(command.name.clone(), command);
             Ok(())
         }
@@ -469,6 +373,23 @@ fn apply_root_block(recipe: &mut Recipe, block: &PslBlock<'_>) -> Result<(), Rec
     }
 }
 
+/// Enriches a validation [`RecipeError`] with a file-backed [`DiagnosticError`] when the recipe file is readable on disk.
+fn attach_validate_diagnostic(
+    error: RecipeError,
+    config: &Config,
+    file_name: &str,
+) -> PodError {
+    if validate_load_target(&config.recipes.path, file_name).is_err() {
+        return PodError::from(error);
+    }
+    let path = build_full_path(&config.recipes.path, file_name, RECIPE_EXTENSION);
+    if let Ok(content) = fs::read_file(&path) {
+        let display_path = sanitize_path_token(&path);
+        return PodError::from(error.with_diagnostic(&content, &display_path));
+    }
+    PodError::from(error)
+}
+
 /// Builds a [`Recipe`] from a parsed [`PslDocument`].
 fn build_recipe(document: &PslDocument<'_>) -> Result<Recipe, RecipeError> {
     let mut recipe = Recipe::new();
@@ -477,25 +398,6 @@ fn build_recipe(document: &PslDocument<'_>) -> Result<Recipe, RecipeError> {
         apply_root_block(&mut recipe, block)?;
     }
     Ok(recipe)
-}
-
-/// Verifies that the resolved container name at `index` does not collide with an earlier container.
-fn ensure_unique_container_name(
-    containers: &[Container],
-    index: usize,
-) -> Result<(), RecipeError> {
-    let current = &containers[index];
-    let is_duplicate = containers[..index]
-        .iter()
-        .any(|previous| previous.name == current.name);
-    if is_duplicate {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::InvalidContainerName,
-            current.line,
-            &current.name,
-        ));
-    }
-    Ok(())
 }
 
 /// Searches `containers` in a single pass for an exact match on `exact` or a fallback match on `prefixed`.
@@ -539,53 +441,112 @@ fn find_container_by_name(
     None
 }
 
-/// Formats a 2-argument `publish` directive into a single Podman `--publish` specification string.
-#[must_use]
-fn format_two_arg_publish(first: &str, second: &str) -> String {
-    if first.is_empty() {
-        return second.to_owned();
+/// Validates and formats a 3-argument `publish` directive into `<first>:<second>/<third>`.
+fn format_three_arg_publish(
+    first: &str,
+    second: &str,
+    third: &str,
+    directive: &PslDirective<'_>,
+) -> Result<String, RecipeError> {
+    for candidate in [first, second, third] {
+        if !is_valid_token(candidate) {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::InvalidPublish,
+                directive.line,
+                invalid_publish_token(candidate, directive.name),
+            ));
+        }
     }
-    if second.eq_ignore_ascii_case("TCP") || second.eq_ignore_ascii_case("UDP") {
-        return format!("{first}/{second}");
-    }
-    format!("{first}:{second}")
+    Ok(format!("{first}:{second}/{third}"))
 }
 
-/// Sets `flag` in `seen` or returns a duplicate [`RecipeError`] if already set.
-fn mark_seen(
-    seen: &mut u8,
-    flag: u8,
-    kind: RecipeErrorKind,
-    line: usize,
-    token: &str,
-) -> Result<(), RecipeError> {
+/// Validates and formats a 2-argument `publish` directive into a single Podman `--publish` specification string.
+fn format_two_arg_publish(
+    first: &str,
+    second: &str,
+    directive: &PslDirective<'_>,
+) -> Result<String, RecipeError> {
+    if !(first.is_empty() || is_valid_token(first)) {
+        return Err(RecipeError::with_token(
+            RecipeErrorKind::InvalidPublish,
+            directive.line,
+            first,
+        ));
+    }
+    if !is_valid_token(second) {
+        return Err(RecipeError::with_token(
+            RecipeErrorKind::InvalidPublish,
+            directive.line,
+            invalid_publish_token(second, directive.name),
+        ));
+    }
+    if first.is_empty() {
+        return Ok(second.to_owned());
+    }
+    if second.eq_ignore_ascii_case("TCP") || second.eq_ignore_ascii_case("UDP") {
+        return Ok(format!("{first}/{second}"));
+    }
+    Ok(format!("{first}:{second}"))
+}
+
+/// Returns `candidate` when non-empty, or `fallback` when `candidate` is empty.
+#[must_use]
+const fn invalid_publish_token<'a>(candidate: &'a str, fallback: &'a str) -> &'a str {
+    if candidate.is_empty() {
+        fallback
+    } else {
+        candidate
+    }
+}
+
+/// Identifies the offending argument token in an invalid [`VolumeMount`], falling back to `fallback`.
+#[must_use]
+fn invalid_volume_token<'a>(volume: &'a VolumeMount, fallback: &'a str) -> &'a str {
+    if !volume.host_dir.is_empty() && !is_valid_directory_path(&volume.host_dir) {
+        return &volume.host_dir;
+    }
+    if !volume.container_dir.starts_with('/') || !is_valid_directory_path(&volume.container_dir) {
+        return invalid_publish_token(&volume.container_dir, fallback);
+    }
+    &volume.options
+}
+
+/// Sets `flag` in `seen` for `directive` or returns [`RecipeErrorKind::DuplicateDirective`].
+fn mark_seen(seen: &mut u8, flag: u8, directive: &PslDirective<'_>) -> Result<(), RecipeError> {
     if *seen & flag != 0 {
-        return Err(RecipeError::with_token(kind, line, token));
+        return Err(RecipeError::with_token(
+            RecipeErrorKind::DuplicateDirective,
+            directive.line,
+            directive.name,
+        ));
     }
     *seen |= flag;
     Ok(())
 }
 
 /// Parses and validates a `command <name> { ... }` sub-block inside a `pod` block.
-fn parse_command_block(block: &PslBlock<'_>) -> Result<PodCommand, RecipeError> {
-    if block.arguments.len() != 1 {
+fn parse_command_block(
+    block: &PslBlock<'_>,
+    existing_commands: &BTreeMap<String, PodCommand>,
+) -> Result<PodCommand, RecipeError> {
+    let [argument] = block.arguments.as_slice() else {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidArgumentCount,
             block.line,
             block.name,
         ));
-    }
-    let command_name = block.arguments[0].as_ref();
-    if !is_valid_identifier(command_name) {
+    };
+    let command_name = argument.as_ref();
+    if !is_valid_identifier(command_name) || block.statements.is_empty() {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidCommand,
             block.line,
             command_name,
         ));
     }
-    if block.statements.is_empty() {
+    if existing_commands.contains_key(command_name) {
         return Err(RecipeError::with_token(
-            RecipeErrorKind::InvalidCommand,
+            RecipeErrorKind::DuplicateBlock,
             block.line,
             command_name,
         ));
@@ -637,14 +598,22 @@ fn parse_container_name_arg(block: &PslBlock<'_>) -> Result<String, RecipeError>
         return Ok(String::new());
     };
     let raw_name = raw_arg.as_ref();
-    if raw_name.trim().is_empty() {
+    if raw_name.trim().is_empty() || contains_control_or_bidi(raw_name) {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidContainerName,
             block.line,
             raw_name,
         ));
     }
-    let _ = resolve_container_name_value(raw_name, "pod", 1, block.line)?;
+    let normalized = normalize_name(raw_name);
+    let candidate = normalized.strip_prefix('*').unwrap_or(&normalized);
+    if !is_valid_pod_or_container_name(candidate) {
+        return Err(RecipeError::with_token(
+            RecipeErrorKind::InvalidContainerName,
+            block.line,
+            raw_name,
+        ));
+    }
     Ok(raw_name.to_owned())
 }
 
@@ -693,14 +662,14 @@ fn parse_pod_block(pod: &mut Pod, block: &PslBlock<'_>) -> Result<(), RecipeErro
 
 /// Extracts, normalizes, and validates the `<id>` argument from a `pod <id>` block header.
 fn parse_pod_id_arg(block: &PslBlock<'_>) -> Result<String, RecipeError> {
-    if block.arguments.len() != 1 {
+    let [argument] = block.arguments.as_slice() else {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidArgumentCount,
             block.line,
             block.name,
         ));
-    }
-    let raw_id = block.arguments[0].as_ref();
+    };
+    let raw_id = argument.as_ref();
     if contains_control_or_bidi(raw_id) {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidPodId,
@@ -719,8 +688,12 @@ fn parse_pod_id_arg(block: &PslBlock<'_>) -> Result<String, RecipeError> {
     Ok(normalized)
 }
 
-/// Parses and validates the `pod.name` display name directive.
-fn parse_pod_name_directive(directive: &PslDirective<'_>) -> Result<String, RecipeError> {
+/// Marks `SEEN_POD_NAME` as seen and parses the `pod.name` display name directive.
+fn parse_pod_name_directive(
+    directive: &PslDirective<'_>,
+    seen: &mut u8,
+) -> Result<String, RecipeError> {
+    mark_seen(seen, SEEN_POD_NAME, directive)?;
     let value = parse_single_argument(directive)?;
     let trimmed = value.trim();
     if !is_valid_text(trimmed) {
@@ -733,8 +706,12 @@ fn parse_pod_name_directive(directive: &PslDirective<'_>) -> Result<String, Reci
     Ok(trimmed.to_owned())
 }
 
-/// Parses and validates the `pod.path` directory path directive.
-fn parse_pod_path_directive(directive: &PslDirective<'_>) -> Result<PathBuf, RecipeError> {
+/// Marks `SEEN_POD_PATH` as seen and parses the `pod.path` directory path directive.
+fn parse_pod_path_directive(
+    directive: &PslDirective<'_>,
+    seen: &mut u8,
+) -> Result<PathBuf, RecipeError> {
+    mark_seen(seen, SEEN_POD_PATH, directive)?;
     let value = parse_single_argument(directive)?;
     if !is_valid_directory_path(value) {
         return Err(RecipeError::with_token(
@@ -748,71 +725,49 @@ fn parse_pod_path_directive(directive: &PslDirective<'_>) -> Result<PathBuf, Rec
 
 /// Parses and validates a `publish` directive (`1..=3` arguments) into a `--publish` value string.
 fn parse_publish_directive(directive: &PslDirective<'_>) -> Result<String, RecipeError> {
-    let formatted = match directive.arguments.as_slice() {
+    match directive.arguments.as_slice() {
         [single] => {
             let single = single.as_ref();
             if !is_valid_token(single) {
                 return Err(RecipeError::with_token(
                     RecipeErrorKind::InvalidPublish,
                     directive.line,
-                    directive.name,
+                    invalid_publish_token(single, directive.name),
                 ));
             }
-            single.to_owned()
+            Ok(single.to_owned())
         }
-        [first, second] => {
-            let first = first.as_ref();
-            let second = second.as_ref();
-            if !(first.is_empty() || is_valid_token(first)) || !is_valid_token(second) {
-                return Err(RecipeError::with_token(
-                    RecipeErrorKind::InvalidPublish,
-                    directive.line,
-                    directive.name,
-                ));
-            }
-            format_two_arg_publish(first, second)
-        }
+        [first, second] => format_two_arg_publish(first.as_ref(), second.as_ref(), directive),
         [first, second, third] => {
-            let first = first.as_ref();
-            let second = second.as_ref();
-            let third = third.as_ref();
-            if !is_valid_token(first) || !is_valid_token(second) || !is_valid_token(third) {
-                return Err(RecipeError::with_token(
-                    RecipeErrorKind::InvalidPublish,
-                    directive.line,
-                    directive.name,
-                ));
-            }
-            format!("{first}:{second}/{third}")
+            format_three_arg_publish(first.as_ref(), second.as_ref(), third.as_ref(), directive)
         }
-        _ => {
-            return Err(RecipeError::with_token(
-                RecipeErrorKind::InvalidArgumentCount,
-                directive.line,
-                directive.name,
-            ));
-        }
-    };
-    if !is_valid_token(&formatted) {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::InvalidPublish,
+        _ => Err(RecipeError::with_token(
+            RecipeErrorKind::InvalidArgumentCount,
             directive.line,
-            &formatted,
-        ));
+            directive.name,
+        )),
     }
-    Ok(formatted)
+}
+
+/// Parses and validates a recipe string, attaching a compiler-style diagnostic on failure.
+fn parse_recipe_with_path(input: &str, file_path: &str) -> Result<Recipe, PodError> {
+    let document = parse_psl(input)
+        .map_err(|error| PodError::from(error.with_diagnostic(input, file_path)))?;
+    let recipe = build_recipe(&document)
+        .map_err(|error| PodError::from(error.with_diagnostic(input, file_path)))?;
+    Ok(recipe)
 }
 
 /// Extracts the sole argument of a directive or returns [`RecipeErrorKind::InvalidArgumentCount`].
 fn parse_single_argument<'a>(directive: &'a PslDirective<'a>) -> Result<&'a str, RecipeError> {
-    if directive.arguments.len() != 1 {
+    let [argument] = directive.arguments.as_slice() else {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidArgumentCount,
             directive.line,
             directive.name,
         ));
-    }
-    Ok(directive.arguments[0].as_ref())
+    };
+    Ok(argument.as_ref())
 }
 
 /// Parses a single-argument text directive, rejecting empty strings and control/BiDi characters.
@@ -839,6 +794,28 @@ fn parse_token_directive(
     Ok(value.to_owned())
 }
 
+/// Marks `flag` as seen and parses a single-argument text directive.
+fn parse_unique_text_directive(
+    directive: &PslDirective<'_>,
+    seen: &mut u8,
+    flag: u8,
+    invalid_kind: RecipeErrorKind,
+) -> Result<String, RecipeError> {
+    mark_seen(seen, flag, directive)?;
+    parse_text_directive(directive, invalid_kind)
+}
+
+/// Marks `flag` as seen and parses a single-argument token directive.
+fn parse_unique_token_directive(
+    directive: &PslDirective<'_>,
+    seen: &mut u8,
+    flag: u8,
+    invalid_kind: RecipeErrorKind,
+) -> Result<String, RecipeError> {
+    mark_seen(seen, flag, directive)?;
+    parse_token_directive(directive, invalid_kind)
+}
+
 /// Parses and validates a `volume` directive (`2..=3` arguments) into a [`VolumeMount`].
 fn parse_volume_directive(directive: &PslDirective<'_>) -> Result<VolumeMount, RecipeError> {
     let volume = match directive.arguments.as_slice() {
@@ -861,26 +838,33 @@ fn parse_volume_directive(directive: &PslDirective<'_>) -> Result<VolumeMount, R
         }
     };
     if !is_valid_volume_mount(&volume) {
+        let token = invalid_volume_token(&volume, directive.name);
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidVolume,
             directive.line,
-            directive.name,
+            token,
         ));
     }
     Ok(volume)
+}
+
+/// Creates a [`RecipeError`] at `line` when non-zero, or without a line number when `line == 0`.
+#[must_use]
+fn pod_error_at_line(line: usize, kind: RecipeErrorKind, token: impl AsRef<str>) -> RecipeError {
+    if line == 0 {
+        RecipeError::without_line(kind, token)
+    } else {
+        RecipeError::with_token(kind, line, token)
+    }
 }
 
 /// Reads the `.pod` file at `path`, mapping a missing file to [`RecipeErrorKind::NotFound`].
 fn read_recipe_file(path: &Path) -> Result<String, PodError> {
     match fs::read_file(path) {
         Ok(content) => Ok(content),
-        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-            Err(PodError::from(RecipeError {
-                kind: RecipeErrorKind::NotFound,
-                line: None,
-                token: Some(sanitize_path_token(path)),
-            }))
-        }
+        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Err(PodError::from(
+            RecipeError::without_line(RecipeErrorKind::NotFound, sanitize_path_token(path)),
+        )),
         Err(error) => Err(error),
     }
 }
@@ -891,14 +875,17 @@ fn resolve_by_index(
     index: usize,
     raw_spec: &str,
 ) -> Result<String, RecipeError> {
-    if index == 0 || index > recipe.containers.len() {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::ContainerNotFound,
+    let Some(container) = index
+        .checked_sub(1)
+        .and_then(|zero_based| recipe.containers.get(zero_based))
+    else {
+        return Err(pod_error_at_line(
             recipe.pod.line,
+            RecipeErrorKind::ContainerNotFound,
             raw_spec,
         ));
-    }
-    resolved_container_name(&recipe.containers[index - 1], &recipe.pod.id, index)
+    };
+    resolved_container_name(container, &recipe.pod.id, index)
 }
 
 /// Validates `pod.path` or populates it from `<config.pods.path>/<pod.id>` when omitted.
@@ -906,18 +893,18 @@ fn resolve_pod_path(pod: &mut Pod, config: &Config, file_name: &str) -> Result<(
     let used_fallback = pod.path.as_os_str().is_empty();
     if used_fallback {
         if config.pods.path.as_os_str().is_empty() {
-            return Err(RecipeError::with_token(
-                RecipeErrorKind::MissingPodPath,
+            return Err(pod_error_at_line(
                 pod.line,
+                RecipeErrorKind::MissingPodPath,
                 file_name,
             ));
         }
         pod.path = build_full_path(&config.pods.path, &pod.id, "");
     }
     if !is_valid_directory(&pod.path) {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::InvalidPath,
+        return Err(pod_error_at_line(
             pod.line,
+            RecipeErrorKind::InvalidPath,
             sanitize_path_token(&pod.path),
         ));
     }
@@ -936,7 +923,15 @@ fn resolved_container_name(
     pod_id: &str,
     index: usize,
 ) -> Result<String, RecipeError> {
-    resolve_container_name_value(&container.name, pod_id, index, container.line)
+    let resolved = resolve_container_name_value(&container.name, pod_id, index, container.line)?;
+    if !is_valid_pod_or_container_name(&resolved) {
+        return Err(RecipeError::with_token(
+            RecipeErrorKind::InvalidContainerName,
+            container.line,
+            &resolved,
+        ));
+    }
+    Ok(resolved)
 }
 
 /// Resolves container names, validates each container, and rejects duplicate container names.
@@ -944,10 +939,17 @@ fn validate_and_resolve_containers(
     containers: &mut [Container],
     pod_id: &str,
 ) -> Result<(), RecipeError> {
-    for index in 0..containers.len() {
-        containers[index].ensure_name(pod_id, index + 1)?;
-        containers[index].validate()?;
-        ensure_unique_container_name(containers, index)?;
+    let mut seen_names = BTreeSet::new();
+    for (index, container) in containers.iter_mut().enumerate() {
+        container.ensure_name(pod_id, index + 1)?;
+        container.validate()?;
+        if !seen_names.insert(container.name.clone()) {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::InvalidContainerName,
+                container.line,
+                &container.name,
+            ));
+        }
     }
     Ok(())
 }
@@ -959,33 +961,100 @@ fn validate_load_target(recipes_dir: &Path, recipe_name: &str) -> Result<(), Pod
         .unwrap_or(recipe_name);
     if !is_valid_directory(recipes_dir) || !is_valid_recipe_identifier(stem) {
         let invalid_path = build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION);
-        return Err(PodError::from(RecipeError {
-            kind: RecipeErrorKind::InvalidPath,
-            line: None,
-            token: Some(sanitize_path_token(&invalid_path)),
-        }));
+        return Err(PodError::from(RecipeError::without_line(
+            RecipeErrorKind::InvalidPath,
+            sanitize_path_token(&invalid_path),
+        )));
     }
     Ok(())
 }
 
-/// Validates pod fields (`id`, `name`, `description`, `registry`, `publish`, `options`, and `path`) during [`validate`].
+/// Validates a single [`PodCommand`] entry inside `pod.commands`.
+fn validate_pod_command(
+    key: &str,
+    command: &PodCommand,
+    line: usize,
+) -> Result<(), RecipeError> {
+    if !is_valid_identifier(key) || key != command.name {
+        return Err(pod_error_at_line(
+            line,
+            RecipeErrorKind::InvalidCommand,
+            key,
+        ));
+    }
+    if command.container.is_empty()
+        && command.description.is_empty()
+        && command.execute.is_empty()
+        && command.user.is_none()
+    {
+        return Err(pod_error_at_line(
+            line,
+            RecipeErrorKind::InvalidCommand,
+            key,
+        ));
+    }
+    if !command.container.is_empty() && !is_valid_text(&command.container) {
+        return Err(pod_error_at_line(
+            line,
+            RecipeErrorKind::InvalidCommand,
+            &command.container,
+        ));
+    }
+    if !command.description.is_empty() && !is_valid_text(&command.description) {
+        return Err(pod_error_at_line(
+            line,
+            RecipeErrorKind::InvalidCommand,
+            &command.description,
+        ));
+    }
+    if !command.execute.is_empty() && !is_valid_text(&command.execute) {
+        return Err(pod_error_at_line(
+            line,
+            RecipeErrorKind::InvalidCommand,
+            &command.execute,
+        ));
+    }
+    if let Some(user) = &command.user
+        && !is_valid_token(user)
+    {
+        return Err(pod_error_at_line(
+            line,
+            RecipeErrorKind::InvalidCommand,
+            user,
+        ));
+    }
+    Ok(())
+}
+
+/// Validates all [`PodCommand`] entries in `pod.commands`.
+fn validate_pod_commands(
+    commands: &BTreeMap<String, PodCommand>,
+    line: usize,
+) -> Result<(), RecipeError> {
+    for (key, command) in commands {
+        validate_pod_command(key, command, line)?;
+    }
+    Ok(())
+}
+
+/// Validates pod fields (`id`, `name`, `description`, `registry`, `commands`, `publish`, `options`, and `path`) during [`validate`].
 fn validate_pod_fields(
     pod: &mut Pod,
     config: &Config,
     file_name: &str,
 ) -> Result<(), RecipeError> {
     if contains_control_or_bidi(&pod.id) {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::InvalidPodId,
+        return Err(pod_error_at_line(
             pod.line,
+            RecipeErrorKind::InvalidPodId,
             &pod.id,
         ));
     }
     let normalized_id = normalize_name(&pod.id);
     if !is_valid_pod_or_container_name(&normalized_id) {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::InvalidPodId,
+        return Err(pod_error_at_line(
             pod.line,
+            RecipeErrorKind::InvalidPodId,
             &pod.id,
         ));
     }
@@ -993,9 +1062,9 @@ fn validate_pod_fields(
 
     let trimmed_name = pod.name.trim();
     if !is_valid_text(trimmed_name) {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::MissingPodName,
+        return Err(pod_error_at_line(
             pod.line,
+            RecipeErrorKind::MissingPodName,
             file_name,
         ));
     }
@@ -1004,28 +1073,29 @@ fn validate_pod_fields(
     }
 
     if !pod.description.is_empty() && !is_valid_text(&pod.description) {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::InvalidDescription,
+        return Err(pod_error_at_line(
             pod.line,
+            RecipeErrorKind::InvalidDescription,
             &pod.description,
         ));
     }
 
     if pod.registry.is_empty() {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::MissingPodRegistry,
+        return Err(pod_error_at_line(
             pod.line,
+            RecipeErrorKind::MissingPodRegistry,
             file_name,
         ));
     }
     if !is_valid_token(&pod.registry) {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::InvalidRegistry,
+        return Err(pod_error_at_line(
             pod.line,
+            RecipeErrorKind::InvalidRegistry,
             &pod.registry,
         ));
     }
 
+    validate_pod_commands(&pod.commands, pod.line)?;
     validate_pod_publish(&pod.publish, pod.line)?;
     validate_pod_options(&pod.options, pod.line)?;
     resolve_pod_path(pod, config, file_name)
@@ -1035,9 +1105,9 @@ fn validate_pod_fields(
 fn validate_pod_options(options: &[String], line: usize) -> Result<(), RecipeError> {
     for option in options {
         if !is_valid_text(option) {
-            return Err(RecipeError::with_token(
-                RecipeErrorKind::InvalidOption,
+            return Err(pod_error_at_line(
                 line,
+                RecipeErrorKind::InvalidOption,
                 option,
             ));
         }
@@ -1049,14 +1119,38 @@ fn validate_pod_options(options: &[String], line: usize) -> Result<(), RecipeErr
 fn validate_pod_publish(publish: &[String], line: usize) -> Result<(), RecipeError> {
     for entry in publish {
         if !is_valid_token(entry) {
-            return Err(RecipeError::with_token(
-                RecipeErrorKind::InvalidPublish,
+            return Err(pod_error_at_line(
                 line,
+                RecipeErrorKind::InvalidPublish,
                 entry,
             ));
         }
     }
     Ok(())
+}
+
+/// Validates required pod and container fields, applies default pod paths, and resolves container names.
+fn validate_recipe_inner(
+    recipe: &mut Recipe,
+    config: &Config,
+    file_name: &str,
+) -> Result<(), RecipeError> {
+    if !recipe.has_pod || recipe.pod.id.is_empty() {
+        return Err(pod_error_at_line(
+            recipe.pod.line,
+            RecipeErrorKind::MissingPodBlock,
+            file_name,
+        ));
+    }
+    validate_pod_fields(&mut recipe.pod, config, file_name)?;
+    if recipe.containers.is_empty() {
+        return Err(pod_error_at_line(
+            recipe.pod.line,
+            RecipeErrorKind::MissingContainersBlock,
+            file_name,
+        ));
+    }
+    validate_and_resolve_containers(&mut recipe.containers, &recipe.pod.id)
 }
 
 #[cfg(test)]
@@ -1069,6 +1163,8 @@ mod tests {
 
     use crate::core::config::Config;
     use crate::core::container::VolumeMount;
+    use crate::core::log;
+    use crate::core::pod::PodCommand;
     use crate::error::{PodError, PslErrorKind, RecipeErrorKind};
     use crate::io::system::fs as system_fs;
     use super::{Recipe, load, resolve_container_name, validate};
@@ -1076,7 +1172,11 @@ mod tests {
     fn assert_recipe_error(input: &str, expected_kind: RecipeErrorKind) {
         let error = Recipe::from_str(input).unwrap_err();
         match error {
-            PodError::Recipe(recipe_error) => assert_eq!(recipe_error.kind, expected_kind),
+            PodError::Recipe(recipe_error) => {
+                assert_eq!(recipe_error.kind, expected_kind);
+                let diagnostic = recipe_error.diagnostic.as_ref().unwrap();
+                assert_eq!(diagnostic.file_path, "<input>");
+            }
             other => panic!("expected PodError::Recipe({expected_kind:?}), got {other:?}"),
         }
     }
@@ -1295,135 +1395,6 @@ container {
     }
 
     #[test]
-    fn recipe_validation_rejects_missing_and_invalid_fields() {
-        let mut config_no_pod_path = Config::new();
-        config_no_pod_path.pods.path = PathBuf::new();
-
-        let mut config_with_pod_path = Config::new();
-        config_with_pod_path.pods.path = PathBuf::from("/pods");
-
-        let mut no_pod = Recipe::from_str("container {\n    image alpine:latest\n}\n").unwrap();
-        assert_validate_error(
-            &mut no_pod,
-            &config_with_pod_path,
-            "recipe_002_no_pod",
-            RecipeErrorKind::MissingPodBlock,
-        );
-
-        let mut no_name = Recipe::from_str(
-            "pod test {\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
-        )
-        .unwrap();
-        assert_validate_error(
-            &mut no_name,
-            &config_with_pod_path,
-            "recipe_001_empty",
-            RecipeErrorKind::MissingPodName,
-        );
-
-        let mut no_registry = Recipe::from_str(
-            "pod test {\n    name Test\n}\ncontainer {\n    image alpine:latest\n}\n",
-        )
-        .unwrap();
-        assert_validate_error(
-            &mut no_registry,
-            &config_with_pod_path,
-            "recipe_004_no_registry",
-            RecipeErrorKind::MissingPodRegistry,
-        );
-
-        let mut no_path = Recipe::from_str(
-            "pod nopathpod {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
-        )
-        .unwrap();
-        assert_validate_error(
-            &mut no_path,
-            &config_no_pod_path,
-            "recipe_005_no_path",
-            RecipeErrorKind::MissingPodPath,
-        );
-
-        let mut invalid_description = Recipe::from_str(
-            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
-        )
-        .unwrap();
-        invalid_description.pod.description = String::from("   ");
-        assert_validate_error(
-            &mut invalid_description,
-            &config_with_pod_path,
-            "invalid_description",
-            RecipeErrorKind::InvalidDescription,
-        );
-
-        let mut invalid_publish = Recipe::from_str(
-            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
-        )
-        .unwrap();
-        invalid_publish.pod.publish.push(String::from("-8080:80"));
-        assert_validate_error(
-            &mut invalid_publish,
-            &config_with_pod_path,
-            "invalid_publish",
-            RecipeErrorKind::InvalidPublish,
-        );
-
-        let mut invalid_option = Recipe::from_str(
-            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
-        )
-        .unwrap();
-        invalid_option.pod.options.push(String::from("   "));
-        assert_validate_error(
-            &mut invalid_option,
-            &config_with_pod_path,
-            "invalid_option",
-            RecipeErrorKind::InvalidOption,
-        );
-
-        let mut no_containers =
-            Recipe::from_str("pod nocontainers {\n    name Test\n    registry docker.io\n}\n")
-                .unwrap();
-        assert_validate_error(
-            &mut no_containers,
-            &config_with_pod_path,
-            "recipe_006_no_containers",
-            RecipeErrorKind::MissingContainersBlock,
-        );
-
-        let mut missing_image = Recipe::from_str(
-            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer app {\n    restart never\n}\n",
-        )
-        .unwrap();
-        assert_validate_error(
-            &mut missing_image,
-            &config_with_pod_path,
-            "missing_image",
-            RecipeErrorKind::MissingContainerImage,
-        );
-
-        let mut duplicate_containers = Recipe::from_str(
-            "\
-pod my_pod {
-    name Test
-    registry docker.io
-}
-container my_pod-2 {
-    image alpine:1
-}
-container *2 {
-    image alpine:2
-}
-",
-        )
-        .unwrap();
-        assert_validate_error(
-            &mut duplicate_containers,
-            &config_with_pod_path,
-            "dup_containers",
-            RecipeErrorKind::InvalidContainerName,
-        );
-    }
-
-    #[test]
     fn recipe_parser_rejects_structural_and_security_violations() {
         assert_recipe_error("unknown_block {\n}\n", RecipeErrorKind::UnexpectedBlock);
         assert_recipe_error(
@@ -1489,7 +1460,15 @@ container *2 {
             RecipeErrorKind::InvalidArgumentCount,
         );
         assert_recipe_error(
+            "pod app {\n    publish \"\"\n}\n",
+            RecipeErrorKind::InvalidPublish,
+        );
+        assert_recipe_error(
             "pod app {\n    publish -8080:80\n}\n",
+            RecipeErrorKind::InvalidPublish,
+        );
+        assert_recipe_error(
+            "pod app {\n    publish -8080 80\n}\n",
             RecipeErrorKind::InvalidPublish,
         );
         assert_recipe_error(
@@ -1631,16 +1610,373 @@ container *2 {
             RecipeErrorKind::InvalidVolume,
         );
         assert_recipe_error(
+            "container {\n    volume data /data -bad\n}\n",
+            RecipeErrorKind::InvalidVolume,
+        );
+        assert_recipe_error(
             "container {\n    nested {\n    }\n}\n",
             RecipeErrorKind::UnexpectedBlock,
         );
+
+        let volume_diag_error = Recipe::from_str(
+            "container {\n    volume   data /var/lib/db/data:Z # Mounts 'data' with SELinux label 'Z'\n}\n",
+        )
+        .unwrap_err();
+        match volume_diag_error {
+            PodError::Recipe(recipe_error) => {
+                assert_eq!(recipe_error.kind, RecipeErrorKind::InvalidVolume);
+                assert_eq!(recipe_error.token.as_deref(), Some("/var/lib/db/data:Z"));
+                let diagnostic = recipe_error.diagnostic.as_ref().unwrap();
+                assert_eq!(diagnostic.line_number, 2);
+                assert_eq!(diagnostic.col_number, 19);
+                assert_eq!(
+                    diagnostic.annotation_carets,
+                    "                  ^^^^^^^^^^^^^^^^^^"
+                );
+            }
+            other => panic!("expected InvalidVolume, got {other:?}"),
+        }
 
         let delimiter_error = Recipe::from_str("pod \"app\"{ name Test }\n").unwrap_err();
         match delimiter_error {
             PodError::Psl(psl_error) => {
                 assert_eq!(psl_error.kind, PslErrorKind::InvalidBlockHeader);
+                let diagnostic = psl_error.diagnostic.as_ref().unwrap();
+                assert_eq!(diagnostic.file_path, "<input>");
+                assert_eq!(diagnostic.col_number, 10);
+                assert_eq!(diagnostic.annotation_carets, "         ^");
             }
             other => panic!("expected InvalidBlockHeader, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn recipe_validation_rejects_missing_and_invalid_fields() {
+        let mut config_no_pod_path = Config::new();
+        config_no_pod_path.pods.path = PathBuf::new();
+
+        let mut config_with_pod_path = Config::new();
+        config_with_pod_path.pods.path = PathBuf::from("/pods");
+
+        let mut no_pod = Recipe::from_str("container {\n    image alpine:latest\n}\n").unwrap();
+        assert_validate_error(
+            &mut no_pod,
+            &config_with_pod_path,
+            "recipe_002_no_pod",
+            RecipeErrorKind::MissingPodBlock,
+        );
+        assert_validate_error(
+            &mut no_pod,
+            &config_with_pod_path,
+            "../unsafe_name",
+            RecipeErrorKind::MissingPodBlock,
+        );
+
+        let mut no_name = Recipe::from_str(
+            "pod test {\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        assert_validate_error(
+            &mut no_name,
+            &config_with_pod_path,
+            "recipe_001_empty",
+            RecipeErrorKind::MissingPodName,
+        );
+
+        let mut no_registry = Recipe::from_str(
+            "pod test {\n    name Test\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        assert_validate_error(
+            &mut no_registry,
+            &config_with_pod_path,
+            "recipe_004_no_registry",
+            RecipeErrorKind::MissingPodRegistry,
+        );
+
+        let mut no_path = Recipe::from_str(
+            "pod nopathpod {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        assert_validate_error(
+            &mut no_path,
+            &config_no_pod_path,
+            "recipe_005_no_path",
+            RecipeErrorKind::MissingPodPath,
+        );
+
+        let mut invalid_description = Recipe::from_str(
+            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        invalid_description.pod.description = String::from("   ");
+        assert_validate_error(
+            &mut invalid_description,
+            &config_with_pod_path,
+            "invalid_description",
+            RecipeErrorKind::InvalidDescription,
+        );
+
+        let mut invalid_publish = Recipe::from_str(
+            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        invalid_publish.pod.publish.push(String::from("-8080:80"));
+        assert_validate_error(
+            &mut invalid_publish,
+            &config_with_pod_path,
+            "invalid_publish",
+            RecipeErrorKind::InvalidPublish,
+        );
+
+        let mut invalid_option = Recipe::from_str(
+            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        invalid_option.pod.options.push(String::from("   "));
+        assert_validate_error(
+            &mut invalid_option,
+            &config_with_pod_path,
+            "invalid_option",
+            RecipeErrorKind::InvalidOption,
+        );
+
+        let mut no_containers =
+            Recipe::from_str("pod nocontainers {\n    name Test\n    registry docker.io\n}\n")
+                .unwrap();
+        assert_validate_error(
+            &mut no_containers,
+            &config_with_pod_path,
+            "recipe_006_no_containers",
+            RecipeErrorKind::MissingContainersBlock,
+        );
+
+        let mut missing_image = Recipe::from_str(
+            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer app {\n    restart never\n}\n",
+        )
+        .unwrap();
+        assert_validate_error(
+            &mut missing_image,
+            &config_with_pod_path,
+            "missing_image",
+            RecipeErrorKind::MissingContainerImage,
+        );
+
+        let mut duplicate_containers = Recipe::from_str(
+            "\
+pod my_pod {
+    name Test
+    registry docker.io
+}
+container my_pod-2 {
+    image alpine:1
+}
+container *2 {
+    image alpine:2
+}
+",
+        )
+        .unwrap();
+        assert_validate_error(
+            &mut duplicate_containers,
+            &config_with_pod_path,
+            "dup_containers",
+            RecipeErrorKind::InvalidContainerName,
+        );
+
+        let unvalidated_no_pod =
+            Recipe::from_str("container *f {\n    image alpine:latest\n}\n").unwrap();
+        let resolve_error = unvalidated_no_pod.resolve_container_name("1").unwrap_err();
+        assert_eq!(resolve_error.kind, RecipeErrorKind::ContainerNotFound);
+        assert_eq!(resolve_error.line, None);
+        assert!(!resolve_error.to_string().contains("line 0:"));
+
+        let mut invalid_pod_recipe = unvalidated_no_pod.clone();
+        invalid_pod_recipe.has_pod = true;
+        invalid_pod_recipe.pod.id = String::from("-flag");
+        invalid_pod_recipe.pod.line = 3;
+        let invalid_pod_resolve = invalid_pod_recipe.resolve_container_name("*f").unwrap_err();
+        assert_eq!(invalid_pod_resolve.kind, RecipeErrorKind::ContainerNotFound);
+        assert_eq!(invalid_pod_resolve.line, Some(3));
+
+        let missing_pod_error = no_pod
+            .validate(&config_with_pod_path, "missing_pod")
+            .unwrap_err();
+        match &missing_pod_error {
+            PodError::Recipe(recipe_error) => {
+                assert_eq!(recipe_error.kind, RecipeErrorKind::MissingPodBlock);
+                assert_eq!(recipe_error.line, None);
+            }
+            other => panic!("expected MissingPodBlock, got {other:?}"),
+        }
+        assert!(!missing_pod_error.to_string().contains("line 0:"));
+
+        let mut control_pod_id = Recipe::from_str(
+            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        control_pod_id.pod.id = String::from("bad\x07id");
+        assert_validate_error(
+            &mut control_pod_id,
+            &config_with_pod_path,
+            "control_pod_id",
+            RecipeErrorKind::InvalidPodId,
+        );
+
+        let mut invalid_pod_id = Recipe::from_str(
+            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        invalid_pod_id.pod.id = String::from("-invalid");
+        assert_validate_error(
+            &mut invalid_pod_id,
+            &config_with_pod_path,
+            "invalid_pod_id",
+            RecipeErrorKind::InvalidPodId,
+        );
+
+        let mut invalid_registry = Recipe::from_str(
+            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        invalid_registry.pod.registry = String::from("-bad-registry");
+        assert_validate_error(
+            &mut invalid_registry,
+            &config_with_pod_path,
+            "invalid_registry",
+            RecipeErrorKind::InvalidRegistry,
+        );
+
+        let mut invalid_pod_path = Recipe::from_str(
+            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        invalid_pod_path.pod.path = PathBuf::from("../escape");
+        assert_validate_error(
+            &mut invalid_pod_path,
+            &config_with_pod_path,
+            "invalid_pod_path",
+            RecipeErrorKind::InvalidPath,
+        );
+
+        let base_valid = Recipe::from_str(
+            "pod test {\n    name Test\n    registry docker.io\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+
+        let mut mismatched_command_key = base_valid.clone();
+        let mut valid_command = PodCommand::new();
+        valid_command.name = String::from("migrate");
+        valid_command.execute = String::from("sh migrate.sh");
+        mismatched_command_key
+            .pod
+            .commands
+            .insert(String::from("other"), valid_command.clone());
+        assert_validate_error(
+            &mut mismatched_command_key,
+            &config_with_pod_path,
+            "mismatched_command_key",
+            RecipeErrorKind::InvalidCommand,
+        );
+
+        let mut empty_command = base_valid.clone();
+        let mut blank_command = PodCommand::new();
+        blank_command.name = String::from("migrate");
+        empty_command
+            .pod
+            .commands
+            .insert(String::from("migrate"), blank_command);
+        assert_validate_error(
+            &mut empty_command,
+            &config_with_pod_path,
+            "empty_command",
+            RecipeErrorKind::InvalidCommand,
+        );
+
+        let mut invalid_command_container = base_valid.clone();
+        let mut bad_container_command = valid_command.clone();
+        bad_container_command.container = String::from("   ");
+        invalid_command_container
+            .pod
+            .commands
+            .insert(String::from("migrate"), bad_container_command);
+        assert_validate_error(
+            &mut invalid_command_container,
+            &config_with_pod_path,
+            "invalid_command_container",
+            RecipeErrorKind::InvalidCommand,
+        );
+
+        let mut invalid_command_description = base_valid.clone();
+        let mut bad_description_command = valid_command.clone();
+        bad_description_command.description = String::from("bad\x07desc");
+        invalid_command_description
+            .pod
+            .commands
+            .insert(String::from("migrate"), bad_description_command);
+        assert_validate_error(
+            &mut invalid_command_description,
+            &config_with_pod_path,
+            "invalid_command_description",
+            RecipeErrorKind::InvalidCommand,
+        );
+
+        let mut invalid_command_execute = base_valid.clone();
+        let mut bad_execute_command = valid_command.clone();
+        bad_execute_command.execute = String::from("   ");
+        invalid_command_execute
+            .pod
+            .commands
+            .insert(String::from("migrate"), bad_execute_command);
+        assert_validate_error(
+            &mut invalid_command_execute,
+            &config_with_pod_path,
+            "invalid_command_execute",
+            RecipeErrorKind::InvalidCommand,
+        );
+
+        let mut invalid_command_user = base_valid.clone();
+        let mut bad_user_command = valid_command;
+        bad_user_command.user = Some(String::from("-root"));
+        invalid_command_user
+            .pod
+            .commands
+            .insert(String::from("migrate"), bad_user_command);
+        assert_validate_error(
+            &mut invalid_command_user,
+            &config_with_pod_path,
+            "invalid_command_user",
+            RecipeErrorKind::InvalidCommand,
+        );
+
+        let mut debug_fallback_recipe = base_valid;
+        log::set_debug_enabled(true);
+        let debug_result = debug_fallback_recipe.validate(&config_with_pod_path, "debug_fallback");
+        log::set_debug_enabled(false);
+        debug_result.unwrap();
+        assert_eq!(debug_fallback_recipe.pod.path, PathBuf::from("/pods/test"));
+
+        let temp_dir = env::temp_dir().join(format!("podoxide_validate_diag_{}", process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+        let broken_path = temp_dir.join("broken.pod");
+        system_fs::write_file(
+            &broken_path,
+            "pod broken {\n    name Broken\n}\ncontainer {\n    image alpine:latest\n}\n",
+        )
+        .unwrap();
+        let mut config_temp = Config::new();
+        config_temp.pods.path = PathBuf::from("/pods");
+        config_temp.recipes.path = temp_dir.clone();
+        let mut broken_recipe = Recipe::load(&temp_dir, "broken").unwrap();
+        let broken_error = broken_recipe.validate(&config_temp, "broken").unwrap_err();
+        match broken_error {
+            PodError::Recipe(recipe_error) => {
+                assert_eq!(recipe_error.kind, RecipeErrorKind::MissingPodRegistry);
+                assert!(recipe_error.diagnostic.is_some());
+            }
+            other => panic!("expected MissingPodRegistry with diagnostic, got {other:?}"),
+        }
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

@@ -677,61 +677,69 @@ recipes {
 ";
 
     #[test]
-    fn parse_canonical_pods_conf() {
-        let document = parse_psl(CANONICAL_PODS_CONF).unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(document.blocks.len(), 3);
-
-        let general = &document.blocks[0];
-        assert_eq!(general.name, "general");
-        assert!(general.arguments.is_empty());
-        assert_eq!(general.line, 3);
-        let general_directives: Vec<_> = general.directives().collect();
-        assert_eq!(general_directives.len(), 2);
-        assert_eq!(general_directives[0].name, "editor");
-        assert_eq!(general_directives[0].arguments, vec![Cow::Borrowed("vim")]);
-        assert_eq!(general_directives[0].line, 4);
-        assert_eq!(general_directives[1].name, "simulate");
+    fn enforce_all_resource_limits() {
+        // 1. MAX_FILE_BYTES + 1
+        let oversized = " ".repeat(MAX_FILE_BYTES + 1);
         assert_eq!(
-            general_directives[1].arguments,
-            vec![Cow::Borrowed("false")]
+            parse_psl(&oversized),
+            Err(PslError::new(PslErrorKind::LimitExceeded, 1))
         );
-        assert_eq!(general_directives[1].line, 5);
 
-        let pods = &document.blocks[1];
-        assert_eq!(pods.name, "pods");
-        assert_eq!(pods.line, 8);
-        let pods_directives: Vec<_> = pods.directives().collect();
-        assert_eq!(pods_directives.len(), 1);
-        assert_eq!(pods_directives[0].name, "path");
-        assert_eq!(pods_directives[0].arguments, vec![Cow::Borrowed("/pods")]);
-        assert_eq!(pods_directives[0].line, 9);
+        // 2. MAX_NESTING_DEPTH (8 succeeds, 9 fails)
+        let valid_depth = "b {\n".repeat(MAX_NESTING_DEPTH) + &"}\n".repeat(MAX_NESTING_DEPTH);
+        assert!(parse_psl(&valid_depth).is_ok());
 
-        let recipes = &document.blocks[2];
-        assert_eq!(recipes.name, "recipes");
-        assert_eq!(recipes.line, 12);
-        assert_eq!(recipes.statements.len(), 2);
-        let recipes_directives: Vec<_> = recipes.directives().collect();
-        assert_eq!(recipes_directives.len(), 1);
-        assert_eq!(recipes_directives[0].name, "path");
+        let excessive_depth =
+            "b {\n".repeat(MAX_NESTING_DEPTH + 1) + &"}\n".repeat(MAX_NESTING_DEPTH + 1);
         assert_eq!(
-            recipes_directives[0].arguments,
-            vec![Cow::Borrowed("./recipes")]
+            parse_psl(&excessive_depth),
+            Err(PslError::new(
+                PslErrorKind::LimitExceeded,
+                MAX_NESTING_DEPTH + 1
+            ))
         );
-        assert_eq!(recipes_directives[0].line, 13);
 
-        let recipes_blocks: Vec<_> = recipes.blocks().collect();
-        assert_eq!(recipes_blocks.len(), 1);
-        let groups = recipes_blocks[0];
-        assert_eq!(groups.name, "groups");
-        assert_eq!(groups.line, 15);
-        let group_directives: Vec<_> = groups.directives().collect();
-        assert_eq!(group_directives.len(), 4);
-        assert_eq!(group_directives[1].name, "stack");
+        // 3. MAX_BLOCKS_PER_DOC (256 succeeds, 257 fails)
+        let valid_blocks = "b {}\n".repeat(MAX_BLOCKS_PER_DOC);
+        assert!(parse_psl(&valid_blocks).is_ok());
+
+        let excessive_blocks = "b {}\n".repeat(MAX_BLOCKS_PER_DOC + 1);
         assert_eq!(
-            group_directives[1].arguments,
-            vec![Cow::Borrowed("@database"), Cow::Borrowed("@web")]
+            parse_psl(&excessive_blocks),
+            Err(PslError::new(
+                PslErrorKind::LimitExceeded,
+                MAX_BLOCKS_PER_DOC + 1
+            ))
         );
-        assert_eq!(group_directives[1].line, 17);
+
+        // 4. MAX_STMTS_PER_BLOCK (512 succeeds, 513 fails before scanning 513th statement)
+        let valid_stmts = format!("b {{\n{}}}\n", "k v\n".repeat(MAX_STMTS_PER_BLOCK));
+        assert!(parse_psl(&valid_stmts).is_ok());
+
+        let excessive_stmts = format!(
+            "b {{\n{}123invalid \"unterminated\n}}\n",
+            "k v\n".repeat(MAX_STMTS_PER_BLOCK)
+        );
+        assert_eq!(
+            parse_psl(&excessive_stmts),
+            Err(PslError::new(
+                PslErrorKind::LimitExceeded,
+                MAX_STMTS_PER_BLOCK + 2
+            ))
+        );
+
+        // 5. MAX_ARGS_PER_STMT (64 succeeds, 65 fails before scanning 65th argument)
+        let valid_args = format!("b {{\n    k{}\n}}\n", " a".repeat(MAX_ARGS_PER_STMT));
+        assert!(parse_psl(&valid_args).is_ok());
+
+        let excessive_args = format!(
+            "b {{\n    k{} \"unterminated\n}}\n",
+            " a".repeat(MAX_ARGS_PER_STMT)
+        );
+        assert_eq!(
+            parse_psl(&excessive_args),
+            Err(PslError::new(PslErrorKind::LimitExceeded, 2))
+        );
     }
 
     #[test]
@@ -788,6 +796,64 @@ recipes {
         assert_eq!(app_container.arguments, vec![Cow::Borrowed("*app")]);
         assert_eq!(app_container.line, 27);
         assert_eq!(app_container.directives().count(), 3);
+    }
+
+    #[test]
+    fn parse_canonical_pods_conf() {
+        let document = parse_psl(CANONICAL_PODS_CONF).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(document.blocks.len(), 3);
+
+        let general = &document.blocks[0];
+        assert_eq!(general.name, "general");
+        assert!(general.arguments.is_empty());
+        assert_eq!(general.line, 3);
+        let general_directives: Vec<_> = general.directives().collect();
+        assert_eq!(general_directives.len(), 2);
+        assert_eq!(general_directives[0].name, "editor");
+        assert_eq!(general_directives[0].arguments, vec![Cow::Borrowed("vim")]);
+        assert_eq!(general_directives[0].line, 4);
+        assert_eq!(general_directives[1].name, "simulate");
+        assert_eq!(
+            general_directives[1].arguments,
+            vec![Cow::Borrowed("false")]
+        );
+        assert_eq!(general_directives[1].line, 5);
+
+        let pods = &document.blocks[1];
+        assert_eq!(pods.name, "pods");
+        assert_eq!(pods.line, 8);
+        let pods_directives: Vec<_> = pods.directives().collect();
+        assert_eq!(pods_directives.len(), 1);
+        assert_eq!(pods_directives[0].name, "path");
+        assert_eq!(pods_directives[0].arguments, vec![Cow::Borrowed("/pods")]);
+        assert_eq!(pods_directives[0].line, 9);
+
+        let recipes = &document.blocks[2];
+        assert_eq!(recipes.name, "recipes");
+        assert_eq!(recipes.line, 12);
+        assert_eq!(recipes.statements.len(), 2);
+        let recipes_directives: Vec<_> = recipes.directives().collect();
+        assert_eq!(recipes_directives.len(), 1);
+        assert_eq!(recipes_directives[0].name, "path");
+        assert_eq!(
+            recipes_directives[0].arguments,
+            vec![Cow::Borrowed("./recipes")]
+        );
+        assert_eq!(recipes_directives[0].line, 13);
+
+        let recipes_blocks: Vec<_> = recipes.blocks().collect();
+        assert_eq!(recipes_blocks.len(), 1);
+        let groups = recipes_blocks[0];
+        assert_eq!(groups.name, "groups");
+        assert_eq!(groups.line, 15);
+        let group_directives: Vec<_> = groups.directives().collect();
+        assert_eq!(group_directives.len(), 4);
+        assert_eq!(group_directives[1].name, "stack");
+        assert_eq!(
+            group_directives[1].arguments,
+            vec![Cow::Borrowed("@database"), Cow::Borrowed("@web")]
+        );
+        assert_eq!(group_directives[1].line, 17);
     }
 
     #[test]
@@ -869,24 +935,34 @@ pod_utf8 arg_äöü {
     }
 
     #[test]
-    fn reject_unexpected_root_directive() {
-        let error = parse_psl("editor vim\n").unwrap_err();
+    fn reject_invalid_block_headers() {
         assert_eq!(
-            error,
-            PslError::new(PslErrorKind::UnexpectedRootDirective, 1)
+            parse_psl("general{\n}\n"),
+            Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
+        );
+        assert_eq!(
+            parse_psl("pod app{\n}\n"),
+            Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
+        );
+        assert_eq!(
+            parse_psl("pod \"app\"{\n}\n"),
+            Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
+        );
+        assert_eq!(
+            parse_psl("pod 'app'{\n}\n"),
+            Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
         );
     }
 
     #[test]
-    fn reject_missing_directive_argument() {
-        assert_eq!(
-            parse_psl("general\n"),
-            Err(PslError::new(PslErrorKind::MissingDirectiveArgument, 1))
-        );
-        assert_eq!(
-            parse_psl("general {\n    editor\n}\n"),
-            Err(PslError::new(PslErrorKind::MissingDirectiveArgument, 2))
-        );
+    fn reject_invalid_escape_sequences() {
+        for invalid in ["\"\\x\"", "\"\\a\"", "\"\\0\"", "\"\\'\""] {
+            let input = format!("general {{\n    key {invalid}\n}}\n");
+            assert_eq!(
+                parse_psl(&input),
+                Err(PslError::new(PslErrorKind::InvalidEscapeSequence, 2))
+            );
+        }
     }
 
     #[test]
@@ -914,22 +990,39 @@ pod_utf8 arg_äöü {
     }
 
     #[test]
-    fn reject_invalid_block_headers() {
+    fn reject_missing_directive_argument() {
         assert_eq!(
-            parse_psl("general{\n}\n"),
-            Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
+            parse_psl("general\n"),
+            Err(PslError::new(PslErrorKind::MissingDirectiveArgument, 1))
         );
         assert_eq!(
-            parse_psl("pod app{\n}\n"),
-            Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
+            parse_psl("general {\n    editor\n}\n"),
+            Err(PslError::new(PslErrorKind::MissingDirectiveArgument, 2))
+        );
+    }
+
+    #[test]
+    fn reject_unclosed_block_and_unexpected_closing_brace() {
+        assert_eq!(
+            parse_psl("general {\n    editor vim\n"),
+            Err(PslError::new(PslErrorKind::UnclosedBlock, 3))
         );
         assert_eq!(
-            parse_psl("pod \"app\"{\n}\n"),
-            Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
+            parse_psl("}\n"),
+            Err(PslError::new(PslErrorKind::UnexpectedClosingBrace, 1))
         );
         assert_eq!(
-            parse_psl("pod 'app'{\n}\n"),
-            Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
+            parse_psl("general {}\n}\n"),
+            Err(PslError::new(PslErrorKind::UnexpectedClosingBrace, 2))
+        );
+    }
+
+    #[test]
+    fn reject_unexpected_root_directive() {
+        let error = parse_psl("editor vim\n").unwrap_err();
+        assert_eq!(
+            error,
+            PslError::new(PslErrorKind::UnexpectedRootDirective, 1)
         );
     }
 
@@ -1009,22 +1102,6 @@ pod_utf8 arg_äöü {
     }
 
     #[test]
-    fn reject_unclosed_block_and_unexpected_closing_brace() {
-        assert_eq!(
-            parse_psl("general {\n    editor vim\n"),
-            Err(PslError::new(PslErrorKind::UnclosedBlock, 3))
-        );
-        assert_eq!(
-            parse_psl("}\n"),
-            Err(PslError::new(PslErrorKind::UnexpectedClosingBrace, 1))
-        );
-        assert_eq!(
-            parse_psl("general {}\n}\n"),
-            Err(PslError::new(PslErrorKind::UnexpectedClosingBrace, 2))
-        );
-    }
-
-    #[test]
     fn reject_unterminated_strings() {
         assert_eq!(
             parse_psl("general {\n    key \"unclosed\n}\n"),
@@ -1045,83 +1122,6 @@ pod_utf8 arg_äöü {
         assert_eq!(
             parse_psl("general {\n    key \"trailing\\\n\"\n}\n"),
             Err(PslError::new(PslErrorKind::UnterminatedString, 2))
-        );
-    }
-
-    #[test]
-    fn reject_invalid_escape_sequences() {
-        for invalid in ["\"\\x\"", "\"\\a\"", "\"\\0\"", "\"\\'\""] {
-            let input = format!("general {{\n    key {invalid}\n}}\n");
-            assert_eq!(
-                parse_psl(&input),
-                Err(PslError::new(PslErrorKind::InvalidEscapeSequence, 2))
-            );
-        }
-    }
-
-    #[test]
-    fn enforce_all_resource_limits() {
-        // 1. MAX_FILE_BYTES + 1
-        let oversized = " ".repeat(MAX_FILE_BYTES + 1);
-        assert_eq!(
-            parse_psl(&oversized),
-            Err(PslError::new(PslErrorKind::LimitExceeded, 1))
-        );
-
-        // 2. MAX_NESTING_DEPTH (8 succeeds, 9 fails)
-        let valid_depth = "b {\n".repeat(MAX_NESTING_DEPTH) + &"}\n".repeat(MAX_NESTING_DEPTH);
-        assert!(parse_psl(&valid_depth).is_ok());
-
-        let excessive_depth =
-            "b {\n".repeat(MAX_NESTING_DEPTH + 1) + &"}\n".repeat(MAX_NESTING_DEPTH + 1);
-        assert_eq!(
-            parse_psl(&excessive_depth),
-            Err(PslError::new(
-                PslErrorKind::LimitExceeded,
-                MAX_NESTING_DEPTH + 1
-            ))
-        );
-
-        // 3. MAX_BLOCKS_PER_DOC (256 succeeds, 257 fails)
-        let valid_blocks = "b {}\n".repeat(MAX_BLOCKS_PER_DOC);
-        assert!(parse_psl(&valid_blocks).is_ok());
-
-        let excessive_blocks = "b {}\n".repeat(MAX_BLOCKS_PER_DOC + 1);
-        assert_eq!(
-            parse_psl(&excessive_blocks),
-            Err(PslError::new(
-                PslErrorKind::LimitExceeded,
-                MAX_BLOCKS_PER_DOC + 1
-            ))
-        );
-
-        // 4. MAX_STMTS_PER_BLOCK (512 succeeds, 513 fails before scanning 513th statement)
-        let valid_stmts = format!("b {{\n{}}}\n", "k v\n".repeat(MAX_STMTS_PER_BLOCK));
-        assert!(parse_psl(&valid_stmts).is_ok());
-
-        let excessive_stmts = format!(
-            "b {{\n{}123invalid \"unterminated\n}}\n",
-            "k v\n".repeat(MAX_STMTS_PER_BLOCK)
-        );
-        assert_eq!(
-            parse_psl(&excessive_stmts),
-            Err(PslError::new(
-                PslErrorKind::LimitExceeded,
-                MAX_STMTS_PER_BLOCK + 2
-            ))
-        );
-
-        // 5. MAX_ARGS_PER_STMT (64 succeeds, 65 fails before scanning 65th argument)
-        let valid_args = format!("b {{\n    k{}\n}}\n", " a".repeat(MAX_ARGS_PER_STMT));
-        assert!(parse_psl(&valid_args).is_ok());
-
-        let excessive_args = format!(
-            "b {{\n    k{} \"unterminated\n}}\n",
-            " a".repeat(MAX_ARGS_PER_STMT)
-        );
-        assert_eq!(
-            parse_psl(&excessive_args),
-            Err(PslError::new(PslErrorKind::LimitExceeded, 2))
         );
     }
 }

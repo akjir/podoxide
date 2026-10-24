@@ -110,9 +110,7 @@ impl FromStr for Config {
     type Err = PodError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
-        let document = parse_psl(input)?;
-        let config = build_config(&document)?;
-        Ok(config)
+        parse_config_with_path(input, "<input>")
     }
 }
 
@@ -209,7 +207,8 @@ pub fn has_recipe(config: &Config, recipe_name: &str) -> bool {
 pub fn load(path: &Path) -> Result<Config, PodError> {
     let config_name = validate_load_path(path)?;
     let content = read_config_file(path)?;
-    let mut config = Config::from_str(&content)?;
+    let display_path = sanitize_path_token(path);
+    let mut config = parse_config_with_path(&content, &display_path)?;
     config.name = config_name.to_owned();
     config.path = path.to_path_buf();
     Ok(config)
@@ -600,6 +599,15 @@ fn parse_bool_directive(directive: &PslDirective<'_>) -> Result<bool, ConfigErro
     }
 }
 
+/// Parses and validates a configuration string, attaching a compiler-style diagnostic on failure.
+fn parse_config_with_path(input: &str, file_path: &str) -> Result<Config, PodError> {
+    let document = parse_psl(input)
+        .map_err(|error| PodError::from(error.with_diagnostic(input, file_path)))?;
+    let config = build_config(&document)
+        .map_err(|error| PodError::from(error.with_diagnostic(input, file_path)))?;
+    Ok(config)
+}
+
 /// Parses and validates the `general.editor` directive argument.
 fn parse_editor_directive(directive: &PslDirective<'_>) -> Result<String, ConfigError> {
     let value = parse_single_argument(directive)?;
@@ -795,7 +803,11 @@ mod tests {
     fn assert_config_error(input: &str, expected_kind: ConfigErrorKind) {
         let error = Config::from_str(input).unwrap_err();
         match error {
-            PodError::Config(config_error) => assert_eq!(config_error.kind, expected_kind),
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, expected_kind);
+                let diagnostic = config_error.diagnostic.as_ref().unwrap();
+                assert_eq!(diagnostic.file_path, "<input>");
+            }
             other => panic!("expected PodError::Config({expected_kind:?}), got {other:?}"),
         }
     }
@@ -1380,6 +1392,10 @@ recipes {
         match syntax_error {
             PodError::Psl(psl_error) => {
                 assert_eq!(psl_error.kind, PslErrorKind::UnexpectedRootDirective);
+                let diagnostic = psl_error.diagnostic.as_ref().unwrap();
+                assert_eq!(diagnostic.file_path, "<input>");
+                assert_eq!(diagnostic.col_number, 1);
+                assert_eq!(diagnostic.annotation_carets, "^^^^^^");
             }
             other => panic!("expected PodError::Psl, got {other:?}"),
         }

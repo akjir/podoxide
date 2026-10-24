@@ -40,7 +40,7 @@ where
     match run(arguments) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            log::error(&error.to_string());
+            log::pod_error(&error);
             ExitCode::FAILURE
         }
     }

@@ -126,7 +126,7 @@ podoxide/
 | `.pods-completion.bash` | Provides Bash autocompletion for all CLI modes, actions, and flags. |
 | `src/main.rs`           | Serves as the binary entry point (`pods`), delegates execution to `podoxide`, and returns `ExitCode`. |
 | `src/lib.rs`            | Serves as the library root, enforces `#![forbid(unsafe_code)]`, and exports `core`, `error`, `io`, and `utilities`. |
-| `src/error.rs`          | Defines the central `CliError`, `ConfigError`, `PodError`, `PslError`, `RecipeError`, and `SystemError` domain error types and implements `Error` and `Display`. |
+| `src/error.rs`          | Defines the central `CliError`, `ConfigError`, `DiagnosticError`, `PodError`, `PslError`, `RecipeError`, and `SystemError` domain error types, `build_caret_annotation`, and implements `Error` and `Display`. |
 
 ## Core Domain (`src/core/`)
 
@@ -139,7 +139,7 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/config.rs`    | Defines the configuration model (`pods.conf`), collects active recipes, checks recipe membership, and expands `@group` targets. |
 | `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and builds Podman commands. |
 | `src/core/context.rs`   | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
-| `src/core/log.rs`       | Provides structured output and diagnostic logging (`debug`, `info`, `warning`, `error`) with debug state control. |
+| `src/core/log.rs`       | Provides structured output and diagnostic logging (`debug`, `info`, `pod_error`, `print`, `write_*`) with debug state control. |
 | `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`) across containers. |
 | `src/core/recipe.rs`    | Defines the `.pod` recipe model, validates pod and container definitions, and resolves target container specifications (`<recipe>/<spec>`). |
 

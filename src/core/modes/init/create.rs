@@ -158,13 +158,6 @@ mod tests {
         ensure_target_creatable, handle,
     };
 
-    fn create_temp_test_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!("podoxide_init_test_{}_{suffix}", process::id()));
-        let _ = std_fs::remove_dir_all(&dir);
-        std_fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn create_files_warns_on_existing_files_and_rejects_directories() {
         let temp_dir = create_temp_test_dir("existing");
@@ -282,6 +275,13 @@ mod tests {
         assert_eq!(parsed_recipe.blocks[2].name, "container");
 
         let _ = std_fs::remove_dir_all(&temp_dir);
+    }
+
+    fn create_temp_test_dir(suffix: &str) -> PathBuf {
+        let dir = env::temp_dir().join(format!("podoxide_init_test_{}_{suffix}", process::id()));
+        let _ = std_fs::remove_dir_all(&dir);
+        std_fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]

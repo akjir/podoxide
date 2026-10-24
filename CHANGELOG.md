@@ -19,6 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added PSL recipe loading, pod and container domain models, semantic validation, and container target resolution.
 - Added Podman pod and container lifecycle execution (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`, `pull`, and `update`), volume mount formatting, and shell-escaped `--simulate` command rendering.
 - Added configuration target expansion (`@group` and `<recipe>`) with first-appearance deduplication and wired CLI lifecycle handlers (`create`, `down`, `reload`, `remove`, `restart`, `start`, `stop`, `up`, `update`, and `image update`).
+- Added Rust-compiler-style (`rustc`) diagnostic error output (`--> file:line:col`, line gutter, caret span annotations, and `= help:` hints) for PSL syntax, configuration (`pods.conf`), and recipe (`*.pod`) errors.
 
 ### Changed
 

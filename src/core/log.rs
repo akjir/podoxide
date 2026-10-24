@@ -15,25 +15,25 @@
 
 //! Structured output and diagnostic logging for Podoxide.
 
+use std::cell::Cell;
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::error::PodError;
 use crate::utilities::string::{clamp_utf8_prefix, sanitize_char};
 
-static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
 /// Maximum payload bytes written per diagnostic or output line.
 pub const MAX_LOG_MESSAGE_BYTES: usize = 4096;
+
+thread_local! {
+    /// Thread-local flag controlling whether `DEBUG:` messages are emitted.
+    static DEBUG_ENABLED: Cell<bool> = const { Cell::new(false) };
+}
 
 /// Writes a debug diagnostic message (`DEBUG: <message>`) to standard error when debug mode is enabled.
 pub fn debug(message: &str) {
     if is_debug_enabled() {
-        write_debug(&mut io::stderr().lock(), message);
+        write_line(&mut io::stderr().lock(), "DEBUG: ", message);
     }
-}
-
-/// Writes an error diagnostic message (`ERROR: <message>`) to standard error.
-pub fn error(message: &str) {
-    write_error(&mut io::stderr().lock(), message);
 }
 
 /// Writes an informational diagnostic message (`INFO: <message>`) to standard error.
@@ -45,7 +45,12 @@ pub fn info(message: &str) {
 #[inline]
 #[must_use]
 pub fn is_debug_enabled() -> bool {
-    DEBUG_ENABLED.load(Ordering::Acquire)
+    DEBUG_ENABLED.get()
+}
+
+/// Writes a structured [`PodError`] (including any multi-line compiler diagnostic) to standard error.
+pub fn pod_error(error: &PodError) {
+    write_pod_error(&mut io::stderr().lock(), error);
 }
 
 /// Writes a standard output line (`<message>`) to standard output.
@@ -55,7 +60,7 @@ pub fn print(message: &str) {
 
 /// Enables or disables verbose debug logging.
 pub fn set_debug_enabled(enabled: bool) {
-    DEBUG_ENABLED.store(enabled, Ordering::Release);
+    DEBUG_ENABLED.set(enabled);
 }
 
 /// Writes a debug diagnostic message (`DEBUG: <message>`) to `writer` when debug mode is enabled.
@@ -73,6 +78,22 @@ pub fn write_error<W: Write>(writer: &mut W, message: &str) {
 /// Writes an informational diagnostic message (`INFO: <message>`) to the provided output stream.
 pub fn write_info<W: Write>(writer: &mut W, message: &str) {
     write_line(writer, "INFO: ", message);
+}
+
+/// Writes a structured [`PodError`] (including any multi-line compiler diagnostic) to `writer`.
+pub fn write_pod_error<W: Write>(writer: &mut W, error: &PodError) {
+    let rendered = error.to_string();
+    if error.diagnostic().is_none() {
+        write_error(writer, &rendered);
+        return;
+    }
+    let mut lines = rendered.lines();
+    if let Some(header) = lines.next() {
+        write_line(writer, "ERROR: ", header);
+    }
+    for body_line in lines {
+        write_line(writer, "", body_line);
+    }
 }
 
 /// Writes a standard output line (`<message>`) to the provided output stream.
@@ -100,10 +121,13 @@ fn write_line<W: Write>(writer: &mut W, prefix: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};
+    use std::thread;
 
+    use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
     use super::{
-        MAX_LOG_MESSAGE_BYTES, debug, error, info, is_debug_enabled, print, set_debug_enabled,
-        write_debug, write_error, write_info, write_print, write_warning,
+        MAX_LOG_MESSAGE_BYTES, debug, info, is_debug_enabled, pod_error, print,
+        set_debug_enabled, write_debug, write_error, write_info, write_pod_error, write_print,
+        write_warning,
     };
 
     struct FailingWriter;
@@ -150,6 +174,32 @@ mod tests {
     }
 
     #[test]
+    fn thread_local_debug_state_isolation() {
+        set_debug_enabled(false);
+        assert!(!is_debug_enabled());
+
+        let spawned_state = thread::spawn(|| {
+            assert!(!is_debug_enabled());
+            set_debug_enabled(true);
+            is_debug_enabled()
+        })
+        .join()
+        .unwrap();
+
+        assert!(spawned_state);
+        assert!(!is_debug_enabled());
+
+        set_debug_enabled(true);
+        assert!(is_debug_enabled());
+
+        let child_inherits_false = thread::spawn(is_debug_enabled).join().unwrap();
+        assert!(!child_inherits_false);
+
+        set_debug_enabled(false);
+        assert!(!is_debug_enabled());
+    }
+
+    #[test]
     fn write_and_stderr_logging_levels_and_debug_toggle() {
         let mut buffer = Vec::new();
 
@@ -178,9 +228,41 @@ mod tests {
         assert!(output.contains("ERROR: Podman 5.8.0 or higher is required.\n"));
         assert!(output.contains("Podoxide v0.1.0\n"));
 
+        let mut diagnostic_buffer = Vec::new();
+        let recipe_error = RecipeError::with_token(
+            RecipeErrorKind::InvalidVolume,
+            28,
+            "/var/lib/db/data:Z",
+        )
+        .with_diagnostic(
+            &format!(
+                "{}    volume   data /var/lib/db/data:Z # Mounts 'data' with SELinux label 'Z'\n",
+                "\n".repeat(27)
+            ),
+            "./recipe.pod",
+        );
+        let pod_error_value = PodError::from(recipe_error);
+        write_pod_error(&mut diagnostic_buffer, &pod_error_value);
+        let diagnostic_output = String::from_utf8(diagnostic_buffer).unwrap();
+        assert!(diagnostic_output.starts_with(
+            "ERROR: Recipe error: line 28: invalid volume mount in recipe: '/var/lib/db/data:Z'\n"
+        ));
+        assert!(diagnostic_output.contains(" --> ./recipe.pod:28:19\n"));
+        assert!(diagnostic_output.contains("28 |     volume   data /var/lib/db/data:Z"));
+        assert!(diagnostic_output.contains("   |                   ^^^^^^^^^^^^^^^^^^"));
+        assert!(diagnostic_output.contains("= help: pass volume options"));
+
+        let mut plain_buffer = Vec::new();
+        let plain_error =
+            PodError::from(CliError::with_argument(CliErrorKind::UnknownFlag, "--bad"));
+        write_pod_error(&mut plain_buffer, &plain_error);
+        let plain_output = String::from_utf8(plain_buffer).unwrap();
+        assert_eq!(plain_output.lines().count(), 1);
+        assert!(plain_output.starts_with("ERROR: CLI error:"));
+
         debug("test stderr debug output");
         info("test stderr info output");
-        error("test stderr error output");
+        pod_error(&plain_error);
         print("test stdout print output");
 
         set_debug_enabled(false);
