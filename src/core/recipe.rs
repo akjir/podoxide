@@ -1214,6 +1214,27 @@ mod tests {
             vec![String::from("--userns=keep-id")]
         );
 
+        assert_eq!(root_recipe.pod.commands.len(), 3);
+        let backup_command = root_recipe.pod.commands.get("backup").unwrap();
+        assert_eq!(backup_command.name, "backup");
+        assert_eq!(backup_command.description, "Create a database backup.");
+        assert_eq!(backup_command.container, "*db");
+        assert_eq!(backup_command.user.as_deref(), Some("dbuser"));
+        assert_eq!(
+            backup_command.execute,
+            "db-dump -U dbuser -d app -f /var/lib/db/data/backup.sql"
+        );
+
+        let clear_cache_command = root_recipe.pod.commands.get("clear_cache").unwrap();
+        assert_eq!(clear_cache_command.name, "clear_cache");
+        assert_eq!(
+            clear_cache_command.description,
+            "Clear the web application cache."
+        );
+        assert_eq!(clear_cache_command.container, "*app");
+        assert_eq!(clear_cache_command.user, None);
+        assert_eq!(clear_cache_command.execute, "app-cli cache:clear");
+
         let migrate_command = root_recipe.pod.commands.get("migrate").unwrap();
         assert_eq!(migrate_command.name, "migrate");
         assert_eq!(migrate_command.description, "Run database migrations.");

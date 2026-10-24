@@ -11,7 +11,20 @@ pod example-stack {
     publish     8080 80 TCP
     option      --userns=keep-id
 
-    # Maintenance command executed inside the database container
+    # Maintenance commands executed inside the pod's containers
+    command backup {
+        description "Create a database backup."
+        container   *db
+        user        dbuser
+        execute     "db-dump -U dbuser -d app -f /var/lib/db/data/backup.sql"
+    }
+
+    command clear_cache {
+        description "Clear the web application cache."
+        container   *app
+        execute     "app-cli cache:clear"
+    }
+
     command migrate {
         description "Run database migrations."
         container   *db

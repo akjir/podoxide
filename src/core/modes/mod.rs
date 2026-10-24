@@ -94,6 +94,8 @@ mod tests {
             &["command", "help"],
             &["command", "list", "recipe"],
             &["command", "exec", "recipe", "migrate"],
+            &["cmd", "recipe"],
+            &["cmd", "recipe", "1"],
             &["config", "help"],
             &["config", "edit"],
             &["config", "show"],
@@ -192,7 +194,11 @@ mod tests {
             context.config = root_config.clone();
             context.mode = mode;
             context.action = action;
-            context.parameters = vec![String::from("recipe")];
+            context.parameters = if action == ModeAction::Command(CommandAction::Exec) {
+                vec![String::from("recipe"), String::from("migrate")]
+            } else {
+                vec![String::from("recipe")]
+            };
             assert!(dispatch_mode(&context).is_ok());
         }
     }
