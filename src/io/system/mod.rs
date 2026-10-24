@@ -23,6 +23,6 @@ pub use self::env::{
     runs_elevated,
 };
 pub use self::fs::{
-    MAX_DIRECTORY_ENTRIES, directory_exists, file_exists, get_absolute_path, list_directory,
-    read_file, write_file,
+    MAX_DIRECTORY_ENTRIES, directory_exists, ensure_writable_target, file_exists,
+    get_absolute_path, list_directory, read_file, write_file,
 };

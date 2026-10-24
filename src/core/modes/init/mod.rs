@@ -50,3 +50,43 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::core::context::{Context, DefaultAction, InitAction, Mode, ModeAction};
+    use crate::error::{CliErrorKind, PodError};
+    use super::handle;
+
+    #[test]
+    fn handle_routes_init_actions_and_rejects_mismatched_action() {
+        let mut help_context = Context::new();
+        help_context.mode = Mode::Init;
+        help_context.action = ModeAction::Init(InitAction::Help);
+        assert!(handle(&help_context).is_ok());
+
+        let mut flag_help_context = Context::new();
+        flag_help_context.mode = Mode::Init;
+        flag_help_context.action = ModeAction::Init(InitAction::Create);
+        flag_help_context.flags.help = true;
+        assert!(handle(&flag_help_context).is_ok());
+
+        let mut create_context = Context::new();
+        create_context.mode = Mode::Init;
+        create_context.action = ModeAction::Init(InitAction::Create);
+        let create_err = handle(&create_context).unwrap_err();
+        assert!(
+            create_err
+                .to_string()
+                .contains("File './recipe.pod' already exists!")
+        );
+
+        let mut invalid_context = Context::new();
+        invalid_context.mode = Mode::Init;
+        invalid_context.action = ModeAction::Default(DefaultAction::Help);
+        let error = handle(&invalid_context).unwrap_err();
+        match error {
+            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::UnknownAction),
+            other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
+        }
+    }
+}

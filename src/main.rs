@@ -151,7 +151,8 @@ mod tests {
         assert_eq!(execute(["cfg", "show"]), ExitCode::SUCCESS);
         assert_eq!(execute(["con", "example-app"]), ExitCode::SUCCESS);
         assert_eq!(execute(["img", "prune"]), ExitCode::SUCCESS);
-        assert_eq!(execute(["init"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["init", "help"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["init"]), ExitCode::FAILURE);
         assert_eq!(execute(["log", "example-app"]), ExitCode::SUCCESS);
         assert_eq!(execute(["rec", "list"]), ExitCode::SUCCESS);
 

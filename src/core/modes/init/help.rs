@@ -15,7 +15,10 @@
 
 //! Handler for `pods init help`.
 
+use std::io::{self, Write};
+
 use crate::core::context::Context;
+use crate::core::log;
 use crate::error::PodError;
 
 /// Formats and outputs the CLI help text for `pods init`.
@@ -24,12 +27,53 @@ use crate::error::PodError;
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
 /// 2. Output the version header, `pods init` usage synopsis, options (`--config`, `--debug`),
-///    and actions (`help`) via `log::print`.
+///    and actions (`help`) via [`log::write_print`].
 ///
 /// # Errors
 ///
 /// Returns `Ok(())` after writing the help output.
 pub fn handle(_context: &Context) -> Result<(), PodError> {
-    // Step 1: Format and print the init mode help text without reading any files.
+    write_help(&mut io::stdout().lock());
     Ok(())
+}
+
+/// Writes the `pods init` help text to `writer`.
+fn write_help<W: Write>(writer: &mut W) {
+    log::write_print(writer, concat!("Podoxide v", env!("CARGO_PKG_VERSION")));
+    log::write_print(writer, "");
+    log::write_print(writer, "Usage: pods init [OPTIONS]");
+    log::write_print(writer, "");
+    log::write_print(writer, "OPTIONS:");
+    log::write_print(
+        writer,
+        "  --config=NAME      use config with given name or path",
+    );
+    log::write_print(writer, "  --debug            enable debug output");
+    log::write_print(writer, "");
+    log::write_print(writer, "ACTIONS:");
+    log::write_print(writer, "  help               display this help and exit");
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::context::Context;
+    use super::{handle, write_help};
+
+    #[test]
+    fn write_help_and_handle_output_init_usage() {
+        let mut buffer = Vec::new();
+        write_help(&mut buffer);
+        let output = String::from_utf8(buffer).unwrap();
+
+        assert!(output.contains(concat!("Podoxide v", env!("CARGO_PKG_VERSION"))));
+        assert!(output.contains("Usage: pods init [OPTIONS]\n"));
+        assert!(output.contains("OPTIONS:\n"));
+        assert!(output.contains("  --config=NAME      use config with given name or path\n"));
+        assert!(output.contains("  --debug            enable debug output\n"));
+        assert!(output.contains("ACTIONS:\n"));
+        assert!(output.contains("  help               display this help and exit\n"));
+
+        let context = Context::new();
+        assert!(handle(&context).is_ok());
+    }
 }
