@@ -19,14 +19,13 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-use crate::core::container::{self, append_option_tokens};
+use crate::core::container;
 use crate::core::log;
 use crate::core::recipe::Recipe;
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::command::{self, ExecOptions};
-use crate::utilities::string::{
-    contains_control_or_whitespace, is_bidi_control, is_valid_pod_or_container_name,
-};
+use crate::utilities::collection::append_option_tokens;
+use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_text, is_valid_token};
 
 const BASE_POD_CREATE_ARG_COUNT: usize = 4;
 
@@ -71,12 +70,6 @@ impl Pod {
     #[must_use]
     pub fn build_remove_args(&self) -> Vec<String> {
         vec![String::from("pod"), String::from("rm"), self.id.clone()]
-    }
-
-    /// Builds the `podman pod start` argument vector for this pod.
-    #[must_use]
-    pub fn build_start_args(&self) -> Vec<String> {
-        vec![String::from("pod"), String::from("start"), self.id.clone()]
     }
 
     /// Builds the `podman pod stop` argument vector for this pod.
@@ -148,44 +141,6 @@ impl Pod {
         validate_pod_id(self)?;
         let arguments = self.build_remove_args();
         let prefix = format!("Remove pod '{}' ('{}'): ", self.name, self.id);
-        command::exec_with(
-            "podman",
-            &arguments,
-            &ExecOptions {
-                interactive: false,
-                prefix: &prefix,
-                simulate,
-            },
-            stdout,
-            stderr,
-        )
-    }
-
-    /// Starts this pod in Podman (`podman pod start`).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PodError`] if Podman execution fails.
-    pub fn start(&self, simulate: bool) -> Result<(), PodError> {
-        let mut stdout = io::stdout();
-        let mut stderr = io::stderr();
-        self.start_with(simulate, &mut stdout, &mut stderr)
-    }
-
-    /// Starts this pod in Podman (`podman pod start`), writing command output to `stdout` and `stderr`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PodError`] if pod validation, stream writing, or Podman execution fails.
-    pub fn start_with<W: Write, E: Write>(
-        &self,
-        simulate: bool,
-        stdout: &mut W,
-        stderr: &mut E,
-    ) -> Result<(), PodError> {
-        validate_pod_id(self)?;
-        let arguments = self.build_start_args();
-        let prefix = format!("Start pod '{}' ('{}'): ", self.name, self.id);
         command::exec_with(
             "podman",
             &arguments,
@@ -344,7 +299,7 @@ pub fn pull_with<W: Write, E: Write>(
     Ok(())
 }
 
-/// Stops, removes, recreates, and starts `recipe.pod` and its containers (`down` + `up`).
+/// Stops and removes `recipe.containers` and `recipe.pod`, then recreates `recipe.pod` and creates and starts `recipe.containers` (`down` + `up`).
 ///
 /// # Errors
 ///
@@ -355,7 +310,7 @@ pub fn reload(recipe: &Recipe, simulate: bool) -> Result<(), PodError> {
     reload_with(recipe, simulate, &mut stdout, &mut stderr)
 }
 
-/// Stops, removes, recreates, and starts `recipe.pod` and its containers, writing output to `stdout` and `stderr`.
+/// Stops and removes `recipe.containers` and `recipe.pod`, then recreates `recipe.pod` and creates and starts `recipe.containers`, writing output to `stdout` and `stderr`.
 ///
 /// # Errors
 ///
@@ -398,18 +353,18 @@ pub fn remove_with<W: Write, E: Write>(
     recipe.pod.remove_with(simulate, stdout, stderr)
 }
 
-/// Stops and restarts `recipe.pod` and its containers in place (`stop` + `start`).
+/// Stops `recipe.containers` and `recipe.pod` and starts `recipe.containers` in place (`stop` + `start`).
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if stopping or starting the pod or its containers fails.
+/// Returns [`PodError`] if stopping the containers or pod or starting the containers fails.
 pub fn restart(recipe: &Recipe, simulate: bool) -> Result<(), PodError> {
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     restart_with(recipe, simulate, &mut stdout, &mut stderr)
 }
 
-/// Stops and restarts `recipe.pod` and its containers in place, writing output to `stdout` and `stderr`.
+/// Stops `recipe.containers` and `recipe.pod` and starts `recipe.containers` in place, writing output to `stdout` and `stderr`.
 ///
 /// # Errors
 ///
@@ -424,29 +379,29 @@ pub fn restart_with<W: Write, E: Write>(
     start_with(recipe, simulate, stdout, stderr)
 }
 
-/// Starts `recipe.pod` (`podman pod start`) and all `recipe.containers` (`podman start`) in `1..N` order.
+/// Starts all `recipe.containers` (`podman start`) in `1..N` order.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if starting the pod or any container fails.
+/// Returns [`PodError`] if pod validation or starting any container fails.
 pub fn start(recipe: &Recipe, simulate: bool) -> Result<(), PodError> {
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     start_with(recipe, simulate, &mut stdout, &mut stderr)
 }
 
-/// Starts `recipe.pod` and all `recipe.containers` in `1..N` order, writing output to `stdout` and `stderr`.
+/// Starts all `recipe.containers` in `1..N` order, writing output to `stdout` and `stderr`.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if stream writing or Podman execution fails.
+/// Returns [`PodError`] if pod validation, stream writing, or Podman execution fails.
 pub fn start_with<W: Write, E: Write>(
     recipe: &Recipe,
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    recipe.pod.start_with(simulate, stdout, stderr)?;
+    validate_pod_id(&recipe.pod)?;
     for item in &recipe.containers {
         container::start_with(item, simulate, stdout, stderr)?;
     }
@@ -481,18 +436,18 @@ pub fn stop_with<W: Write, E: Write>(
     recipe.pod.stop_with(simulate, stdout, stderr)
 }
 
-/// Creates and starts `recipe.pod` and all `recipe.containers` (`create` + `start`).
+/// Creates `recipe.pod` and all `recipe.containers` and starts `recipe.containers` in `1..N` order (`create` + `start`).
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if creating or starting the pod or its containers fails.
+/// Returns [`PodError`] if creating the pod or its containers or starting the containers fails.
 pub fn up(recipe: &Recipe, simulate: bool) -> Result<(), PodError> {
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     up_with(recipe, simulate, &mut stdout, &mut stderr)
 }
 
-/// Creates and starts `recipe.pod` and all `recipe.containers`, writing output to `stdout` and `stderr`.
+/// Creates `recipe.pod` and all `recipe.containers` and starts `recipe.containers` in `1..N` order, writing output to `stdout` and `stderr`.
 ///
 /// # Errors
 ///
@@ -541,26 +496,11 @@ fn append_publish_arguments(arguments: &mut Vec<String>, publish_entries: &[Stri
     }
 }
 
-/// Evaluates whether `option` is non-empty and free of control and Unicode BiDi characters.
-#[must_use]
-fn is_valid_option_entry(option: &str) -> bool {
-    !option.trim().is_empty()
-        && !option
-            .chars()
-            .any(|character| character.is_control() || is_bidi_control(character))
-}
-
-/// Evaluates whether `entry` is a non-empty `--publish` token without leading hyphens, whitespace, or control characters.
-#[must_use]
-fn is_valid_publish_entry(entry: &str) -> bool {
-    !entry.is_empty() && !entry.starts_with('-') && !contains_control_or_whitespace(entry)
-}
-
 /// Validates `pod.id`, `pod.publish`, and `pod.options` before executing `podman pod create`.
 fn validate_pod_create(pod: &Pod) -> Result<(), RecipeError> {
     validate_pod_id(pod)?;
     for entry in &pod.publish {
-        if !is_valid_publish_entry(entry) {
+        if !is_valid_token(entry) {
             return Err(RecipeError::with_token(
                 RecipeErrorKind::InvalidPublish,
                 pod.line,
@@ -569,7 +509,7 @@ fn validate_pod_create(pod: &Pod) -> Result<(), RecipeError> {
         }
     }
     for option in &pod.options {
-        if !is_valid_option_entry(option) {
+        if !is_valid_text(option) {
             return Err(RecipeError::with_token(
                 RecipeErrorKind::InvalidOption,
                 pod.line,
@@ -669,12 +609,10 @@ mod tests {
                 "unknown",
             ]
         );
-        assert_eq!(pod.build_start_args(), vec!["pod", "start", "si_po"]);
         assert_eq!(pod.build_stop_args(), vec!["pod", "stop", "si_po"]);
         assert_eq!(pod.build_remove_args(), vec!["pod", "rm", "si_po"]);
 
         assert!(pod.create(true).is_ok());
-        assert!(pod.start(true).is_ok());
         assert!(pod.stop(true).is_ok());
         assert!(pod.remove(true).is_ok());
     }
@@ -688,11 +626,11 @@ mod tests {
         up_with(&recipe, true, &mut up_down_out, &mut stderr).unwrap();
         down_with(&recipe, true, &mut up_down_out, &mut stderr).unwrap();
         let up_down_lines: Vec<&str> = std::str::from_utf8(&up_down_out).unwrap().lines().collect();
-        assert_eq!(up_down_lines.len(), 32);
+        assert_eq!(up_down_lines.len(), 30);
         assert_eq!(up_down_lines[0], "Create pod 'Order Stack' ('order'): ");
-        assert_eq!(up_down_lines[8], "Start pod 'Order Stack' ('order'): ");
-        assert_eq!(up_down_lines[16], "Stop container 'three': ");
-        assert_eq!(up_down_lines[30], "Remove pod 'Order Stack' ('order'): ");
+        assert_eq!(up_down_lines[8], "Start container 'order-1': ");
+        assert_eq!(up_down_lines[14], "Stop container 'three': ");
+        assert_eq!(up_down_lines[28], "Remove pod 'Order Stack' ('order'): ");
 
         let mut restart_out = Vec::new();
         restart_with(&recipe, true, &mut restart_out, &mut stderr).unwrap();
@@ -708,12 +646,10 @@ mod tests {
                 "podman stop order-1",
                 "Stop pod 'Order Stack' ('order'): ",
                 "podman pod stop order",
-                "Start pod 'Order Stack' ('order'): ",
-                "podman pod start order",
                 "Start container 'order-1': ",
                 "podman start order-1",
                 "Start container 'order-two': ",
-                "podman start --attach order-two",
+                "podman start order-two",
                 "Start container 'three': ",
                 "podman start three",
             ]
@@ -738,19 +674,19 @@ mod tests {
         let mut reload_out = Vec::new();
         reload_with(&recipe, true, &mut reload_out, &mut stderr).unwrap();
         let reload_lines: Vec<&str> = std::str::from_utf8(&reload_out).unwrap().lines().collect();
-        assert_eq!(reload_lines.len(), 32);
+        assert_eq!(reload_lines.len(), 30);
         assert_eq!(reload_lines[0], "Stop container 'three': ");
         assert_eq!(reload_lines[14], "Remove pod 'Order Stack' ('order'): ");
         assert_eq!(reload_lines[16], "Create pod 'Order Stack' ('order'): ");
-        assert_eq!(reload_lines[30], "Start container 'three': ");
+        assert_eq!(reload_lines[28], "Start container 'three': ");
 
         let mut update_out = Vec::new();
         update_with(&recipe, true, &mut update_out, &mut stderr).unwrap();
         let update_lines: Vec<&str> = std::str::from_utf8(&update_out).unwrap().lines().collect();
-        assert_eq!(update_lines.len(), 39);
+        assert_eq!(update_lines.len(), 37);
         assert_eq!(update_lines[0], "Update pod 'Order Stack' ('order') ...");
         assert_eq!(update_lines[7], "Stop container 'three': ");
-        assert_eq!(update_lines[37], "Start container 'three': ");
+        assert_eq!(update_lines[35], "Start container 'three': ");
         assert!(stderr.is_empty());
 
         // Exercise standard stream wrappers in simulate mode.
@@ -790,12 +726,10 @@ mod tests {
                 "podman create --name order-two --pod order obey.io/order:2",
                 "Create container 'three': ",
                 "podman create --name three --pod order custom.io/order:3",
-                "Start pod 'Order Stack' ('order'): ",
-                "podman pod start order",
                 "Start container 'order-1': ",
                 "podman start order-1",
                 "Start container 'order-two': ",
-                "podman start --attach order-two",
+                "podman start order-two",
                 "Start container 'three': ",
                 "podman start three",
                 "Stop container 'three': ",
@@ -826,7 +760,7 @@ mod tests {
         let mut stderr = Vec::new();
 
         assert!(recipe.pod.create_with(true, &mut broken_stdout, &mut stderr).is_ok());
-        assert!(recipe.pod.start_with(true, &mut broken_stdout, &mut stderr).is_ok());
+        assert!(start_with(&recipe, true, &mut broken_stdout, &mut stderr).is_ok());
         assert!(recipe.pod.stop_with(true, &mut broken_stdout, &mut stderr).is_ok());
         assert!(recipe.pod.remove_with(true, &mut broken_stdout, &mut stderr).is_ok());
         assert!(pull_with(&recipe, true, &mut broken_stdout, &mut stderr).is_ok());
@@ -875,7 +809,7 @@ mod tests {
                     if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
             ));
             assert!(matches!(
-                bad_recipe.pod.start_with(true, &mut stdout, &mut stderr),
+                start_with(&bad_recipe, true, &mut stdout, &mut stderr),
                 Err(PodError::Recipe(error))
                     if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
             ));
@@ -939,7 +873,6 @@ container {
 }
 container *two {
     image order:2
-    detach false
 }
 container three {
     image order:3

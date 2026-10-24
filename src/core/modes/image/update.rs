@@ -16,6 +16,8 @@
 //! Handler for `pods image update <target...>`.
 
 use crate::core::context::Context;
+use crate::core::modes::default::execute_lifecycle_action;
+use crate::core::pod;
 use crate::error::PodError;
 
 /// Pulls the latest container images from configured registries for all containers in target
@@ -37,9 +39,6 @@ use crate::error::PodError;
 ///
 /// Returns [`PodError`] if target expansion fails, a targeted `.pod` recipe file cannot be
 /// read or validated, or `podman pull` fails.
-pub fn handle(_context: &Context) -> Result<(), PodError> {
-    // Step 1: Expand and deduplicate @group and <recipe> targets via context.config.
-    // Step 2: For each targeted recipe, read and validate only <recipes.path>/<recipe>.pod.
-    // Step 3: Pull each container image (`podman pull <registry>/<image>`) without reloading pods.
-    Ok(())
+pub fn handle(context: &Context) -> Result<(), PodError> {
+    execute_lifecycle_action(context, pod::pull)
 }

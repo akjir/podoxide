@@ -30,6 +30,14 @@ pub fn clamp_utf8_prefix(input: &str, max_bytes: usize) -> &str {
     &input[..boundary]
 }
 
+/// Evaluates whether `value` contains any control or Unicode bidirectional formatting character.
+#[must_use]
+pub fn contains_control_or_bidi(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| character.is_control() || is_bidi_control(character))
+}
+
 /// Evaluates whether `value` contains any whitespace, control, or bidirectional formatting character.
 #[must_use]
 pub fn contains_control_or_whitespace(value: &str) -> bool {
@@ -99,6 +107,15 @@ pub const fn is_safe_shell_byte(byte: u8) -> bool {
         || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'=' | b'@')
 }
 
+/// Evaluates whether `target` is a valid `@<group>` reference or recipe stem identifier.
+#[must_use]
+pub fn is_valid_group_target(target: &str) -> bool {
+    if let Some(group_name) = target.strip_prefix('@') {
+        return is_valid_identifier(group_name);
+    }
+    is_valid_recipe_identifier(target)
+}
+
 /// Evaluates whether `identifier` is a valid PSL or group identifier (`[A-Za-z_][A-Za-z0-9_-]*`).
 #[must_use]
 pub fn is_valid_identifier(identifier: &str) -> bool {
@@ -135,6 +152,30 @@ pub fn is_valid_recipe_identifier(identifier: &str) -> bool {
         && rest.iter().copied().all(is_identifier_continue)
 }
 
+/// Evaluates whether `segment` is a safe, non-empty CLI target component without path separators, leading dashes, `@`, or control/whitespace characters.
+#[must_use]
+pub fn is_valid_target_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && !segment.starts_with('-')
+        && !segment.starts_with('@')
+        && !segment.contains('/')
+        && !contains_control_or_whitespace(segment)
+}
+
+/// Evaluates whether `value` contains at least one non-whitespace character and is free of control and Unicode BiDi characters.
+#[must_use]
+pub fn is_valid_text(value: &str) -> bool {
+    !value.trim().is_empty() && !contains_control_or_bidi(value)
+}
+
+/// Evaluates whether `value` is a non-empty single token without leading hyphens, whitespace, or control characters.
+#[must_use]
+pub fn is_valid_token(value: &str) -> bool {
+    !value.is_empty() && !value.starts_with('-') && !contains_control_or_whitespace(value)
+}
+
 /// Normalizes `input` by trimming whitespace, lowercasing characters, and collapsing internal whitespace runs into `'_'`.
 #[must_use]
 pub fn normalize_name(input: &str) -> String {
@@ -166,6 +207,17 @@ pub const fn sanitize_char(character: char) -> char {
     character
 }
 
+/// Clamps `input` to `max_bytes` on a UTF-8 character boundary and replaces control and bidirectional characters with ASCII spaces.
+#[must_use]
+pub fn sanitize_text(input: &str, max_bytes: usize) -> String {
+    let clamped = clamp_utf8_prefix(input, max_bytes);
+    let mut sanitized = String::with_capacity(clamped.len());
+    for character in clamped.chars() {
+        sanitized.push(sanitize_char(character));
+    }
+    sanitized
+}
+
 /// Appends `character` (lowercased, or collapsed to `'_'` on whitespace transitions) to `normalized`.
 fn append_normalized_char(normalized: &mut String, character: char, in_whitespace: &mut bool) {
     if character.is_whitespace() {
@@ -184,10 +236,12 @@ fn append_normalized_char(normalized: &mut String, character: char, in_whitespac
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_utf8_prefix, contains_control_or_whitespace, escape_shell, is_bidi_control,
-        is_empty_value_literal, is_identifier_continue, is_identifier_start, is_safe_shell_byte,
-        is_valid_identifier, is_valid_pod_or_container_name, is_valid_recipe_identifier,
-        normalize_name, parse_ascii_u32, sanitize_char,
+        clamp_utf8_prefix, contains_control_or_bidi, contains_control_or_whitespace, escape_shell,
+        is_bidi_control, is_empty_value_literal, is_identifier_continue, is_identifier_start,
+        is_safe_shell_byte, is_valid_group_target, is_valid_identifier,
+        is_valid_pod_or_container_name, is_valid_recipe_identifier, is_valid_target_segment,
+        is_valid_text, is_valid_token, normalize_name, parse_ascii_u32, sanitize_char,
+        sanitize_text,
     };
 
     #[test]
@@ -208,6 +262,10 @@ mod tests {
 
     #[test]
     fn control_whitespace_bidi_and_sanitization_checks() {
+        assert!(!contains_control_or_bidi("example app"));
+        assert!(contains_control_or_bidi("example\napp"));
+        assert!(contains_control_or_bidi("example\u{202E}app"));
+
         assert!(!contains_control_or_whitespace("example-app_1"));
         assert!(contains_control_or_whitespace("example app"));
         assert!(contains_control_or_whitespace("example\tapp"));
@@ -224,6 +282,7 @@ mod tests {
         assert_eq!(sanitize_char('\n'), ' ');
         assert_eq!(sanitize_char('\x1b'), ' ');
         assert_eq!(sanitize_char('\u{202E}'), ' ');
+        assert_eq!(sanitize_text("ok\nbad\u{202E}end", 6), "ok bad");
 
         assert!(is_empty_value_literal(""));
         assert!(is_empty_value_literal("\"\""));
@@ -236,13 +295,28 @@ mod tests {
         assert!(!is_safe_shell_byte(b' '));
         assert!(!is_safe_shell_byte(b'\''));
         assert_eq!(escape_shell(""), "''");
-        assert_eq!(escape_shell("registry.io/alpine:latest"), "registry.io/alpine:latest");
+        assert_eq!(
+            escape_shell("registry.io/alpine:latest"),
+            "registry.io/alpine:latest"
+        );
         assert_eq!(escape_shell("O'Hara"), "'O'\\''Hara'");
         assert_eq!(escape_shell("Hancock 2"), "'Hancock 2'");
         assert_eq!(
             escape_shell("echo 'hello world'"),
             "'echo '\\''hello world'\\'''"
         );
+
+        assert!(is_valid_text("Example Web Stack"));
+        assert!(!is_valid_text(""));
+        assert!(!is_valid_text("   "));
+        assert!(!is_valid_text("bad\ntext"));
+        assert!(!is_valid_text("bad\u{202E}text"));
+
+        assert!(is_valid_token("docker.io/alpine:latest"));
+        assert!(!is_valid_token(""));
+        assert!(!is_valid_token("-flag"));
+        assert!(!is_valid_token("two tokens"));
+        assert!(!is_valid_token("bad\ntoken"));
     }
 
     #[test]
@@ -271,6 +345,22 @@ mod tests {
         assert!(!is_valid_recipe_identifier(""));
         assert!(!is_valid_recipe_identifier("-bad"));
         assert!(!is_valid_recipe_identifier("bad.pod"));
+
+        assert!(is_valid_group_target("@backend_1"));
+        assert!(is_valid_group_target("10-database"));
+        assert!(!is_valid_group_target("@1backend"));
+        assert!(!is_valid_group_target("@"));
+        assert!(!is_valid_group_target("bad.pod"));
+
+        assert!(is_valid_target_segment("example-app"));
+        assert!(is_valid_target_segment("*db"));
+        assert!(!is_valid_target_segment(""));
+        assert!(!is_valid_target_segment("."));
+        assert!(!is_valid_target_segment(".."));
+        assert!(!is_valid_target_segment("-flag"));
+        assert!(!is_valid_target_segment("@group"));
+        assert!(!is_valid_target_segment("a/b"));
+        assert!(!is_valid_target_segment("a b"));
 
         assert_eq!(parse_ascii_u32("0"), Some(0));
         assert_eq!(parse_ascii_u32("580"), Some(580));

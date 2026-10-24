@@ -22,18 +22,19 @@ use crate::core::log;
 use crate::core::pod::Pod;
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::command::{self, ExecOptions};
-use crate::utilities::path::{build_full_path, is_valid_directory_path};
+use crate::utilities::collection::append_option_tokens;
+use crate::utilities::path::{build_full_path, is_valid_directory, is_valid_directory_path};
 use crate::utilities::string::{
-    contains_control_or_whitespace, is_bidi_control, is_valid_pod_or_container_name, normalize_name,
+    contains_control_or_bidi, contains_control_or_whitespace, is_valid_pod_or_container_name,
+    is_valid_text, is_valid_token, normalize_name,
 };
 
 const BASE_CREATE_ARG_COUNT: usize = 7;
 
 /// Container specification and runtime arguments from a `container` block in a `.pod` recipe.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Container {
     pub commands: Vec<String>,
-    pub detach: bool,
     pub image: String,
     pub line: usize,
     pub name: String,
@@ -44,7 +45,7 @@ pub struct Container {
 }
 
 impl Container {
-    /// Creates a new [`Container`] with default settings (`detach` enabled).
+    /// Creates a new [`Container`] with default settings.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -94,18 +95,10 @@ impl Container {
         vec![String::from("rm"), self.name.clone()]
     }
 
-    /// Builds the `podman start` argument vector for this container, passing `--attach` when `detach` is `false`.
+    /// Builds the `podman start` argument vector for this container.
     #[must_use]
     pub fn build_start_args(&self) -> Vec<String> {
-        if self.detach {
-            vec![String::from("start"), self.name.clone()]
-        } else {
-            vec![
-                String::from("start"),
-                String::from("--attach"),
-                self.name.clone(),
-            ]
-        }
+        vec![String::from("start"), self.name.clone()]
     }
 
     /// Builds the `podman stop` argument vector for this container.
@@ -274,22 +267,6 @@ impl Container {
     }
 }
 
-impl Default for Container {
-    fn default() -> Self {
-        Self {
-            commands: Vec::new(),
-            detach: true,
-            image: String::new(),
-            line: 0,
-            name: String::new(),
-            options: Vec::new(),
-            registry: String::new(),
-            restart: String::new(),
-            volumes: Vec::new(),
-        }
-    }
-}
-
 /// Host-to-container volume mount specification from a `volume` directive inside a `container` block.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct VolumeMount {
@@ -303,13 +280,6 @@ impl VolumeMount {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-}
-
-/// Appends `option` directive tokens from `options` into `arguments`, splitting combined `--flag value` entries.
-pub fn append_option_tokens(arguments: &mut Vec<String>, options: &[String]) {
-    for option in options {
-        append_single_option(arguments, option);
     }
 }
 
@@ -456,10 +426,7 @@ pub fn resolve_container_name_value(
     if raw_name.is_empty() {
         return Ok(format!("{pod_id}-{index}"));
     }
-    if raw_name
-        .chars()
-        .any(|character| character.is_control() || is_bidi_control(character))
-    {
+    if contains_control_or_bidi(raw_name) {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidContainerName,
             line,
@@ -530,7 +497,7 @@ pub fn start_with<W: Write, E: Write>(
         "podman",
         &arguments,
         &ExecOptions {
-            interactive: !container.detach,
+            interactive: false,
             prefix: &prefix,
             simulate,
         },
@@ -617,16 +584,6 @@ pub fn update_with<W: Write, E: Write>(
     )
 }
 
-/// Appends a single `option` directive token (or whitespace-split `--flag value` pair) to `arguments`.
-fn append_single_option(arguments: &mut Vec<String>, option: &str) {
-    let trimmed = option.trim();
-    if trimmed.starts_with('-') && trimmed.contains(char::is_whitespace) {
-        arguments.extend(trimmed.split_whitespace().map(str::to_owned));
-    } else {
-        arguments.push(option.to_owned());
-    }
-}
-
 /// Appends `--volume <mount>` pairs for `volumes` into `arguments`.
 fn append_volume_arguments(
     arguments: &mut Vec<String>,
@@ -653,21 +610,6 @@ const fn container_label(name: &str) -> &str {
     }
 }
 
-/// Evaluates whether `value` contains non-whitespace characters and is free of control and Unicode BiDi characters.
-#[must_use]
-fn is_valid_text_entry(value: &str) -> bool {
-    !value.trim().is_empty()
-        && !value
-            .chars()
-            .any(|character| character.is_control() || is_bidi_control(character))
-}
-
-/// Evaluates whether `value` is a non-empty single token without leading hyphens, whitespace, or control characters.
-#[must_use]
-fn is_valid_token(value: &str) -> bool {
-    !value.is_empty() && !value.starts_with('-') && !contains_control_or_whitespace(value)
-}
-
 /// Evaluates whether volume mount `options` (when non-empty) are free of colons, slashes, `..`, leading hyphens, and whitespace.
 #[must_use]
 fn is_valid_volume_options(options: &str) -> bool {
@@ -689,7 +631,7 @@ fn resolve_host_volume_path(
     if host_dir.starts_with('/') {
         return Ok(host_dir.to_owned());
     }
-    if !pod_path.to_str().is_some_and(is_valid_directory_path) {
+    if !is_valid_directory(pod_path) {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidVolume,
             line,
@@ -755,14 +697,14 @@ fn validate_optional_token(
     Ok(())
 }
 
-/// Validates that every entry in `entries` satisfies [`is_valid_text_entry`].
+/// Validates that every entry in `entries` satisfies [`is_valid_text`].
 fn validate_text_entries(
     entries: &[String],
     kind: RecipeErrorKind,
     line: usize,
 ) -> Result<(), RecipeError> {
     for entry in entries {
-        if !is_valid_text_entry(entry) {
+        if !is_valid_text(entry) {
             return Err(RecipeError::with_token(kind, line, entry));
         }
     }
@@ -795,9 +737,10 @@ mod tests {
     use crate::core::log::MAX_LOG_MESSAGE_BYTES;
     use crate::core::pod::Pod;
     use crate::error::{PodError, RecipeErrorKind};
+    use crate::utilities::collection::append_option_tokens;
     use super::{
-        Container, VolumeMount, append_option_tokens, container_label, format_volume_mount,
-        is_valid_volume_mount, resolve_container_name_value, resolve_image_reference,
+        Container, VolumeMount, container_label, format_volume_mount, is_valid_volume_mount,
+        resolve_container_name_value, resolve_image_reference,
     };
 
     struct BrokenPipeWriter;
@@ -898,7 +841,6 @@ mod tests {
     #[test]
     fn container_defaults_and_name_resolution() {
         let mut container = Container::new();
-        assert!(container.detach);
         assert!(container.name.is_empty());
         assert_eq!(container_label(&container.name), "container");
 
@@ -984,10 +926,6 @@ mod tests {
         container
             .start_with(true, &mut stdout, &mut stderr)
             .unwrap();
-        container.detach = false;
-        container
-            .start_with(true, &mut stdout, &mut stderr)
-            .unwrap();
         container
             .stop_with(true, &mut stdout, &mut stderr)
             .unwrap();
@@ -1007,8 +945,6 @@ mod tests {
                 "podman create --name commandos-1 --pod commandos --restart on-failure:5 --volume /my_pod_path/relative/path:/container/dir/relative:z --unknown thing --another unknown bel.io/squad:1998 'O'\\''Hara' 'Hancock 2' Woolridge3 Brooklyn:4 Blackwood=5 Duchamp-6",
                 "Start container 'commandos-1': ",
                 "podman start commandos-1",
-                "Start container 'commandos-1': ",
-                "podman start --attach commandos-1",
                 "Stop container 'commandos-1': ",
                 "podman stop commandos-1",
                 "Remove container 'commandos-1': ",

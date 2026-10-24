@@ -169,6 +169,7 @@ mod tests {
             ])
             .output()
             .unwrap();
+        let stdout_output = String::from_utf8_lossy(&output.stdout);
         let stderr_output = String::from_utf8_lossy(&output.stderr);
         assert!(
             output.status.success(),
@@ -186,6 +187,11 @@ mod tests {
         assert!(stderr_output.contains("INFO: Created 'pods.conf'."));
         assert!(stderr_output.contains("WARNING: File 'recipe.pod' already exists."));
         assert!(stderr_output.contains("WARNING: File 'pods.conf' already exists."));
+        assert!(stdout_output.contains(
+            "podman pod create --name example-stack --publish 8080:80/TCP --userns=keep-id"
+        ));
+        assert!(stdout_output.contains("podman start example-stack-db"));
+        assert!(stdout_output.contains("podman start example-stack-app"));
         assert!(working_dir.join("recipe.pod").is_file());
         assert!(working_dir.join("pods.conf").is_file());
         assert!(!bin_dir.join("recipe.pod").exists());
@@ -200,22 +206,25 @@ mod tests {
         assert_eq!(execute(["help"]), ExitCode::SUCCESS);
         assert_eq!(execute(["--version"]), ExitCode::SUCCESS);
         assert_eq!(
-            execute(["--debug", "--config=pods", "up", "example-app"]),
+            execute(["--debug", "--config=pods", "up", "recipe"]),
             ExitCode::SUCCESS
         );
         assert_eq!(
-            execute(["--debug", "--config=staging", "up", "example-app"]),
+            execute(["--debug", "--config=staging", "up", "recipe"]),
             ExitCode::FAILURE
         );
-        assert_eq!(execute(["up", "example-app"]), ExitCode::SUCCESS);
-        assert_eq!(execute(["cmd", "list", "example-app"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["up", "recipe"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["up", "@all"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["up", "example-app"]), ExitCode::FAILURE);
+        assert_eq!(execute(["cmd", "list", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["cfg", "show"]), ExitCode::SUCCESS);
-        assert_eq!(execute(["con", "example-app"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["con", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["img", "prune"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["img", "update", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init", "help"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init", "--config=staging"]), ExitCode::FAILURE);
-        assert_eq!(execute(["log", "example-app"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["log", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["rec", "list"]), ExitCode::SUCCESS);
 
         assert_eq!(execute(["--unknown-flag"]), ExitCode::FAILURE);

@@ -18,8 +18,11 @@
 use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 
+use crate::core::config::{DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH};
 use crate::error::MAX_ERROR_TOKEN_BYTES;
-use crate::utilities::string::{clamp_utf8_prefix, is_bidi_control, sanitize_char};
+use crate::utilities::string::{
+    contains_control_or_bidi, contains_control_or_whitespace, sanitize_text,
+};
 
 /// Constructs a full file or directory path from `base_dir`, `file_name`, and `file_extension`.
 #[must_use]
@@ -50,9 +53,7 @@ pub fn extract_config_stem(raw_value: &str) -> Option<&str> {
         || raw_value != raw_value.trim()
         || raw_value.starts_with('-')
         || raw_value.ends_with('/')
-        || raw_value
-            .chars()
-            .any(|character| character.is_control() || is_bidi_control(character))
+        || contains_control_or_bidi(raw_value)
     {
         return None;
     }
@@ -74,6 +75,19 @@ pub fn has_parent_dir(path: &Path) -> bool {
         .any(|component| matches!(component, Component::ParentDir))
 }
 
+/// Evaluates whether `path` names a terminal file entry without a trailing slash or dot segment.
+#[must_use]
+pub fn has_regular_target_name(path: &Path) -> bool {
+    let raw_bytes = path.as_os_str().as_encoded_bytes();
+    path.file_name().is_some() && !raw_bytes.ends_with(b"/") && !raw_bytes.ends_with(b"/.")
+}
+
+/// Evaluates whether `path` is a valid UTF-8 directory path without `..` traversal, colons, or control characters.
+#[must_use]
+pub fn is_valid_directory(path: &Path) -> bool {
+    path.to_str().is_some_and(is_valid_directory_path)
+}
+
 /// Evaluates whether `value` is a safe directory path without `..` traversal, colons, or control characters.
 #[must_use]
 pub fn is_valid_directory_path(value: &str) -> bool {
@@ -81,9 +95,7 @@ pub fn is_valid_directory_path(value: &str) -> bool {
         || value != value.trim()
         || value.starts_with('-')
         || value.contains(':')
-        || value
-            .chars()
-            .any(|character| character.is_control() || is_bidi_control(character))
+        || contains_control_or_bidi(value)
     {
         return false;
     }
@@ -93,6 +105,25 @@ pub fn is_valid_directory_path(value: &str) -> bool {
     }
     path.components()
         .any(|component| matches!(component, Component::CurDir | Component::Normal(_)))
+}
+
+/// Evaluates whether `value` is a safe executable name or path without `..` traversal, leading dashes, or control/whitespace characters.
+#[must_use]
+pub fn is_valid_editor_value(value: &str) -> bool {
+    if value.is_empty()
+        || value.starts_with('-')
+        || contains_control_or_whitespace(value)
+        || has_parent_dir(Path::new(value))
+    {
+        return false;
+    }
+    let Some(file_name) = value.rsplit('/').next() else {
+        return false;
+    };
+    !file_name.is_empty()
+        && file_name != "."
+        && file_name != ".."
+        && !file_name.starts_with('-')
 }
 
 /// Evaluates whether `path` is a structurally valid, UTF-8 target file path without `..` traversal.
@@ -182,19 +213,54 @@ pub fn relative_display_path<'a>(path: &'a Path, base_dir: &Path) -> &'a Path {
     stripped
 }
 
+/// Resolves a configuration file argument into its configuration name (file stem).
+#[must_use]
+pub fn resolve_config_name(config: Option<&Path>) -> String {
+    config
+        .and_then(Path::to_str)
+        .and_then(extract_config_stem)
+        .unwrap_or(DEFAULT_CONFIG_NAME)
+        .to_owned()
+}
+
+/// Resolves a configuration file argument into a normalized `.conf` path.
+#[must_use]
+pub fn resolve_config_path(config: Option<&Path>) -> PathBuf {
+    let Some(path) = config else {
+        return PathBuf::from(DEFAULT_CONFIG_PATH);
+    };
+    let Some(raw) = path.to_str() else {
+        return PathBuf::from(DEFAULT_CONFIG_PATH);
+    };
+    if extract_config_stem(raw).is_none() {
+        return PathBuf::from(DEFAULT_CONFIG_PATH);
+    }
+    let has_explicit_prefix =
+        raw.starts_with('/') || raw.starts_with("./") || raw.starts_with("../");
+    let has_conf_extension = raw.ends_with(".conf");
+
+    let mut resolved = String::with_capacity(raw.len() + 7);
+    if !has_explicit_prefix {
+        resolved.push_str("./");
+    }
+    resolved.push_str(raw);
+    if !has_conf_extension {
+        resolved.push_str(".conf");
+    }
+    PathBuf::from(resolved)
+}
+
 /// Clamps and sanitizes a filesystem `path` into a bounded [`MAX_ERROR_TOKEN_BYTES`] error token.
 #[must_use]
 pub fn sanitize_path_token(path: &Path) -> String {
     if let Some(valid_str) = path.to_str() {
-        let clamped = clamp_utf8_prefix(valid_str, MAX_ERROR_TOKEN_BYTES);
-        return sanitize_clamped_str(clamped);
+        return sanitize_text(valid_str, MAX_ERROR_TOKEN_BYTES);
     }
     let raw_bytes = path.as_os_str().as_encoded_bytes();
     let max_scan = MAX_ERROR_TOKEN_BYTES.saturating_add(3);
     let prefix_bytes = raw_bytes.get(..max_scan).unwrap_or(raw_bytes);
     let lossy = String::from_utf8_lossy(prefix_bytes);
-    let clamped = clamp_utf8_prefix(&lossy, MAX_ERROR_TOKEN_BYTES);
-    sanitize_clamped_str(clamped)
+    sanitize_text(&lossy, MAX_ERROR_TOKEN_BYTES)
 }
 
 /// Applies a single `component` to `normalized` during lexical path normalization.
@@ -232,15 +298,6 @@ fn has_valid_stem(stem: &str) -> bool {
     !stem.is_empty() && !stem.bytes().all(|byte| byte == b'.')
 }
 
-/// Replaces control and bidirectional characters in `clamped` with safe ASCII spaces.
-fn sanitize_clamped_str(clamped: &str) -> String {
-    let mut sanitized = String::with_capacity(clamped.len());
-    for character in clamped.chars() {
-        sanitized.push(sanitize_char(character));
-    }
-    sanitized
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -249,9 +306,10 @@ mod tests {
 
     use crate::error::MAX_ERROR_TOKEN_BYTES;
     use super::{
-        build_full_path, extract_config_stem, has_parent_dir, is_valid_directory_path,
-        is_valid_target_path, matches_extension, normalize_lexical_path, parent_or_cur_dir,
-        pop_relative_or_absolute, relative_display_path, sanitize_path_token,
+        build_full_path, extract_config_stem, has_parent_dir, has_regular_target_name,
+        is_valid_directory, is_valid_directory_path, is_valid_editor_value, is_valid_target_path,
+        matches_extension, normalize_lexical_path, parent_or_cur_dir, pop_relative_or_absolute,
+        relative_display_path, resolve_config_name, resolve_config_path, sanitize_path_token,
     };
 
     #[test]
@@ -285,6 +343,12 @@ mod tests {
             PathBuf::from("./recipe.pod")
         );
 
+        assert!(is_valid_directory(Path::new(".")));
+        assert!(is_valid_directory(Path::new("/var/lib/pods")));
+        assert!(!is_valid_directory(Path::new("../pods")));
+        let non_utf8_dir = PathBuf::from(OsString::from_vec(vec![b'/', 0xFF]));
+        assert!(!is_valid_directory(&non_utf8_dir));
+
         assert!(is_valid_directory_path("."));
         assert!(is_valid_directory_path("./pods"));
         assert!(is_valid_directory_path("/var/lib/pods"));
@@ -295,6 +359,22 @@ mod tests {
         assert!(!is_valid_directory_path("/var:pods"));
         assert!(!is_valid_directory_path("/var/pods\n"));
 
+        assert!(is_valid_editor_value("vim"));
+        assert!(is_valid_editor_value("/usr/bin/nvim"));
+        assert!(!is_valid_editor_value(""));
+        assert!(!is_valid_editor_value("-vim"));
+        assert!(!is_valid_editor_value("/usr/bin/-vim"));
+        assert!(!is_valid_editor_value("../vim"));
+        assert!(!is_valid_editor_value("/usr/bin/"));
+        assert!(!is_valid_editor_value("vim -u NONE"));
+
+        assert!(has_regular_target_name(Path::new("./pods.conf")));
+        assert!(!has_regular_target_name(Path::new("")));
+        assert!(!has_regular_target_name(Path::new(".")));
+        assert!(!has_regular_target_name(Path::new("..")));
+        assert!(!has_regular_target_name(Path::new("./pods.conf/")));
+        assert!(!has_regular_target_name(Path::new("./pods.conf/.")));
+
         assert_eq!(
             sanitize_path_token(Path::new("/tmp/evil\x1b[31m.pod")),
             "/tmp/evil [31m.pod"
@@ -302,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_config_stem_handles_valid_and_invalid_paths() {
+    fn extract_config_stem_and_resolve_config_helpers() {
         assert_eq!(extract_config_stem("pods"), Some("pods"));
         assert_eq!(extract_config_stem("./pods.conf"), Some("pods"));
         assert_eq!(extract_config_stem(".hidden"), Some(".hidden"));
@@ -314,6 +394,23 @@ mod tests {
         assert_eq!(
             extract_config_stem("/etc/pods/staging.conf"),
             Some("staging")
+        );
+
+        assert_eq!(resolve_config_name(None), "pods");
+        assert_eq!(resolve_config_name(Some(Path::new("staging"))), "staging");
+        assert_eq!(resolve_config_name(Some(Path::new("."))), "pods");
+        assert_eq!(resolve_config_path(None), PathBuf::from("./pods.conf"));
+        assert_eq!(
+            resolve_config_path(Some(Path::new("staging"))),
+            PathBuf::from("./staging.conf")
+        );
+        assert_eq!(
+            resolve_config_path(Some(Path::new("/etc/pods/staging.conf"))),
+            PathBuf::from("/etc/pods/staging.conf")
+        );
+        assert_eq!(
+            resolve_config_path(Some(Path::new("."))),
+            PathBuf::from("./pods.conf")
         );
 
         for invalid in [

@@ -19,7 +19,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter, Write};
 use std::io;
 
-use crate::utilities::string::{clamp_utf8_prefix, sanitize_char};
+use crate::utilities::string::{clamp_utf8_prefix, sanitize_char, sanitize_text};
 
 /// Maximum byte length stored or formatted for an offending CLI argument or PSL token.
 pub const MAX_ERROR_TOKEN_BYTES: usize = 256;
@@ -45,7 +45,7 @@ impl CliError {
     #[must_use]
     pub fn with_argument(kind: CliErrorKind, argument: impl AsRef<str>) -> Self {
         Self {
-            argument: Some(sanitize_error_token(argument.as_ref())),
+            argument: Some(sanitize_text(argument.as_ref(), MAX_ERROR_TOKEN_BYTES)),
             kind,
         }
     }
@@ -125,7 +125,17 @@ impl ConfigError {
         Self {
             kind,
             line: Some(line),
-            token: Some(sanitize_error_token(token.as_ref())),
+            token: Some(sanitize_text(token.as_ref(), MAX_ERROR_TOKEN_BYTES)),
+        }
+    }
+
+    /// Creates a new configuration error associated with an offending token without a line number.
+    #[must_use]
+    pub fn without_line(kind: ConfigErrorKind, token: impl AsRef<str>) -> Self {
+        Self {
+            kind,
+            line: None,
+            token: Some(sanitize_text(token.as_ref(), MAX_ERROR_TOKEN_BYTES)),
         }
     }
 }
@@ -161,8 +171,10 @@ pub enum ConfigErrorKind {
     MissingGroupsBlock,
     MissingRecipesBlock,
     NotFound,
+    RecipeNotFound,
     UnexpectedBlock,
     UnknownDirective,
+    UnknownGroup,
 }
 
 impl Display for ConfigErrorKind {
@@ -178,8 +190,10 @@ impl Display for ConfigErrorKind {
             Self::MissingGroupsBlock => "missing 'groups' block in 'recipes'",
             Self::MissingRecipesBlock => "missing 'recipes' block in configuration",
             Self::NotFound => "configuration file not found",
+            Self::RecipeNotFound => "recipe not found in configuration",
             Self::UnexpectedBlock => "unexpected block in configuration",
             Self::UnknownDirective => "unknown directive in configuration",
+            Self::UnknownGroup => "unknown recipe group in configuration",
         };
         formatter.write_str(message)
     }
@@ -334,7 +348,7 @@ impl RecipeError {
         Self {
             kind,
             line: Some(line),
-            token: Some(sanitize_error_token(token.as_ref())),
+            token: Some(sanitize_text(token.as_ref(), MAX_ERROR_TOKEN_BYTES)),
         }
     }
 }
@@ -366,7 +380,6 @@ pub enum RecipeErrorKind {
     EmptyContainerBlock,
     EmptyPodBlock,
     InvalidArgumentCount,
-    InvalidBoolean,
     InvalidCommand,
     InvalidContainerName,
     InvalidDescription,
@@ -398,7 +411,6 @@ impl Display for RecipeErrorKind {
             Self::EmptyContainerBlock => "container block in recipe is empty",
             Self::EmptyPodBlock => "pod block in recipe is empty",
             Self::InvalidArgumentCount => "invalid number of arguments for block or directive",
-            Self::InvalidBoolean => "invalid boolean value (expected 'true' or 'false')",
             Self::InvalidCommand => "invalid command definition in recipe",
             Self::InvalidContainerName => "invalid container name in recipe",
             Self::InvalidDescription => "invalid description in recipe",
@@ -452,16 +464,6 @@ impl Display for SystemError {
 }
 
 impl Error for SystemError {}
-
-/// Clamps `raw` to [`MAX_ERROR_TOKEN_BYTES`] and replaces all control and bidirectional characters with spaces.
-fn sanitize_error_token(raw: &str) -> String {
-    let clamped = clamp_utf8_prefix(raw, MAX_ERROR_TOKEN_BYTES);
-    let mut sanitized = String::with_capacity(clamped.len());
-    for character in clamped.chars() {
-        sanitized.push(sanitize_char(character));
-    }
-    sanitized
-}
 
 /// Writes `raw` to `formatter`, clamped to [`MAX_ERROR_TOKEN_BYTES`] and sanitized of control characters.
 fn write_sanitized_token(formatter: &mut Formatter<'_>, raw: &str) -> fmt::Result {
@@ -521,8 +523,10 @@ mod tests {
             (ConfigErrorKind::MissingGroupsBlock, "missing 'groups'"),
             (ConfigErrorKind::MissingRecipesBlock, "missing 'recipes'"),
             (ConfigErrorKind::NotFound, "configuration file not found"),
+            (ConfigErrorKind::RecipeNotFound, "recipe not found"),
             (ConfigErrorKind::UnexpectedBlock, "unexpected block"),
             (ConfigErrorKind::UnknownDirective, "unknown directive"),
+            (ConfigErrorKind::UnknownGroup, "unknown recipe group"),
         ];
 
         for (index, (kind, expected_substring)) in variants.iter().enumerate() {
@@ -537,11 +541,7 @@ mod tests {
             assert!(with_token.to_string().contains(expected_substring));
             assert!(with_token.to_string().contains("bad_token"));
 
-            let token_no_line = ConfigError {
-                kind: *kind,
-                line: None,
-                token: Some(String::from("bad_token")),
-            };
+            let token_no_line = ConfigError::without_line(*kind, "bad_token");
             assert!(token_no_line.to_string().contains(expected_substring));
             assert!(token_no_line.to_string().contains("bad_token"));
         }
@@ -687,7 +687,6 @@ mod tests {
                 RecipeErrorKind::InvalidArgumentCount,
                 "invalid number of arguments",
             ),
-            (RecipeErrorKind::InvalidBoolean, "invalid boolean"),
             (RecipeErrorKind::InvalidCommand, "invalid command"),
             (
                 RecipeErrorKind::InvalidContainerName,

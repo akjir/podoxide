@@ -638,16 +638,14 @@ pod example-stack {
 }
 
 container *db {
-    detach   true
     restart  always
     registry docker.io
     image    example/db-server:latest
-    volume   data /var/lib/db/data:Z # Mounts 'data' with SELinux label 'Z'
+    volume   data /var/lib/db/data Z # Mounts 'data' with SELinux label 'Z'
     option   \"--env DB_PASSWORD=secret\"
 }
 
 container *app {
-    detach  true
     restart always
     image   example/example-app:latest
     command start-server.sh
@@ -773,19 +771,23 @@ recipes {
         assert_eq!(db_container.arguments, vec![Cow::Borrowed("*db")]);
         assert_eq!(db_container.line, 19);
         let db_directives: Vec<_> = db_container.directives().collect();
-        assert_eq!(db_directives.len(), 6);
-        assert_eq!(db_directives[4].name, "volume");
+        assert_eq!(db_directives.len(), 5);
+        assert_eq!(db_directives[3].name, "volume");
         assert_eq!(
-            db_directives[4].arguments,
-            vec![Cow::Borrowed("data"), Cow::Borrowed("/var/lib/db/data:Z")]
+            db_directives[3].arguments,
+            vec![
+                Cow::Borrowed("data"),
+                Cow::Borrowed("/var/lib/db/data"),
+                Cow::Borrowed("Z"),
+            ]
         );
-        assert_eq!(db_directives[4].line, 24);
+        assert_eq!(db_directives[3].line, 23);
 
         let app_container = &document.blocks[2];
         assert_eq!(app_container.name, "container");
         assert_eq!(app_container.arguments, vec![Cow::Borrowed("*app")]);
-        assert_eq!(app_container.line, 28);
-        assert_eq!(app_container.directives().count(), 4);
+        assert_eq!(app_container.line, 27);
+        assert_eq!(app_container.directives().count(), 3);
     }
 
     #[test]

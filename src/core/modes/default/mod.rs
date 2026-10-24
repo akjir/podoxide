@@ -29,7 +29,29 @@ pub mod update;
 
 use crate::core::context::{Context, DefaultAction, ModeAction};
 use crate::core::log;
+use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError};
+
+/// Expands `@<group>` and `<recipe>` targets from `context.parameters`, loads and validates each targeted `.pod` recipe, and executes `action`.
+///
+/// # Errors
+///
+/// Returns [`PodError`] if `context.parameters` is empty, target expansion fails, a targeted `.pod` recipe file cannot be read or validated, or `action` fails.
+pub fn execute_lifecycle_action(
+    context: &Context,
+    action: fn(&Recipe, bool) -> Result<(), PodError>,
+) -> Result<(), PodError> {
+    if context.parameters.is_empty() {
+        return Err(PodError::from(CliError::new(CliErrorKind::MissingTarget)));
+    }
+    let targets = context.config.expand_targets(&context.parameters)?;
+    for target in &targets {
+        let mut recipe = Recipe::load(&context.config.recipes.path, target)?;
+        recipe.validate(&context.config, target)?;
+        action(&recipe, context.config.simulate)?;
+    }
+    Ok(())
+}
 
 /// Dispatches default mode execution to the resolved lifecycle, status, or help action.
 ///
@@ -67,12 +89,38 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::context::{CommandAction, Context, DefaultAction, Mode, ModeAction};
-    use crate::error::{CliErrorKind, PodError};
-    use super::handle;
+    use crate::core::pod;
+    use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
+    use super::{execute_lifecycle_action, handle};
+
+    #[test]
+    fn execute_lifecycle_action_rejects_empty_and_unknown_targets() {
+        let mut context = Context::new();
+        context.config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
+
+        let empty_error = execute_lifecycle_action(&context, pod::up).unwrap_err();
+        match empty_error {
+            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::MissingTarget),
+            other => panic!("expected PodError::Cli(MissingTarget), got {other:?}"),
+        }
+
+        context.parameters = vec![String::from("unknown_recipe")];
+        let unknown_error = execute_lifecycle_action(&context, pod::up).unwrap_err();
+        match unknown_error {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::RecipeNotFound);
+            }
+            other => panic!("expected PodError::Config(RecipeNotFound), got {other:?}"),
+        }
+    }
 
     #[test]
     fn handle_routes_default_actions_and_rejects_mismatched_action() {
+        let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
         let actions = [
             DefaultAction::Create,
             DefaultAction::Down,
@@ -89,8 +137,12 @@ mod tests {
 
         for action in actions {
             let mut context = Context::new();
+            context.config = root_config.clone();
             context.mode = Mode::Default;
             context.action = ModeAction::Default(action);
+            if action.requires_targets() {
+                context.parameters = vec![String::from("recipe")];
+            }
             assert!(handle(&context).is_ok());
         }
 

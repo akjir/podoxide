@@ -16,17 +16,16 @@
 //! CLI argument scanner, flag validator, and mode/action resolver.
 
 use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::core::config::{DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH};
 use crate::core::context::{
     CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, Flags, ImageAction,
     InitAction, LogsAction, Mode, ModeAction, RecipeAction,
 };
 use crate::error::{CliError, CliErrorKind};
-use crate::utilities::path::extract_config_stem;
-use crate::utilities::string::{contains_control_or_whitespace, is_empty_value_literal};
+use crate::utilities::path::{extract_config_stem, resolve_config_name, resolve_config_path};
+use crate::utilities::string::{is_empty_value_literal, is_valid_target_segment, is_valid_token};
 
 const INITIAL_POSITIONALS_CAPACITY: usize = 8;
 /// Maximum number of command-line arguments accepted by the parser.
@@ -57,43 +56,6 @@ where
         context.config.simulate = true;
     }
     Ok(())
-}
-
-/// Resolves a configuration file argument into its configuration name (file stem).
-#[must_use]
-pub fn resolve_config_name(config: Option<&Path>) -> String {
-    config
-        .and_then(Path::to_str)
-        .and_then(extract_config_stem)
-        .unwrap_or(DEFAULT_CONFIG_NAME)
-        .to_owned()
-}
-
-/// Resolves a configuration file argument into a normalized `.conf` path.
-#[must_use]
-pub fn resolve_config_path(config: Option<&Path>) -> PathBuf {
-    let Some(path) = config else {
-        return PathBuf::from(DEFAULT_CONFIG_PATH);
-    };
-    let Some(raw) = path.to_str() else {
-        return PathBuf::from(DEFAULT_CONFIG_PATH);
-    };
-    if extract_config_stem(raw).is_none() {
-        return PathBuf::from(DEFAULT_CONFIG_PATH);
-    }
-    let has_explicit_prefix =
-        raw.starts_with('/') || raw.starts_with("./") || raw.starts_with("../");
-    let has_conf_extension = raw.ends_with(".conf");
-
-    let mut resolved = String::with_capacity(raw.len() + 7);
-    if !has_explicit_prefix {
-        resolved.push_str("./");
-    }
-    resolved.push_str(raw);
-    if !has_conf_extension {
-        resolved.push_str(".conf");
-    }
-    PathBuf::from(resolved)
 }
 
 /// Validates and stores a value-taking CLI flag (`--config`, `-c`, `--since`, `--tail`, `--until`) into `flags`.
@@ -174,17 +136,6 @@ fn ensure_no_extra_arguments(
         ));
     }
     Ok(())
-}
-
-/// Evaluates whether `segment` is a safe, non-empty target component without path separators, leading dashes, or control characters.
-fn is_valid_target_segment(segment: &str) -> bool {
-    !segment.is_empty()
-        && segment != "."
-        && segment != ".."
-        && !segment.starts_with('-')
-        && !segment.starts_with('@')
-        && !segment.contains('/')
-        && !contains_control_or_whitespace(segment)
 }
 
 /// Converts an `OsStr` command-line argument to a UTF-8 `&str`.
@@ -470,10 +421,7 @@ fn parse_init_positionals(positionals: &[String]) -> Result<(ModeAction, Vec<Str
 
 /// Validates a `--since`, `--tail`, or `--until` flag value, rejecting leading dashes, whitespace, and control characters.
 fn parse_log_flag_value(raw_value: &str) -> Result<String, CliError> {
-    if raw_value.is_empty()
-        || raw_value.starts_with('-')
-        || contains_control_or_whitespace(raw_value)
-    {
+    if !is_valid_token(raw_value) {
         return Err(CliError::with_argument(
             CliErrorKind::InvalidFlagValue,
             raw_value,
@@ -738,9 +686,8 @@ mod tests {
         InitAction, LogsAction, Mode, ModeAction, RecipeAction,
     };
     use crate::error::CliErrorKind;
-    use super::{
-        MAX_CLI_ARGS, apply_flag_value, parse_args, resolve_config_name, resolve_config_path,
-    };
+    use crate::utilities::path::{resolve_config_name, resolve_config_path};
+    use super::{MAX_CLI_ARGS, apply_flag_value, parse_args};
 
     #[test]
     fn argument_count_bounds_and_invalid_utf8() {

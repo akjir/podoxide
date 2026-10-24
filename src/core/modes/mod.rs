@@ -66,7 +66,10 @@ pub fn dispatch_mode(context: &Context) -> Result<(), PodError> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use crate::core::cli::parse_args;
+    use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::context::{
         CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, ImageAction,
         InitAction, LogsAction, Mode, ModeAction, RecipeAction,
@@ -78,41 +81,42 @@ mod tests {
     fn dispatch_mode_handles_all_modes_and_actions() {
         let invocations: &[&[&str]] = &[
             &["help"],
-            &["create", "example-app"],
-            &["down", "example-app"],
-            &["reload", "example-app"],
-            &["remove", "example-app"],
-            &["restart", "example-app"],
-            &["start", "example-app"],
+            &["create", "recipe"],
+            &["down", "recipe"],
+            &["reload", "recipe"],
+            &["remove", "recipe"],
+            &["restart", "recipe"],
+            &["start", "recipe"],
             &["status"],
-            &["stop", "example-app"],
-            &["up", "example-app"],
-            &["update", "example-app"],
+            &["stop", "recipe"],
+            &["up", "recipe"],
+            &["update", "recipe"],
             &["command", "help"],
-            &["command", "list", "example-app"],
-            &["command", "exec", "example-app", "migrate"],
+            &["command", "list", "recipe"],
+            &["command", "exec", "recipe", "migrate"],
             &["config", "help"],
             &["config", "edit"],
             &["config", "show"],
             &["connect", "help"],
-            &["connect", "shell", "example-app/db"],
+            &["connect", "shell", "recipe/db"],
             &["image", "help"],
             &["image", "prune"],
-            &["image", "update", "example-app"],
+            &["image", "update", "recipe"],
             &["init"],
             &["init", "help"],
             &["logs", "help"],
-            &["logs", "follow", "example-app/db"],
-            &["logs", "show", "example-app"],
+            &["logs", "follow", "recipe/db"],
+            &["logs", "show", "recipe"],
             &["recipe", "help"],
-            &["recipe", "edit", "example-app"],
+            &["recipe", "edit", "recipe"],
             &["recipe", "list"],
-            &["recipe", "show", "example-app"],
+            &["recipe", "show", "recipe"],
         ];
 
         for arguments in invocations {
             let mut context = Context::new();
             parse_args(&mut context, *arguments).unwrap();
+            context.load_config_if_required().unwrap();
             assert!(
                 dispatch_mode(&context).is_ok(),
                 "expected dispatch_mode to succeed for {arguments:?}"
@@ -148,6 +152,7 @@ mod tests {
         }
 
         // Verify all action enum variants map cleanly through their respective modes.
+        let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
         let valid_pairs = [
             (Mode::Command, ModeAction::Command(CommandAction::Exec)),
             (Mode::Command, ModeAction::Command(CommandAction::Help)),
@@ -184,8 +189,10 @@ mod tests {
 
         for (mode, action) in valid_pairs {
             let mut context = Context::new();
+            context.config = root_config.clone();
             context.mode = mode;
             context.action = action;
+            context.parameters = vec![String::from("recipe")];
             assert!(dispatch_mode(&context).is_ok());
         }
     }

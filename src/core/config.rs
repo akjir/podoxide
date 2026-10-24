@@ -20,14 +20,19 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::core::log;
 use crate::error::{ConfigError, ConfigErrorKind, PodError};
 use crate::io::psl::{PslBlock, PslDirective, PslDocument, PslStatement, parse_psl};
 use crate::io::system::fs;
+use crate::utilities::collection::{
+    MAX_COLLECTION_PREALLOC, bounded_capacity, dedup_preserve_order,
+};
 use crate::utilities::path::{
-    extract_config_stem, has_parent_dir, is_valid_directory_path, sanitize_path_token,
+    extract_config_stem, has_parent_dir, is_valid_directory_path, is_valid_editor_value,
+    sanitize_path_token,
 };
 use crate::utilities::string::{
-    contains_control_or_whitespace, is_valid_identifier, is_valid_recipe_identifier,
+    is_valid_group_target, is_valid_identifier, is_valid_recipe_identifier,
 };
 
 /// Default configuration name when `--config` is not specified.
@@ -61,6 +66,21 @@ impl Config {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Expands `@<group>` and `<recipe>` targets against `self.recipes.groups`, preserving first-appearance order and deduplicating repeated recipes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PodError`] if an `@<group>` target does not exist in `self.recipes.groups`, a group contains a cycle or invalid target, or a `<recipe>` target is not referenced in any configured group.
+    pub fn expand_targets(&self, targets: &[String]) -> Result<Vec<String>, PodError> {
+        expand_targets(self, targets)
+    }
+
+    /// Evaluates whether `recipe_name` is referenced in any group of `self.recipes.groups`.
+    #[must_use]
+    pub fn has_recipe(&self, recipe_name: &str) -> bool {
+        has_recipe(self, recipe_name)
     }
 
     /// Loads and validates a configuration file from `path`.
@@ -132,6 +152,53 @@ impl Default for RecipesConfig {
             path: PathBuf::from(DEFAULT_RECIPES_PATH),
         }
     }
+}
+
+/// Expands `@<group>` and `<recipe>` targets against `config.recipes.groups`, preserving first-appearance order and deduplicating repeated recipes.
+///
+/// # Errors
+///
+/// Returns [`PodError`] if an `@<group>` target does not exist in `config.recipes.groups`, a group contains a cycle or invalid target, or a `<recipe>` target is not referenced in any configured group.
+pub fn expand_targets(config: &Config, targets: &[String]) -> Result<Vec<String>, PodError> {
+    if targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    if log::is_debug_enabled() {
+        log::debug(&format!("Targets   - {}", targets.join(" ")));
+    }
+    let capacity = bounded_capacity(targets.len(), MAX_COLLECTION_PREALLOC);
+    let mut collected = Vec::with_capacity(capacity);
+    let mut expanded_groups = BTreeSet::new();
+    let mut visiting = BTreeSet::new();
+
+    for target in targets {
+        expand_single_target(
+            config,
+            target.as_str(),
+            &mut visiting,
+            &mut expanded_groups,
+            &mut collected,
+        )?;
+    }
+
+    let deduplicated = dedup_preserve_order(&collected);
+    if log::is_debug_enabled() && !deduplicated.is_empty() {
+        log::debug(&format!("Untangled - {}", deduplicated.join(" ")));
+    }
+    Ok(deduplicated)
+}
+
+/// Evaluates whether `recipe_name` is referenced in any group of `config.recipes.groups`.
+#[must_use]
+pub fn has_recipe(config: &Config, recipe_name: &str) -> bool {
+    if recipe_name.starts_with('@') || !is_valid_recipe_identifier(recipe_name) {
+        return false;
+    }
+    config
+        .recipes
+        .groups
+        .values()
+        .any(|entries| group_contains_recipe(entries, recipe_name))
 }
 
 /// Loads and validates a configuration file from `path`.
@@ -397,32 +464,111 @@ fn ensure_no_block_arguments(block: &PslBlock<'_>) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Evaluates whether `value` is a safe executable name or path for `general.editor`.
-#[must_use]
-fn is_valid_editor_value(value: &str) -> bool {
-    if value.is_empty()
-        || value.starts_with('-')
-        || contains_control_or_whitespace(value)
-        || has_parent_dir(Path::new(value))
-    {
-        return false;
+/// Recursively expands a single `@<group>` target from `config.recipes.groups` into `collected`.
+fn expand_group_target<'a>(
+    config: &'a Config,
+    group_target: &'a str,
+    group_name: &'a str,
+    visiting: &mut BTreeSet<&'a str>,
+    expanded_groups: &mut BTreeSet<&'a str>,
+    collected: &mut Vec<String>,
+) -> Result<(), ConfigError> {
+    if !is_valid_identifier(group_name) {
+        return Err(ConfigError::without_line(
+            ConfigErrorKind::UnknownGroup,
+            group_target,
+        ));
     }
-    let Some(file_name) = value.rsplit('/').next() else {
-        return false;
+    let Some(entries) = config.recipes.groups.get(group_name) else {
+        return Err(ConfigError::without_line(
+            ConfigErrorKind::UnknownGroup,
+            group_target,
+        ));
     };
-    !file_name.is_empty()
-        && file_name != "."
-        && file_name != ".."
-        && !file_name.starts_with('-')
+    if visiting.contains(group_name) {
+        return Err(ConfigError::without_line(
+            ConfigErrorKind::InvalidGroupTarget,
+            group_target,
+        ));
+    }
+    if expanded_groups.contains(group_name) {
+        return Ok(());
+    }
+    visiting.insert(group_name);
+    for entry in entries {
+        expand_single_group_entry(
+            config,
+            entry.as_str(),
+            visiting,
+            expanded_groups,
+            collected,
+        )?;
+    }
+    visiting.remove(group_name);
+    expanded_groups.insert(group_name);
+    Ok(())
 }
 
-/// Evaluates whether `target` is a valid `@<group>` reference or recipe stem identifier.
-#[must_use]
-fn is_valid_group_target(target: &str) -> bool {
-    if let Some(group_name) = target.strip_prefix('@') {
-        return is_valid_identifier(group_name);
+/// Expands a single entry (`@<subgroup>` or `<recipe>`) declared inside a group in `config.recipes.groups`.
+fn expand_single_group_entry<'a>(
+    config: &'a Config,
+    entry: &'a str,
+    visiting: &mut BTreeSet<&'a str>,
+    expanded_groups: &mut BTreeSet<&'a str>,
+    collected: &mut Vec<String>,
+) -> Result<(), ConfigError> {
+    if let Some(subgroup_name) = entry.strip_prefix('@') {
+        return expand_group_target(
+            config,
+            entry,
+            subgroup_name,
+            visiting,
+            expanded_groups,
+            collected,
+        );
     }
-    is_valid_recipe_identifier(target)
+    if !is_valid_recipe_identifier(entry) {
+        return Err(ConfigError::without_line(
+            ConfigErrorKind::InvalidGroupTarget,
+            entry,
+        ));
+    }
+    collected.push(String::from(entry));
+    Ok(())
+}
+
+/// Expands a single CLI target (`@<group>` or `<recipe>`) into `collected`.
+fn expand_single_target<'a>(
+    config: &'a Config,
+    target: &'a str,
+    visiting: &mut BTreeSet<&'a str>,
+    expanded_groups: &mut BTreeSet<&'a str>,
+    collected: &mut Vec<String>,
+) -> Result<(), ConfigError> {
+    if let Some(group_name) = target.strip_prefix('@') {
+        return expand_group_target(
+            config,
+            target,
+            group_name,
+            visiting,
+            expanded_groups,
+            collected,
+        );
+    }
+    if !has_recipe(config, target) {
+        return Err(ConfigError::without_line(
+            ConfigErrorKind::RecipeNotFound,
+            target,
+        ));
+    }
+    collected.push(String::from(target));
+    Ok(())
+}
+
+/// Evaluates whether `entries` contains `recipe_name`.
+#[must_use]
+fn group_contains_recipe(entries: &[String], recipe_name: &str) -> bool {
+    entries.iter().any(|entry| entry == recipe_name)
 }
 
 /// Sets `flag` in `seen` or returns a duplicate block/directive [`ConfigError`] if already set.
@@ -544,13 +690,9 @@ fn parse_single_argument<'a>(directive: &'a PslDirective<'a>) -> Result<&'a str,
 fn read_config_file(path: &Path) -> Result<String, PodError> {
     match fs::read_file(path) {
         Ok(content) => Ok(content),
-        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
-            Err(PodError::from(ConfigError {
-                kind: ConfigErrorKind::NotFound,
-                line: None,
-                token: Some(sanitize_path_token(path)),
-            }))
-        }
+        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Err(PodError::from(
+            ConfigError::without_line(ConfigErrorKind::NotFound, sanitize_path_token(path)),
+        )),
         Err(error) => Err(error),
     }
 }
@@ -580,11 +722,10 @@ fn validate_load_path(path: &Path) -> Result<&str, PodError> {
         .filter(|_| !has_parent_dir(path))
         .and_then(extract_config_stem)
         .ok_or_else(|| {
-            PodError::from(ConfigError {
-                kind: ConfigErrorKind::InvalidPath,
-                line: None,
-                token: Some(sanitize_path_token(path)),
-            })
+            PodError::from(ConfigError::without_line(
+                ConfigErrorKind::InvalidPath,
+                sanitize_path_token(path),
+            ))
         })
 }
 
@@ -643,11 +784,12 @@ mod tests {
     use std::process;
     use std::str::FromStr;
 
+    use crate::core::log;
     use crate::error::{ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError, PslErrorKind};
     use crate::io::system::fs as system_fs;
     use super::{
         Config, DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH, DEFAULT_RECIPES_PATH, PodsConfig,
-        RecipesConfig, load,
+        RecipesConfig, expand_targets, has_recipe, load,
     };
 
     fn assert_config_error(input: &str, expected_kind: ConfigErrorKind) {
@@ -655,6 +797,158 @@ mod tests {
         match error {
             PodError::Config(config_error) => assert_eq!(config_error.kind, expected_kind),
             other => panic!("expected PodError::Config({expected_kind:?}), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn expand_targets_and_has_recipe_preserve_first_appearance_and_reject_invalid_targets() {
+        let config_input = "\
+recipes {
+    groups {
+        single target
+        stack push pop
+        glados the cake lie
+        nested @stack @glados
+        diamond @nested @stack
+    }
+}
+";
+        let config = Config::from_str(config_input).unwrap();
+
+        assert!(config.has_recipe("target"));
+        assert!(has_recipe(&config, "push"));
+        assert!(!config.has_recipe("invalid"));
+        assert!(!config.has_recipe("@stack"));
+        assert!(!config.has_recipe("../evil"));
+
+        assert!(config.expand_targets(&[]).unwrap().is_empty());
+
+        log::set_debug_enabled(true);
+        assert_eq!(
+            config.expand_targets(&[String::from("target")]).unwrap(),
+            vec![String::from("target")]
+        );
+        assert_eq!(
+            expand_targets(&config, &[String::from("@stack")]).unwrap(),
+            vec![String::from("push"), String::from("pop")]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[String::from("target"), String::from("@stack")])
+                .unwrap(),
+            vec![
+                String::from("target"),
+                String::from("push"),
+                String::from("pop"),
+            ]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[
+                    String::from("target"),
+                    String::from("@stack"),
+                    String::from("target"),
+                ])
+                .unwrap(),
+            vec![
+                String::from("target"),
+                String::from("push"),
+                String::from("pop"),
+            ]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[
+                    String::from("the"),
+                    String::from("@glados"),
+                    String::from("lie"),
+                ])
+                .unwrap(),
+            vec![
+                String::from("the"),
+                String::from("cake"),
+                String::from("lie"),
+            ]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[
+                    String::from("lie"),
+                    String::from("cake"),
+                    String::from("@glados"),
+                ])
+                .unwrap(),
+            vec![
+                String::from("lie"),
+                String::from("cake"),
+                String::from("the"),
+            ]
+        );
+        assert_eq!(
+            config.expand_targets(&[String::from("@diamond")]).unwrap(),
+            vec![
+                String::from("push"),
+                String::from("pop"),
+                String::from("the"),
+                String::from("cake"),
+                String::from("lie"),
+            ]
+        );
+        log::set_debug_enabled(false);
+
+        let unknown_recipe = config
+            .expand_targets(&[
+                String::from("push"),
+                String::from("invalid"),
+                String::from("pop"),
+            ])
+            .unwrap_err();
+        match unknown_recipe {
+            PodError::Config(error) => {
+                assert_eq!(error.kind, ConfigErrorKind::RecipeNotFound);
+                assert_eq!(error.token.as_deref(), Some("invalid"));
+            }
+            other => panic!("expected RecipeNotFound, got {other:?}"),
+        }
+
+        for bad_group in ["@invalid", "@", "@-bad"] {
+            let unknown_group = config
+                .expand_targets(&[String::from(bad_group)])
+                .unwrap_err();
+            match unknown_group {
+                PodError::Config(error) => {
+                    assert_eq!(error.kind, ConfigErrorKind::UnknownGroup);
+                    assert_eq!(error.token.as_deref(), Some(bad_group));
+                }
+                other => panic!("expected UnknownGroup, got {other:?}"),
+            }
+        }
+
+        // Manually constructed cyclic or invalid group entries must not recurse infinitely
+        let mut manual_config = Config::new();
+        manual_config
+            .recipes
+            .groups
+            .insert(String::from("cycle"), vec![String::from("@cycle")]);
+        manual_config
+            .recipes
+            .groups
+            .insert(String::from("bad_entry"), vec![String::from("../bad")]);
+
+        let cycle_error = manual_config
+            .expand_targets(&[String::from("@cycle")])
+            .unwrap_err();
+        match cycle_error {
+            PodError::Config(error) => assert_eq!(error.kind, ConfigErrorKind::InvalidGroupTarget),
+            other => panic!("expected InvalidGroupTarget, got {other:?}"),
+        }
+
+        let entry_error = manual_config
+            .expand_targets(&[String::from("@bad_entry")])
+            .unwrap_err();
+        match entry_error {
+            PodError::Config(error) => assert_eq!(error.kind, ConfigErrorKind::InvalidGroupTarget),
+            other => panic!("expected InvalidGroupTarget, got {other:?}"),
         }
     }
 

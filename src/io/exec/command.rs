@@ -20,9 +20,7 @@ use std::process::{Command, ExitStatus};
 
 use crate::core::log;
 use crate::error::{PodError, SystemError};
-use crate::utilities::string::escape_shell;
-
-const ESTIMATED_ARG_BYTES: usize = 12;
+use crate::utilities::format::format_command;
 
 /// Execution options controlling simulation, interactive stdio inheritance, and output prefixing.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -104,24 +102,6 @@ where
     run_captured(program, arguments, options.prefix, stdout)
 }
 
-/// Formats `program` and `arguments` into a single shell-escaped command string.
-#[must_use]
-pub fn format_command<S: AsRef<str>>(program: &str, arguments: &[S]) -> String {
-    let escaped_program = escape_shell(program);
-    let capacity = arguments
-        .len()
-        .saturating_mul(ESTIMATED_ARG_BYTES)
-        .saturating_add(escaped_program.len())
-        .min(log::MAX_LOG_MESSAGE_BYTES);
-    let mut formatted = String::with_capacity(capacity);
-    formatted.push_str(&escaped_program);
-    for argument in arguments {
-        formatted.push(' ');
-        formatted.push_str(&escape_shell(argument.as_ref()));
-    }
-    formatted
-}
-
 /// Constructs a [`Command`] for `program` populated with `arguments`.
 fn build_command<S: AsRef<str>>(program: &str, arguments: &[S]) -> Command {
     let mut command = Command::new(program);
@@ -188,7 +168,8 @@ fn run_interactive<S: AsRef<str>>(program: &str, arguments: &[S]) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use crate::error::{PodError, SystemError};
-    use super::{ExecOptions, exec, exec_capture, exec_with, format_command};
+    use crate::utilities::format::format_command;
+    use super::{ExecOptions, exec, exec_capture, exec_with};
 
     #[test]
     fn exec_capture_handles_success_failure_and_missing_binary() {

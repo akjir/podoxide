@@ -16,7 +16,9 @@
 //! Handler for `pods create <target...>`.
 
 use crate::core::context::Context;
+use crate::core::pod;
 use crate::error::PodError;
+use super::execute_lifecycle_action;
 
 /// Creates target pods and their containers in top-to-bottom declaration order (`1..N`)
 /// without starting them.
@@ -37,9 +39,6 @@ use crate::error::PodError;
 ///
 /// Returns [`PodError`] if target expansion fails, a targeted `.pod` recipe file cannot be
 /// read or validated, or a `podman` creation command fails.
-pub fn handle(_context: &Context) -> Result<(), PodError> {
-    // Step 1: Expand and deduplicate @group and <recipe> targets via context.config.
-    // Step 2: For each targeted recipe, read and validate only <recipes.path>/<recipe>.pod.
-    // Step 3: Delegate to pod::create to create the pod and containers (1..N) without starting them.
-    Ok(())
+pub fn handle(context: &Context) -> Result<(), PodError> {
+    execute_lifecycle_action(context, pod::create)
 }

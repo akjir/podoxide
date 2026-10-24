@@ -180,11 +180,10 @@ Containers declared in `container [<id>] { ... }` blocks are created and started
 | `<id>`            | `string`    | No       | Container name in the block header; supports relative (`*db`), explicit, or omitted naming. |
 | `image`           | `string`    | Yes      | Image repository and tag (`example/db-server:latest`).                                      |
 | `registry`        | `string`    | No       | Registry override for this container; falls back to `pod.registry`.                         |
-| `detach`          | `boolean`   | No       | Run container in the background (`--detach`); defaults to `true` unless set to `false`.     |
 | `restart`         | `string`    | No       | Restart policy passed to `--restart` (for example, `always` or `on-failure`).               |
-| `volume`          | `directive` | No       | Volume mount definition `<host_dir> <container_dir>[:<options>]` (repeatable).              |
-| `option`          | `directive` | No       | Raw flag string appended directly to `podman run` (repeatable).                             |
-| `command`         | `directive` | No       | Command and argument tokens appended after the image in `podman run` (repeatable).          |
+| `volume`          | `directive` | No       | Volume mount definition `<host_dir> <container_dir> [<options>]` (repeatable).              |
+| `option`          | `directive` | No       | Raw flag string appended directly to `podman create` (repeatable).                          |
+| `command`         | `directive` | No       | Command and argument tokens appended after the image in `podman create` (repeatable).       |
 
 #### Container Naming Rules
 
@@ -194,7 +193,7 @@ Containers declared in `container [<id>] { ... }` blocks are created and started
 
 #### Volume Mount Rules (`volume`)
 
-Each `volume` directive specifies a host source and container destination (`volume <host_dir> <container_dir>[:<options>]` or `volume <host_dir> <container_dir> [<options>]`):
+Each `volume` directive specifies a host source, container destination, and optional mount options (`volume <host_dir> <container_dir> [<options>]`):
 
 | `host_dir` Value   | Resolution                    | Generated `--volume` Value                    |
 | :----------------- | :---------------------------- | :-------------------------------------------- |
@@ -222,16 +221,14 @@ pod example-stack {
 }
 
 container *db {
-    detach   true
     restart  always
     registry docker.io
     image    example/db-server:latest
-    volume   data /var/lib/db/data:Z # Mounts 'data' with SELinux label 'Z'
+    volume   data /var/lib/db/data Z # Mounts 'data' with SELinux label 'Z'
     option   "--env DB_PASSWORD=secret"
 }
 
 container *app {
-    detach  true
     restart always
     image   example/example-app:latest
     command start-server.sh

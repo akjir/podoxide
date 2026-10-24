@@ -24,7 +24,8 @@ use std::path::{Component, Path, PathBuf};
 use crate::error::{PodError, PslError, PslErrorKind};
 use crate::io::psl::MAX_FILE_BYTES;
 use crate::utilities::path::{
-    matches_extension, normalize_lexical_path, parent_or_cur_dir, pop_relative_or_absolute,
+    has_regular_target_name, matches_extension, normalize_lexical_path, parent_or_cur_dir,
+    pop_relative_or_absolute,
 };
 
 const INITIAL_DIRECTORY_CAPACITY: usize = 16;
@@ -230,12 +231,6 @@ fn ensure_regular_file(path: &Path, metadata: &Metadata) -> Result<(), PodError>
         )));
     }
     Ok(())
-}
-
-/// Evaluates whether `path` names a terminal file entry without a trailing slash or dot segment.
-fn has_regular_target_name(path: &Path) -> bool {
-    let raw_bytes = path.as_os_str().as_encoded_bytes();
-    path.file_name().is_some() && !raw_bytes.ends_with(b"/") && !raw_bytes.ends_with(b"/.")
 }
 
 /// Creates a [`PodError::Io`] indicating that `path` is not a valid regular-file write target.

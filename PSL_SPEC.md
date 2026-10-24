@@ -65,7 +65,7 @@ An **Argument** represents a parameter passed to a block header or a directive. 
 
 #### A. Bare Word (Unquoted String)
 - A contiguous sequence of one or more valid UTF-8 characters excluding horizontal whitespace (`' '`, `'\t'`), newlines (`\r`, `\n`), and reserved punctuation (`{`, `}`, `#`, `"`, `'`).
-- Bare words allow domain-specific symbols without quoting, including `/`, `.`, `:`, `-`, `_`, `*`, `@`, and `=` (e.g., `/var/lib/db/data:Z`, `*db`, `@database`, `--userns=keep-id`).
+- Bare words allow domain-specific symbols without quoting, including `/`, `.`, `:`, `-`, `_`, `*`, `@`, and `=` (e.g., `example/db-server:latest`, `/var/lib/db/data`, `*db`, `@database`, `--userns=keep-id`).
 - A bare word is borrowed directly from the input buffer as a zero-copy `&str` slice.
 
 #### B. Double-Quoted String (`"..."`)
@@ -249,16 +249,14 @@ pod example-stack {
 }
 
 container *db {
-    detach   true
     restart  always
     registry docker.io
     image    example/db-server:latest
-    volume   data /var/lib/db/data:Z # Mounts 'data' with SELinux label 'Z'
+    volume   data /var/lib/db/data Z # Mounts 'data' with SELinux label 'Z'
     option   "--env DB_PASSWORD=secret"
 }
 
 container *app {
-    detach  true
     restart always
     image   example/example-app:latest
     command start-server.sh
