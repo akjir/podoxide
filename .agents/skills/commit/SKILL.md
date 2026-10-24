@@ -1,29 +1,29 @@
 ---
 name: commit
-description: Verifies that all tests pass, the project builds cleanly without Clippy warnings, commits all open changes, and optionally pushes to origin. Triggered when the user types `/commit`, `/commit push`, `/commit <message>`, or `/commit push <message>`.
+description: Commits all open changes after verifying that tests and Clippy checks pass (without modifying code), or commits immediately without verification when forced, and optionally pushes to origin. Triggered when the user types `/commit`, `/commit force`, `/commit push`, `/commit <message>`, `/commit force <message>`, or `/commit push <message>`.
 ---
 
-# Verify & Commit Workflow
+# Commit Workflow
 
-Execute this workflow whenever the user invokes `/commit`, `/commit push`, `/commit <message>`, or `/commit push <message>`. Follow all rules in `AGENTS.md` strictly.
+Execute this workflow whenever the user invokes `/commit`, `/commit force`, `/commit push`, `/commit <message>`, `/commit force <message>`, or `/commit push <message>`. Follow all rules in `AGENTS.md` strictly. Never modify, refactor, or fix any code or files during this workflow.
 
-## 1. Pre-Commit Verification Gate
-Before staging or committing any changes, verify that the entire workspace is healthy:
-1. **Run Test Suite:** Execute `cargo test` and verify that all unit, integration, and doc tests pass without failure.
-2. **Run Linter & Compiler Checks:** Execute `cargo clippy --all-targets -- -D warnings` and verify zero compiler or Clippy warnings.
-3. **Rule & Sync Check:** Inspect `git status --short` and `git diff` to ensure modified files comply with `AGENTS.md` (deterministic vertical layout starting with the verbatim GPL-3.0 license header from `src/main.rs` per `P-LICENSE-HEADER` and `//!` module docs, concise `///` doc comments on all production types, functions, and methods per `P-FN-DOCS`, flat control flow, zero dead code or `#[allow(dead_code)]` suppressions per `P-NO-DEAD-CODE`, documentation sync via **`update-documentation`**, and `CHANGELOG.md` sync via **`changelog-updater`** when user-facing changes exist). Flag any `.rs` file missing the license header or any production `fn`, `struct`, `enum`, or `type` missing a `///` doc comment as a violation that must be fixed before completing the workflow.
-4. **Remediate Failures:** If any test fails or Clippy reports a warning, fix the root cause and re-run the verification suite until every check passes cleanly before proceeding to commit.
+## 1. Pre-Commit Verification Gate (`/commit` and `/commit push` only)
+- **Force Bypass (`/commit force` / `/commit force <message>`):** Skip this section completely. Do not run any tests or linter checks; proceed directly to Section 2.
+- **Standard Verification (`/commit` / `/commit push`):** Before staging or committing any changes, verify that the workspace passes all checks:
+  1. **Run Test Suite:** Execute `cargo test` and verify that all unit, integration, and doc tests pass.
+  2. **Run Linter & Compiler Checks:** Execute `cargo clippy --all-targets -- -D warnings` and verify zero compiler or Clippy warnings.
+  3. **Abort on Failure (No Code Changes):** If `cargo test` or `cargo clippy` fails, stop the workflow immediately. Do NOT edit or fix any files, do NOT stage or commit changes, and do NOT push. Report the failing test or compiler output directly to the user.
 
 ## 2. Stage & Commit All Open Changes
-Once all verification checks pass:
+When invoked via `/commit force`, or once all verification checks in Section 1 pass:
 1. **Stage Changes:** Run `git add -A` to stage all modified, new, and deleted files in the working tree.
-2. **Verify Staged State:** Run `git status --short` and `git diff --cached --stat` to confirm that all open changes are staged and no unintended scratch files are included.
+2. **Verify Staged State:** Run `git status --short` and `git diff --cached --stat` to confirm that all open changes are staged.
 3. **Commit Message:**
-   - If the user provided a message via `/commit <message>` or `/commit push <message>`, use that message (ensuring concise English per `AGENTS.md`).
+   - If the user provided `<message>` via `/commit <message>`, `/commit force <message>`, or `/commit push <message>`, use that message (ensuring concise English per `AGENTS.md`).
    - Otherwise, write a concise, imperative English commit message (following ASD-STE100, zero emojis) that accurately summarizes the staged changes.
 4. **Create Commit:** Execute `git commit -m "<subject>"` and report the resulting commit hash and clean working tree status (`git log -n 1 --oneline` and `git status --short`).
 
 ## 3. Optional Push to Origin
-If the user invoked `/commit push` (or `/commit push <message>`):
+If the user invoked `/commit push` (or `/commit push <message>`) and the verification gate and commit succeeded:
 1. **Push Commit:** Execute `git push origin HEAD` to push the new commit on the current branch to `origin`.
 2. **Verify Remote Sync:** Report the push result and verify the branch status via `git status -sb`.
