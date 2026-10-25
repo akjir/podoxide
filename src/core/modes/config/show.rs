@@ -474,6 +474,7 @@ mod tests {
     use std::fs as std_fs;
     use std::path::PathBuf;
     use std::process;
+    use std::str::FromStr;
 
     use crate::core::config::Config;
     use crate::core::context::Context;
@@ -539,6 +540,68 @@ mod tests {
         assert!(!output.contains("Unreferenced Recipes:"));
         assert!(output.contains("Validation Summary:\n"));
         assert!(output.contains("- Recipe file for 'leaf_recipe' not found!\n"));
+
+        let _ = std_fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn show_with_distinguishes_subgroup_from_same_named_recipe_leaf() {
+        let temp_dir = create_temp_test_dir("same_named_leaf");
+        let recipes_dir = temp_dir.join("recipes");
+        std_fs::create_dir_all(&recipes_dir).unwrap();
+
+        // Create `alpha.pod`, `beta.pod`, and `stack.pod`.
+        // `alpha` is both a group (`@alpha`) and a referenced recipe (`alpha` inside `alpha`).
+        // `stack` is only a group (`@stack`), so `stack.pod` on disk must be reported as unreferenced.
+        fs::write_file(&recipes_dir.join("alpha.pod"), "").unwrap();
+        fs::write_file(&recipes_dir.join("beta.pod"), "").unwrap();
+        fs::write_file(&recipes_dir.join("stack.pod"), "").unwrap();
+
+        let config_input = "\
+general {
+    editor vim
+    simulate false
+}
+
+pods {
+    path /pods
+}
+
+recipes {
+    path ./recipes
+
+    groups {
+        all @alpha @stack
+        stack media cloud proxy
+        alpha beta alpha
+    }
+}
+";
+        let mut config = Config::from_str(config_input).unwrap();
+        config.recipes.path = recipes_dir;
+
+        let mut stdout = Vec::new();
+        show_with(&config, &mut stdout).unwrap();
+        let output = String::from_utf8(stdout).unwrap();
+
+        assert!(output.contains("Settings:\n  Editor:       vim\n  Simulate:     false\n"));
+        assert!(output.contains("[OK, 2 known and 1 unreferenced recipe found]\n"));
+        assert!(output.contains(
+            "  • all\n    ├── @alpha\n    │   ├── beta                            [OK]\n    │   └── alpha                           [OK]\n    └── @stack\n        ├── media                           [NOT FOUND]\n        ├── cloud                           [NOT FOUND]\n        └── proxy                           [NOT FOUND]\n"
+        ));
+        assert!(output.contains(
+            "  • alpha\n    ├── beta                                [OK]\n    └── alpha                               [OK]\n"
+        ));
+        assert!(output.contains(
+            "  • stack\n    ├── media                               [NOT FOUND]\n    ├── cloud                               [NOT FOUND]\n    └── proxy                               [NOT FOUND]\n"
+        ));
+        assert!(!output.contains("[MISSING GROUP]"));
+        assert!(output.contains(
+            "Unreferenced Recipes:\n  • stack                                   [UNREFERENCED]\n"
+        ));
+        assert!(output.contains(
+            "Validation Summary:\n- Recipe files for 'cloud', 'media' and 'proxy' not found!\n- 1 unreferenced recipe found!\n"
+        ));
 
         let _ = std_fs::remove_dir_all(&temp_dir);
     }

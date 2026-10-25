@@ -279,9 +279,10 @@ fn apply_general_statement(
 }
 
 /// Validates and inserts a single recipe group directive inside the `recipes.groups` block.
-fn apply_group_statement(
+fn apply_group_statement<'a>(
     groups: &mut BTreeMap<String, Vec<String>>,
-    statement: &PslStatement<'_>,
+    group_lines: &mut BTreeMap<&'a str, usize>,
+    statement: &'a PslStatement<'a>,
 ) -> Result<(), ConfigError> {
     let directive = match statement {
         PslStatement::Block(block) => {
@@ -303,6 +304,7 @@ fn apply_group_statement(
     }
     let targets = collect_group_targets(directive)?;
     groups.insert(directive.name.to_owned(), targets);
+    group_lines.insert(directive.name, directive.line);
     Ok(())
 }
 
@@ -664,10 +666,11 @@ fn parse_groups_block(recipes: &mut RecipesConfig, block: &PslBlock<'_>) -> Resu
             Some(block.line),
         ));
     }
+    let mut group_lines = BTreeMap::new();
     for statement in &block.statements {
-        apply_group_statement(&mut recipes.groups, statement)?;
+        apply_group_statement(&mut recipes.groups, &mut group_lines, statement)?;
     }
-    validate_groups_acyclic(&recipes.groups, block.line)
+    validate_groups_acyclic(&recipes.groups, &group_lines, block.line)
 }
 
 /// Parses and validates a single-argument directory `path` directive.
@@ -733,7 +736,8 @@ fn read_config_file(path: &Path) -> Result<String, PodError> {
 /// Verifies that `@<group>` references in `groups` form a directed acyclic graph (DAG) without cycles.
 fn validate_groups_acyclic(
     groups: &BTreeMap<String, Vec<String>>,
-    line: usize,
+    group_lines: &BTreeMap<&str, usize>,
+    fallback_line: usize,
 ) -> Result<(), ConfigError> {
     let mut visiting = BTreeSet::new();
     let mut verified = BTreeSet::new();
@@ -741,9 +745,10 @@ fn validate_groups_acyclic(
         verify_group_acyclic(
             group_name.as_str(),
             groups,
+            group_lines,
             &mut visiting,
             &mut verified,
-            line,
+            fallback_line,
         )?;
     }
     Ok(())
@@ -766,9 +771,10 @@ fn validate_load_path(path: &Path) -> Result<&str, PodError> {
 fn verify_group_acyclic<'a>(
     group_name: &'a str,
     groups: &'a BTreeMap<String, Vec<String>>,
+    group_lines: &BTreeMap<&str, usize>,
     visiting: &mut BTreeSet<&'a str>,
     verified: &mut BTreeSet<&'a str>,
-    line: usize,
+    fallback_line: usize,
 ) -> Result<(), ConfigError> {
     if verified.contains(group_name) {
         return Ok(());
@@ -776,8 +782,9 @@ fn verify_group_acyclic<'a>(
     let Some(targets) = groups.get(group_name) else {
         return Ok(());
     };
+    let line = group_lines.get(group_name).copied().unwrap_or(fallback_line);
     visiting.insert(group_name);
-    verify_group_targets(targets, groups, visiting, verified, line)?;
+    verify_group_targets(targets, groups, group_lines, visiting, verified, line)?;
     visiting.remove(group_name);
     verified.insert(group_name);
     Ok(())
@@ -787,6 +794,7 @@ fn verify_group_acyclic<'a>(
 fn verify_group_targets<'a>(
     targets: &'a [String],
     groups: &'a BTreeMap<String, Vec<String>>,
+    group_lines: &BTreeMap<&str, usize>,
     visiting: &mut BTreeSet<&'a str>,
     verified: &mut BTreeSet<&'a str>,
     line: usize,
@@ -802,7 +810,7 @@ fn verify_group_targets<'a>(
                 target.as_str(),
             ));
         }
-        verify_group_acyclic(subgroup, groups, visiting, verified, line)?;
+        verify_group_acyclic(subgroup, groups, group_lines, visiting, verified, line)?;
     }
     Ok(())
 }
@@ -1020,6 +1028,164 @@ recipes {
         let manual_expected = BTreeSet::from(["valid_recipe"]);
         assert_eq!(manual_config.get_recipes(), manual_expected);
         assert_eq!(get_recipes(&manual_config), manual_expected);
+    }
+
+    #[test]
+    fn group_and_recipe_sharing_name_remain_distinct_in_parsing_membership_and_expansion() {
+        let config_input = "\
+general {
+    editor vim
+    simulate false
+}
+
+pods {
+    path /pods
+}
+
+recipes {
+    path ./recipes
+
+    groups {
+        all @alpha @stack
+        stack media cloud proxy
+        alpha beta alpha
+    }
+}
+";
+        let config = Config::from_str(config_input).unwrap();
+        assert_eq!(config.editor, "vim");
+        assert!(!config.simulate);
+        assert_eq!(config.pods.path, PathBuf::from("/pods"));
+        assert_eq!(config.recipes.path, PathBuf::from("./recipes"));
+        assert_eq!(config.recipes.groups.len(), 3);
+        assert_eq!(
+            config.recipes.groups.get("all"),
+            Some(&vec![String::from("@alpha"), String::from("@stack")])
+        );
+        assert_eq!(
+            config.recipes.groups.get("stack"),
+            Some(&vec![
+                String::from("media"),
+                String::from("cloud"),
+                String::from("proxy"),
+            ])
+        );
+        assert_eq!(
+            config.recipes.groups.get("alpha"),
+            Some(&vec![String::from("beta"), String::from("alpha")])
+        );
+
+        // `alpha` is both a group (`@alpha`) and a recipe (`alpha`), whereas `stack` and `all` are only groups.
+        assert!(config.has_recipe("alpha"));
+        assert!(config.has_recipe("beta"));
+        assert!(config.has_recipe("media"));
+        assert!(config.has_recipe("cloud"));
+        assert!(config.has_recipe("proxy"));
+        assert!(!config.has_recipe("@alpha"));
+        assert!(!config.has_recipe("@stack"));
+        assert!(!config.has_recipe("@all"));
+        assert!(!config.has_recipe("stack"));
+        assert!(!config.has_recipe("all"));
+
+        let expected_recipes = BTreeSet::from(["alpha", "beta", "cloud", "media", "proxy"]);
+        assert_eq!(config.get_recipes(), expected_recipes);
+
+        // `@alpha` (group) and `alpha` (recipe) are distinct targets and expand differently.
+        assert_eq!(
+            config.expand_targets(&[String::from("@alpha")]).unwrap(),
+            vec![String::from("beta"), String::from("alpha")]
+        );
+        assert_eq!(
+            config.expand_targets(&[String::from("alpha")]).unwrap(),
+            vec![String::from("alpha")]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[String::from("alpha"), String::from("@alpha")])
+                .unwrap(),
+            vec![String::from("alpha"), String::from("beta")]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[String::from("@alpha"), String::from("alpha")])
+                .unwrap(),
+            vec![String::from("beta"), String::from("alpha")]
+        );
+        assert_eq!(
+            config.expand_targets(&[String::from("@stack")]).unwrap(),
+            vec![
+                String::from("media"),
+                String::from("cloud"),
+                String::from("proxy"),
+            ]
+        );
+        assert_eq!(
+            config.expand_targets(&[String::from("@all")]).unwrap(),
+            vec![
+                String::from("beta"),
+                String::from("alpha"),
+                String::from("media"),
+                String::from("cloud"),
+                String::from("proxy"),
+            ]
+        );
+
+        // Targeting a group-only identifier without `@` fails with RecipeNotFound.
+        for group_only in ["stack", "all"] {
+            let error = config
+                .expand_targets(&[String::from(group_only)])
+                .unwrap_err();
+            match error {
+                PodError::Config(config_error) => {
+                    assert_eq!(config_error.kind, ConfigErrorKind::RecipeNotFound);
+                    assert_eq!(config_error.token.as_deref(), Some(group_only));
+                }
+                other => panic!("expected RecipeNotFound for {group_only}, got {other:?}"),
+            }
+        }
+
+        // Targeting a recipe-only identifier with `@` fails with UnknownGroup.
+        for recipe_only_as_group in ["@beta", "@media", "@cloud", "@proxy"] {
+            let error = config
+                .expand_targets(&[String::from(recipe_only_as_group)])
+                .unwrap_err();
+            match error {
+                PodError::Config(config_error) => {
+                    assert_eq!(config_error.kind, ConfigErrorKind::UnknownGroup);
+                    assert_eq!(config_error.token.as_deref(), Some(recipe_only_as_group));
+                }
+                other => panic!("expected UnknownGroup for {recipe_only_as_group}, got {other:?}"),
+            }
+        }
+
+        // Replacing recipe `alpha` with subgroup `@alpha` inside group `alpha` forms a self-cycle on that exact line.
+        let cyclic_input = "\
+recipes {
+    path ./recipes
+
+    groups {
+        all @alpha @stack
+        stack media cloud proxy
+        alpha beta @alpha
+    }
+}
+";
+        let cyclic_error = Config::from_str(cyclic_input).unwrap_err();
+        match cyclic_error {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::InvalidGroupTarget);
+                assert_eq!(config_error.line, Some(7));
+                assert_eq!(config_error.token.as_deref(), Some("@alpha"));
+                let diagnostic = config_error.diagnostic.as_ref().unwrap();
+                assert_eq!(diagnostic.line_number, 7);
+                assert_eq!(diagnostic.col_number, 20);
+                assert_eq!(
+                    diagnostic.annotation_carets,
+                    "                   ^^^^^^"
+                );
+            }
+            other => panic!("expected InvalidGroupTarget, got {other:?}"),
+        }
     }
 
     #[test]

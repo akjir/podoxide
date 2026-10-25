@@ -212,14 +212,112 @@ fn parse_container_target(target: &str) -> Result<(&str, &str), PodError> {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::fs as std_fs;
     use std::path::Path;
+    use std::process;
+    use std::str::FromStr;
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::container;
     use crate::core::context::{CommandAction, Context, DefaultAction, Mode, ModeAction};
     use crate::core::pod;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
+    use crate::io::system::fs;
     use super::{execute_lifecycle_action, handle};
+
+    const ALPHA_RECIPE_PSL: &str = "\
+pod alpha_pod {
+    name \"Alpha Pod\"
+    registry docker.io
+}
+container *app {
+    image alpine:latest
+}
+";
+
+    const BETA_RECIPE_PSL: &str = "\
+pod beta_pod {
+    name \"Beta Pod\"
+    registry docker.io
+}
+container *app {
+    image alpine:latest
+}
+";
+
+    #[test]
+    fn execute_lifecycle_action_distinguishes_group_and_recipe_sharing_name() {
+        let temp_dir = env::temp_dir().join(format!(
+            "podoxide_default_same_name_{}",
+            process::id()
+        ));
+        let _ = std_fs::remove_dir_all(&temp_dir);
+        let recipes_dir = temp_dir.join("recipes");
+        std_fs::create_dir_all(&recipes_dir).unwrap();
+
+        let config_input = "\
+general {
+    editor vim
+    simulate false
+}
+
+pods {
+    path /pods
+}
+
+recipes {
+    path ./recipes
+
+    groups {
+        all @alpha @stack
+        stack media cloud proxy
+        alpha beta alpha
+    }
+}
+";
+        let mut config = Config::from_str(config_input).unwrap();
+        config.simulate = true;
+        config.recipes.path = recipes_dir.clone();
+
+        // Write only `alpha.pod` first: targeting `alpha` (recipe) succeeds without `beta.pod`,
+        // whereas targeting `@alpha` (group `beta alpha`) requires `beta.pod` and fails with NotFound.
+        fs::write_file(&recipes_dir.join("alpha.pod"), ALPHA_RECIPE_PSL).unwrap();
+
+        let mut context = Context::new();
+        context.config = config;
+
+        context.parameters = vec![String::from("alpha")];
+        assert!(execute_lifecycle_action(&context, pod::up, container::up).is_ok());
+
+        context.parameters = vec![String::from("@alpha")];
+        let missing_beta =
+            execute_lifecycle_action(&context, pod::up, container::up).unwrap_err();
+        match missing_beta {
+            PodError::Recipe(recipe_error) => {
+                assert_eq!(recipe_error.kind, RecipeErrorKind::NotFound);
+            }
+            other => panic!("expected PodError::Recipe(NotFound) for beta.pod, got {other:?}"),
+        }
+
+        // Once `beta.pod` exists, targeting `@alpha` expands both `beta` and `alpha` and succeeds.
+        fs::write_file(&recipes_dir.join("beta.pod"), BETA_RECIPE_PSL).unwrap();
+        assert!(execute_lifecycle_action(&context, pod::up, container::up).is_ok());
+
+        // Targeting `stack` (defined only as a group, not a recipe) fails with RecipeNotFound.
+        context.parameters = vec![String::from("stack")];
+        let stack_as_recipe =
+            execute_lifecycle_action(&context, pod::up, container::up).unwrap_err();
+        match stack_as_recipe {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::RecipeNotFound);
+                assert_eq!(config_error.token.as_deref(), Some("stack"));
+            }
+            other => panic!("expected PodError::Config(RecipeNotFound), got {other:?}"),
+        }
+
+        let _ = std_fs::remove_dir_all(&temp_dir);
+    }
 
     #[test]
     fn execute_lifecycle_action_handles_container_targets_and_rejects_invalid_specs() {

@@ -132,14 +132,23 @@ impl ConfigError {
     #[must_use]
     pub fn with_diagnostic(mut self, source: &str, file_path: &str) -> Self {
         let line_number = self.line.unwrap_or(1).max(1);
-        let diagnostic = build_line_diagnostic(
+        let prefer_argument = matches!(
+            self.kind,
+            ConfigErrorKind::InvalidBoolean
+                | ConfigErrorKind::InvalidGroupTarget
+                | ConfigErrorKind::InvalidPath
+        );
+        let token = self.token.as_deref();
+        let diagnostic = build_diagnostic_from_line(
             source,
             file_path,
             line_number,
-            self.token.as_deref(),
             self.kind.message(),
             self.kind.annotation_text(),
             self.kind.help_text(),
+            |sanitized_line| {
+                locate_token_span(strip_inline_comment(sanitized_line), token, prefer_argument)
+            },
         );
         self.diagnostic = Some(Box::new(diagnostic));
         self
@@ -614,14 +623,25 @@ impl RecipeError {
     #[must_use]
     pub fn with_diagnostic(mut self, source: &str, file_path: &str) -> Self {
         let line_number = self.line.unwrap_or(1).max(1);
-        let diagnostic = build_line_diagnostic(
+        let prefer_argument = !matches!(
+            self.kind,
+            RecipeErrorKind::DuplicateDirective
+                | RecipeErrorKind::InvalidArgumentCount
+                | RecipeErrorKind::MissingPodName
+                | RecipeErrorKind::UnexpectedBlock
+                | RecipeErrorKind::UnknownDirective
+        );
+        let token = self.token.as_deref();
+        let diagnostic = build_diagnostic_from_line(
             source,
             file_path,
             line_number,
-            self.token.as_deref(),
             self.kind.message(),
             self.kind.annotation_text(),
             self.kind.help_text(),
+            |sanitized_line| {
+                locate_token_span(strip_inline_comment(sanitized_line), token, prefer_argument)
+            },
         );
         self.diagnostic = Some(Box::new(diagnostic));
         self
@@ -969,28 +989,6 @@ where
     }
 }
 
-/// Builds an owned [`DiagnosticError`] for a 1-based line and optional offending token.
-#[must_use]
-fn build_line_diagnostic(
-    source: &str,
-    file_path: &str,
-    line_number: usize,
-    token: Option<&str>,
-    message: &'static str,
-    annotation_text: &'static str,
-    help_text: &'static str,
-) -> DiagnosticError<'static> {
-    build_diagnostic_from_line(
-        source,
-        file_path,
-        line_number,
-        message,
-        annotation_text,
-        help_text,
-        |sanitized_line| locate_token_span(strip_inline_comment(sanitized_line), token),
-    )
-}
-
 /// Converts a byte range `(byte_start, byte_len)` inside `line` into a 1-based character column and character span.
 #[must_use]
 fn byte_range_to_char_span(line: &str, byte_start: usize, byte_len: usize) -> (usize, usize) {
@@ -1041,9 +1039,13 @@ fn find_invalid_escape_bytes(code_slice: &str) -> Option<(usize, usize)> {
     None
 }
 
-/// Searches `code_slice` for a standalone token matching `target` (preferring argument tokens over a leading keyword collision).
+/// Searches `code_slice` for a standalone token matching `target` (preferring argument tokens when `prefer_argument` is `true`).
 #[must_use]
-fn find_matching_token_bytes(code_slice: &str, target: &str) -> Option<(usize, usize)> {
+fn find_matching_token_bytes(
+    code_slice: &str,
+    target: &str,
+    prefer_argument: bool,
+) -> Option<(usize, usize)> {
     let bytes = code_slice.as_bytes();
     let mut cursor = 0;
     let mut first_match = None;
@@ -1057,7 +1059,7 @@ fn find_matching_token_bytes(code_slice: &str, target: &str) -> Option<(usize, u
         let (token_start, token_end) = scan_next_code_token(code_slice, cursor);
         if token_matches_target(code_slice, token_start, token_end, target) {
             let span = (token_start, token_end - token_start);
-            if token_index > 0 || first_match.is_some() {
+            if !prefer_argument || token_index > 0 || first_match.is_some() {
                 return Some(span);
             }
             first_match = Some(span);
@@ -1196,9 +1198,15 @@ fn locate_psl_error_span(sanitized_line: &str, kind: PslErrorKind) -> (usize, us
 
 /// Locates `token` inside `code_slice` and returns its 1-based `(col_number, span_len)`.
 #[must_use]
-fn locate_token_span(code_slice: &str, token: Option<&str>) -> (usize, usize) {
+fn locate_token_span(
+    code_slice: &str,
+    token: Option<&str>,
+    prefer_argument: bool,
+) -> (usize, usize) {
     if let Some(target) = token {
-        if let Some((byte_start, byte_len)) = find_matching_token_bytes(code_slice, target) {
+        if let Some((byte_start, byte_len)) =
+            find_matching_token_bytes(code_slice, target, prefer_argument)
+        {
             return byte_range_to_char_span(code_slice, byte_start, byte_len);
         }
         if !target.is_empty()
@@ -1546,6 +1554,28 @@ mod tests {
         let collision_diagnostic = collision.diagnostic.as_ref().unwrap();
         assert_eq!(collision_diagnostic.col_number, 13);
         assert_eq!(collision_diagnostic.annotation_carets, "            ^^^^^^^");
+
+        // Duplicate group directive ("alpha beta alpha") highlights leading directive token
+        let duplicate_group =
+            ConfigError::with_token(ConfigErrorKind::DuplicateDirective, 1, "alpha")
+                .with_diagnostic("        alpha beta alpha\n", "./pods.conf");
+        let duplicate_group_diagnostic = duplicate_group.diagnostic.as_ref().unwrap();
+        assert_eq!(duplicate_group_diagnostic.col_number, 9);
+        assert_eq!(
+            duplicate_group_diagnostic.annotation_carets,
+            "        ^^^^^"
+        );
+
+        // Invalid boolean argument ("simulate simulate") highlights argument token
+        let invalid_boolean =
+            ConfigError::with_token(ConfigErrorKind::InvalidBoolean, 1, "simulate")
+                .with_diagnostic("    simulate simulate\n", "./pods.conf");
+        let invalid_boolean_diagnostic = invalid_boolean.diagnostic.as_ref().unwrap();
+        assert_eq!(invalid_boolean_diagnostic.col_number, 14);
+        assert_eq!(
+            invalid_boolean_diagnostic.annotation_carets,
+            "             ^^^^^^^^"
+        );
 
         // Direct unescaped double-quote comparison edge cases
         assert!(!unescaped_double_quote_matches("plain", "plain"));
