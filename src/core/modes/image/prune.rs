@@ -55,7 +55,7 @@ struct ImageRecord<'a> {
 ///
 /// # Workflow
 ///
-/// 1. Do not read `pods.conf` or any `.pod` recipe files.
+/// 1. Do not read any `.pod` recipe files.
 /// 2. If `context.flags.preview` is `true`:
 ///    - Query existing container IDs via `podman ps -aq` and inspect their attached image IDs
 ///      (`podman inspect -f '{{.Image}}' ...`).
@@ -154,7 +154,7 @@ where
     W: Write,
     E: Write,
 {
-    let simulate = context.config.simulate || context.flags.simulate;
+    let simulate = context.config.simulate;
     if !context.flags.force && !simulate && !confirm_prune(context.flags.all, reader, stdout)? {
         log::write_print(stdout, "Aborted.");
         return Ok(());
@@ -386,7 +386,7 @@ mod tests {
         assert!(stderr.is_empty());
 
         let mut flag_sim_context = Context::new();
-        flag_sim_context.config.simulate = false;
+        flag_sim_context.config.simulate = true;
         flag_sim_context.flags.simulate = true;
         flag_sim_context.flags.all = true;
         flag_sim_context.flags.force = true;

@@ -63,7 +63,7 @@ Argument parsing follows these rules:
 - **Mode Aliases:** Every mode except `init` provides a 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`) as an exact drop-in replacement for the first positional mode argument (for example, `pods cmd exec <recipe> <command>` is identical to `pods command exec <recipe> <command>`).
 - **No Arguments:** Running `pods` without arguments executes `pods help`.
 - **Option Placement:** Options prefixed with `--` can appear anywhere in the command line.
-- **Configuration Bypass:** The `init` mode, `pods image prune`, `pods version`, all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading `pods.conf`.
+- **Configuration Bypass:** The `init` mode, `pods version`, all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading `pods.conf`.
 - **Privilege Check:** When executed with elevated privileges (`sudo` or `root`), Podoxide prints a warning and requires interactive confirmation (`yes`) before running.
 
 ### Modes Overview
@@ -572,7 +572,7 @@ pods --config=staging --debug config edit --simulate
 
 ## Image Mode (`img`)
 
-The `image` (`img`) mode downloads container images defined in target recipes (`update`) or previews and removes unused container images on the host (`prune`). Podman never removes images attached to existing (running or stopped) containers. Running `pods image prune` or `pods image help` does not require `pods.conf`.
+The `image` (`img`) mode downloads container images defined in target recipes (`update`) or previews and removes unused container images on the host (`prune`). Podman never removes images attached to existing (running or stopped) containers.
 
 ```bash
 pods image [OPTIONS] [ACTION] [TARGETS...]
@@ -591,7 +591,7 @@ pods image [OPTIONS] [ACTION] [TARGETS...]
 | Option            | Description                                                                                      |
 | :---------------- | :----------------------------------------------------------------------------------------------- |
 | `--all`           | Target all unused images (including tagged images not used by any container), not just dangling. |
-| `--config=<name>` | Load an alternative configuration file by name or path when running `image update`.              |
+| `--config=<name>` | Load an alternative configuration file by name or path.                                          |
 | `--debug`         | Enable verbose debug logging.                                                                    |
 | `--force`         | Skip the interactive confirmation prompt before pruning images.                                  |
 | `--preview`       | List unused images that would be removed and calculate total reclaimable disk space.             |

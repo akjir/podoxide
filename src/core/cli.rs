@@ -1011,7 +1011,7 @@ mod tests {
         assert_eq!(img_prune, image_prune);
         assert_eq!(img_prune.mode, Mode::Image);
         assert_eq!(img_prune.action, ModeAction::Image(ImageAction::Prune));
-        assert!(!img_prune.requires_config());
+        assert!(img_prune.requires_config());
 
         let mut img_update = Context::new();
         parse_args(&mut img_update, ["img", "update", "@backend"]).unwrap();

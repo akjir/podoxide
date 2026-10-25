@@ -307,6 +307,6 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 1. **Entry (`src/main.rs`):** Invokes the library runner and maps the result to `std::process::ExitCode`.
 2. **Environment Verification (`src/io/system/env.rs`, `src/io/exec/podman.rs`):** Verifies Linux OS, checks Podman `5.8.0+`, and prompts for confirmation when running as `root`.
 3. **CLI Parsing (`src/core/cli.rs`):** Scans CLI arguments into `Context` (`src/core/context.rs`), extracting global flags (`--config`, `--debug`, `--simulate`), mode selection, action, and targets.
-4. **Configuration Loading (`src/io/psl/`, `src/core/config.rs`):** Loads and parses `pods.conf` unless bypassed by standalone actions (`init`, `image prune`, `version`, `help`, or parameterless mode calls).
+4. **Configuration Loading (`src/io/psl/`, `src/core/config.rs`):** Loads and parses `pods.conf` unless bypassed by standalone actions (`init`, `version`, `help`, or parameterless mode calls).
 5. **Mode Dispatch (`src/core/modes/mod.rs`):** Routes `Context` to the selected mode handler (`default`, `command`, `config`, `connect`, `image`, `init`, `logs`, or `recipe`).
 6. **Recipe Resolution & Execution (`src/core/recipe.rs`, `src/core/pod.rs`, `src/io/exec/`):** Expands `@group` targets, parses and validates `.pod` recipes via `src/io/psl/`, and executes or simulates the resulting `podman` commands.

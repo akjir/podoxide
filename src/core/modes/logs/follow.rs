@@ -17,6 +17,7 @@
 
 use crate::core::context::Context;
 use crate::error::PodError;
+use super::execute_logs;
 
 /// Streams live logs (`podman pod logs -f`) for a recipe's pod or a specific container.
 ///
@@ -36,10 +37,23 @@ use crate::error::PodError;
 ///
 /// Returns [`PodError`] if loading or validating `<recipe>.pod` fails, the container
 /// specification cannot be resolved, or `podman pod logs -f` fails.
-pub fn handle(_context: &Context) -> Result<(), PodError> {
-    // Step 1: Parse <target> into <recipe> and optional <container> specification.
-    // Step 2: Read and validate only <recipes.path>/<recipe>.pod.
-    // Step 3: Resolve optional container name when a /<container> suffix is present.
-    // Step 4: Execute or simulate `podman pod logs -n --color -f [flags...] [-c <container>] <pod>`.
-    Ok(())
+pub fn handle(context: &Context) -> Result<(), PodError> {
+    execute_logs(context, true)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
+    use crate::core::context::Context;
+    use super::handle;
+
+    #[test]
+    fn handle_simulates_follow_logs_for_recipe_and_container() {
+        let mut context = Context::new();
+        context.config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
+        context.parameters = vec![String::from("recipe/db")];
+        assert!(handle(&context).is_ok());
+    }
 }

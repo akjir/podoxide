@@ -195,9 +195,7 @@ impl Context {
         }
         !matches!(
             self.action,
-            ModeAction::Default(DefaultAction::Version)
-                | ModeAction::Image(ImageAction::Prune)
-                | ModeAction::Init(_)
+            ModeAction::Default(DefaultAction::Version) | ModeAction::Init(_)
         )
     }
 }
@@ -562,7 +560,10 @@ impl FromStr for RecipeAction {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::env;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process;
     use std::str::FromStr;
 
     use crate::core::cli::parse_args;
@@ -572,6 +573,49 @@ mod tests {
         CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, Flags, ImageAction,
         InitAction, LogsAction, Mode, ModeAction, RecipeAction,
     };
+
+    fn assert_action_simulate_transitions(
+        action: ModeAction,
+        sim_false_path: &Path,
+        sim_true_path: &Path,
+    ) {
+        let mut false_context = Context::new();
+        false_context.mode = action.mode();
+        false_context.action = action;
+        false_context.config.name = String::from("sim_false");
+        false_context.config.path = sim_false_path.to_path_buf();
+        assert!(false_context.config.simulate);
+        assert!(false_context.requires_config());
+        false_context.load_config_if_required().unwrap();
+        assert!(
+            !false_context.config.simulate,
+            "expected simulate=false from config for action {action:?}"
+        );
+
+        let mut override_context = Context::new();
+        override_context.mode = action.mode();
+        override_context.action = action;
+        override_context.config.name = String::from("sim_false");
+        override_context.config.path = sim_false_path.to_path_buf();
+        override_context.flags.simulate = true;
+        override_context.load_config_if_required().unwrap();
+        assert!(
+            override_context.config.simulate,
+            "expected --simulate flag to override simulate=false for action {action:?}"
+        );
+
+        let mut true_context = Context::new();
+        true_context.mode = action.mode();
+        true_context.action = action;
+        true_context.config.name = String::from("sim_true");
+        true_context.config.path = sim_true_path.to_path_buf();
+        true_context.config.simulate = false;
+        true_context.load_config_if_required().unwrap();
+        assert!(
+            true_context.config.simulate,
+            "expected simulate=true from config for action {action:?}"
+        );
+    }
 
     #[test]
     fn context_defaults_and_cli_population() {
@@ -635,6 +679,13 @@ mod tests {
         init_context.load_config_if_required().unwrap();
         assert!(!init_context.config.simulate);
         assert!(!init_context.flags.simulate);
+
+        let mut prune_context = Context::new();
+        parse_args(&mut prune_context, ["image", "prune"]).unwrap();
+        assert!(prune_context.requires_config());
+        prune_context.config.simulate = false;
+        prune_context.load_config_if_required().unwrap();
+        assert!(prune_context.config.simulate);
     }
 
     #[test]
@@ -702,5 +753,78 @@ mod tests {
         assert_eq!(ModeAction::Init(InitAction::Create).to_string(), "create");
         assert_eq!(ModeAction::Logs(LogsAction::Follow).to_string(), "follow");
         assert_eq!(ModeAction::Recipe(RecipeAction::Show).to_string(), "show");
+    }
+
+    #[test]
+    fn requires_config_and_simulate_sync_across_all_mode_actions_and_configs() {
+        let bypass_actions = [
+            ModeAction::Command(CommandAction::Help),
+            ModeAction::Config(ConfigAction::Help),
+            ModeAction::Connect(ConnectAction::Help),
+            ModeAction::Default(DefaultAction::Help),
+            ModeAction::Default(DefaultAction::Version),
+            ModeAction::Image(ImageAction::Help),
+            ModeAction::Init(InitAction::Create),
+            ModeAction::Init(InitAction::Help),
+            ModeAction::Logs(LogsAction::Help),
+            ModeAction::Recipe(RecipeAction::Help),
+        ];
+
+        for action in bypass_actions {
+            let mut context = Context::new();
+            context.mode = action.mode();
+            context.action = action;
+            assert!(
+                !context.requires_config(),
+                "expected {action:?} to bypass config loading"
+            );
+        }
+
+        let config_actions = [
+            ModeAction::Command(CommandAction::Exec),
+            ModeAction::Command(CommandAction::List),
+            ModeAction::Config(ConfigAction::Edit),
+            ModeAction::Config(ConfigAction::Show),
+            ModeAction::Connect(ConnectAction::Shell),
+            ModeAction::Default(DefaultAction::Create),
+            ModeAction::Default(DefaultAction::Down),
+            ModeAction::Default(DefaultAction::Reload),
+            ModeAction::Default(DefaultAction::Remove),
+            ModeAction::Default(DefaultAction::Restart),
+            ModeAction::Default(DefaultAction::Start),
+            ModeAction::Default(DefaultAction::Status),
+            ModeAction::Default(DefaultAction::Stop),
+            ModeAction::Default(DefaultAction::Up),
+            ModeAction::Default(DefaultAction::Update),
+            ModeAction::Image(ImageAction::Prune),
+            ModeAction::Image(ImageAction::Update),
+            ModeAction::Logs(LogsAction::Follow),
+            ModeAction::Logs(LogsAction::Show),
+            ModeAction::Recipe(RecipeAction::Edit),
+            ModeAction::Recipe(RecipeAction::List),
+            ModeAction::Recipe(RecipeAction::Show),
+        ];
+
+        let temp_dir = env::temp_dir().join(format!("podoxide_ctx_sim_test_{}", process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+        let sim_false_path = temp_dir.join("sim_false.conf");
+        let sim_true_path = temp_dir.join("sim_true.conf");
+        fs::write(
+            &sim_false_path,
+            "general {\n    editor vim\n    simulate false\n}\nrecipes {\n    groups {\n        all recipe\n    }\n}\n",
+        )
+        .unwrap();
+        fs::write(
+            &sim_true_path,
+            "general {\n    editor vim\n    simulate true\n}\nrecipes {\n    groups {\n        all recipe\n    }\n}\n",
+        )
+        .unwrap();
+
+        for action in config_actions {
+            assert_action_simulate_transitions(action, &sim_false_path, &sim_true_path);
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

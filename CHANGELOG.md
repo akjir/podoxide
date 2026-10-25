@@ -25,10 +25,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added `connect` mode (`pods connect` / `pods con`) with `shell` and `help` actions for opening interactive shell sessions (`bash` with `sh` fallback) inside running managed or unmanaged containers.
 - Added compile-time SemVer 2.0.0 Git build metadata (`v<version>+<count>.<hash>[.dev]`), the `pods version` default mode action, and unified version headers across CLI help outputs.
 - Added `image` mode (`pods image` / `pods img`) with `prune` (`--preview`, `--all`, `--force`), `update`, and `help` actions and human-readable byte size formatting and parsing helpers.
+- Added `logs` mode (`pods logs` / `pods log`) with `show`, `follow`, and `help` actions and `--since`, `--until`, `--tail`, and `--timestamps` flags for fetching or streaming pod and container logs.
 
 ### Changed
 
 - Changed pod startup (`start`, `up`, `restart`, `reload`, and `update`) to start containers directly in deterministic `1..N` declaration order without executing `podman pod start`.
+
+### Fixed
+
+- Fixed `pods image prune` bypassing `pods.conf` loading so `general.simulate` (`true` or `false`) and `Simulate mode is active.` logging are respected.
 
 ### Removed
 

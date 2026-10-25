@@ -14,10 +14,11 @@ description: >-
    - Ensure `crate::` precedes `self::` and `super::` in all import blocks (including `mod tests`), and enforce `MAX_*` bounds before scanning or allocating the $(N+1)$-th item.
    - Do not create speculative helper methods, unused trait implementations, or fallback branches that have no active caller (`P-NO-DEAD-CODE`).
    - If downstream modules are not implemented yet, create only the minimal no-op placeholder stubs (`Ok(())` or `Default`) directly invoked by the current module so the crate compiles cleanly.
-3. **Flatness & Readability Gate:** Before running final verification (`cargo test` and `cargo clippy -- -D warnings`), scan all modified functions for:
+3. **Flatness, Readability & Allocation Gate (`P-VERTICAL-CLARITY`, `P-ZERO-ALLOC`, `P-ZERO-COPY`, `P-BOUND-ALLOC`):** Before running final verification (`cargo test` and `cargo clippy -- -D warnings`), scan all modified functions for:
    - Nested loops (`P-NO-NESTED-LOOPS`)
    - Indentation depth exceeding 3 levels (`P-FLAT-CONTROL-FLOW`)
    - Complex inline closures or large loop bodies (`P-VERTICAL-CLARITY`, `P-LOOP-MODULARITY`)
+   - Avoidable heap allocations in loops (`.to_string()`, `.to_owned()`, `.clone()`, `PathBuf::from()`), intermediate `.collect::<Vec<_>>()` allocations where iterators or slices suffice (`P-ZERO-ALLOC`, `P-ZERO-COPY`), or missing pre-scan/pre-allocation bounds (`P-BOUND-ALLOC`), while keeping `P-VERTICAL-CLARITY` (readability over dense micro-optimizations) as the priority.
    If any function violates these rules, refactor the inner blocks into small, alphabetically sorted helper functions (following Section 2 of `AGENTS.md`) with `///` doc comments (`P-FN-DOCS`) before completing the task.
 4. **License, Documentation & Dead-Code Audit Gate (`P-LICENSE-HEADER`, `P-FN-DOCS`, `P-NO-DEAD-CODE`):** Before running final verification (`cargo test` and `cargo clippy -- -D warnings`):
    - Flag any `.rs` file missing the verbatim license header (`P-LICENSE-HEADER`) or `//!` module docs, or any production `fn`, `struct`, `enum`, or `type` missing a `///` doc comment (`P-FN-DOCS`), as a violation that must be fixed immediately.
