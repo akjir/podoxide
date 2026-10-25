@@ -62,7 +62,7 @@ Argument parsing follows these rules:
 - **Mode Resolution:** If the first positional argument matches a mode name (`command`, `config`, `connect`, `image`, `init`, `logs`, `recipe`) or its 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`), that mode is selected. Otherwise, Podoxide selects the [Default Mode](#default-mode) and treats the first positional argument as the action.
 - **Mode Aliases:** Every mode except `init` provides a 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`) as an exact drop-in replacement for the first positional mode argument (for example, `pods cmd exec <recipe> <command>` is identical to `pods command exec <recipe> <command>`).
 - **No Arguments:** Running `pods` without arguments executes `pods help`.
-- **Option Placement:** Options prefixed with `--` can appear anywhere in the command line.
+- **Option Placement:** Options prefixed with `--` can appear anywhere in the command line. Options that require a value (`--config`, `--since`, `--tail`, `--until`) accept both `--flag=<value>` and space-separated `--flag <value>` syntax.
 - **Configuration Bypass:** The `init` mode, `pods version`, all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading `pods.conf`.
 - **Privilege Check:** When executed with elevated privileges (`sudo` or `root`), Podoxide prints a warning and requires interactive confirmation (`yes`) before running.
 
@@ -85,7 +85,7 @@ Argument parsing follows these rules:
 | :---------------- | :--------------------------------------------------------------------------------------- |
 | `--config=<name>` | Load an alternative configuration file by name or path (with or without `.conf`).        |
 | `--debug`         | Enable verbose debug output for argument parsing, path resolution, and target expansion. |
-| `--simulate`      | Print generated Podman and editor commands without executing them on the host.           |
+| `--simulate`      | Preview generated commands and file operations without executing them on the host.       |
 
 ## Configuration Reference
 
@@ -647,6 +647,7 @@ pods init [OPTIONS] [ACTION]
 | Option            | Description                                                                             |
 | :---------------- | :-------------------------------------------------------------------------------------- |
 | `--debug`         | Enable verbose debug logging.                                                           |
+| `--simulate`      | Preview template file creation without writing files to disk.                           |
 
 ### Usage
 
@@ -654,6 +655,9 @@ pods init [OPTIONS] [ACTION]
 # Generate default pods.conf and recipe.pod in the current directory
 pods init
 pods init create
+
+# Preview workspace initialization without writing files
+pods init --simulate
 
 # Generate default pods.conf and recipe.pod with debug output enabled
 pods --debug init

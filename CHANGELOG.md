@@ -33,11 +33,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Changed pod startup (`start`, `up`, `restart`, `reload`, and `update`) to start containers directly in deterministic `1..N` declaration order without executing `podman pod start`.
 - Changed `pods image prune` to check for prunable images before prompting, output `No images found to prune.` when none exist, and display the prunable image count and reclaimable disk space in the confirmation prompt.
+- Changed `pods config show` to report known and unreferenced recipe counts in `Directories:`, list unreferenced `.pod` recipe stems under `Unreferenced Recipes:`, and summarize the unreferenced count in `Validation Summary:`.
 
 ### Fixed
 
 - Fixed `pods image prune` bypassing `pods.conf` loading so `general.simulate` (`true` or `false`) and `Simulate mode is active.` logging are respected.
+- Fixed `pods command exec` splitting `execute` directives on unquoted whitespace so single-quoted and double-quoted arguments containing spaces are preserved.
+- Fixed `pods init --simulate` writing template files to disk and added `--simulate` to `pods init help`, `USAGE.md`, and `.pods-completion.bash`.
 
 ### Removed
 
 - Removed the `detach` directive from `container` blocks in `.pod` recipes.
+- Removed the undocumented `-c` short flag from CLI argument parsing and `.pods-completion.bash`.

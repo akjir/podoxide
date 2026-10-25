@@ -1432,6 +1432,142 @@ container {
     }
 
     #[test]
+    fn parse_and_validate_multi_container_service_recipe_abstraction() {
+        let input = "\
+pod stack {
+    name     \"Service Stack\"
+    path     /srv/storage/stack
+    registry registry.io
+    publish  18080 80 TCP
+    option   \"--network slirp4netns:port_handler=slirp4netns\"
+    option   \"--sysctl net.ipv4.ip_unprivileged_port_start=80\"
+    option   --userns=keep-id:uid=1000,gid=1000
+
+    command sync_indices {
+        description \"Synchronize database indices.\"
+        container   *web
+        user        1000
+        execute     \"/srv/www/cli db:sync-indices\"
+    }
+
+    command repair_state {
+        description \"Repair application state.\"
+        container   *web
+        user        1000
+        execute     \"/srv/www/cli system:repair --include-slow\"
+    }
+
+    command scan_storage {
+        description \"Scan storage files.\"
+        container   *web
+        user        1000
+        execute     \"/srv/www/cli files:scan --all\"
+    }
+}
+
+container *store {
+    restart never
+    image   kv-store:7-alpine
+    volume  store /data Z
+}
+
+container *web {
+    restart never
+    image   web-service:20
+    volume  web                 /srv/www        Z
+    volume  config              /srv/www/config Z
+    volume  files               /srv/www/files  Z
+    volume  /srv/storage/shared /shared         z
+    option  \"--user 1000:1000\"
+}
+";
+        let mut recipe = Recipe::from_str(input).unwrap();
+        let config = Config::new();
+        recipe.validate(&config, "stack").unwrap();
+
+        assert_eq!(recipe.pod.id, "stack");
+        assert_eq!(recipe.pod.name, "Service Stack");
+        assert!(recipe.pod.description.is_empty());
+        assert_eq!(recipe.pod.path, PathBuf::from("/srv/storage/stack"));
+        assert_eq!(recipe.pod.registry, "registry.io");
+        assert_eq!(recipe.pod.publish, vec!["18080:80/TCP"]);
+        assert_eq!(
+            recipe.pod.options,
+            vec![
+                "--network slirp4netns:port_handler=slirp4netns",
+                "--sysctl net.ipv4.ip_unprivileged_port_start=80",
+                "--userns=keep-id:uid=1000,gid=1000",
+            ]
+        );
+        assert_eq!(
+            recipe.pod.build_create_args(),
+            vec![
+                "pod",
+                "create",
+                "--name",
+                "stack",
+                "--publish",
+                "18080:80/TCP",
+                "--network",
+                "slirp4netns:port_handler=slirp4netns",
+                "--sysctl",
+                "net.ipv4.ip_unprivileged_port_start=80",
+                "--userns=keep-id:uid=1000,gid=1000",
+            ]
+        );
+
+        assert_eq!(recipe.pod.commands.len(), 3);
+        let sync_command = recipe.pod.commands.get("sync_indices").unwrap();
+        assert_eq!(sync_command.container, "*web");
+        assert_eq!(sync_command.user.as_deref(), Some("1000"));
+        assert_eq!(sync_command.execute, "/srv/www/cli db:sync-indices");
+        assert_eq!(
+            recipe.resolve_container_name(&sync_command.container).unwrap(),
+            "stack-web"
+        );
+
+        assert_eq!(recipe.containers.len(), 2);
+        assert_eq!(
+            recipe.containers[0].build_create_args(&recipe.pod).unwrap(),
+            vec![
+                "create",
+                "--name",
+                "stack-store",
+                "--pod",
+                "stack",
+                "--restart",
+                "never",
+                "--volume",
+                "/srv/storage/stack/store:/data:Z",
+                "registry.io/kv-store:7-alpine",
+            ]
+        );
+        assert_eq!(
+            recipe.containers[1].build_create_args(&recipe.pod).unwrap(),
+            vec![
+                "create",
+                "--name",
+                "stack-web",
+                "--pod",
+                "stack",
+                "--restart",
+                "never",
+                "--volume",
+                "/srv/storage/stack/web:/srv/www:Z",
+                "--volume",
+                "/srv/storage/stack/config:/srv/www/config:Z",
+                "--volume",
+                "/srv/storage/stack/files:/srv/www/files:Z",
+                "--volume",
+                "/srv/storage/shared:/shared:z",
+                "--user",
+                "1000:1000",
+                "registry.io/web-service:20",
+            ]
+        );
+    }
+
+    #[test]
     fn recipe_parser_rejects_structural_and_security_violations() {
         assert_recipe_error("unknown_block {\n}\n", RecipeErrorKind::UnexpectedBlock);
         assert_recipe_error(

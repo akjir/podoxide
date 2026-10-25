@@ -351,6 +351,16 @@ mod tests {
     }
 
     fn assert_simulate_true_outputs(working_dir: &Path) {
+        let (sim_init_ok, sim_init_stdout, sim_init_stderr) =
+            run_cli_in_dir(working_dir, &["init", "--simulate"], b"");
+        assert!(sim_init_ok, "init --simulate failed: {sim_init_stderr}");
+        assert!(sim_init_stdout.is_empty());
+        assert!(sim_init_stderr.contains("INFO: Simulate mode is active.\n"));
+        assert!(sim_init_stderr.contains("INFO: Created 'recipe.pod'.\n"));
+        assert!(sim_init_stderr.contains("INFO: Created 'pods.conf'.\n"));
+        assert!(!working_dir.join("recipe.pod").exists());
+        assert!(!working_dir.join("pods.conf").exists());
+
         let (init_ok, init_stdout, init_stderr) = run_cli_in_dir(working_dir, &["init"], b"");
         assert!(init_ok, "init failed: {init_stderr}");
         assert!(init_stdout.is_empty());
@@ -542,6 +552,7 @@ mod tests {
         assert_eq!(execute(["img", "prune"]), ExitCode::SUCCESS);
         assert_eq!(execute(["img", "update", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init", "help"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["init", "--simulate"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init", "--config=staging"]), ExitCode::FAILURE);
         assert_eq!(execute(["log", "recipe"]), ExitCode::SUCCESS);

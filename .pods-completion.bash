@@ -11,7 +11,7 @@ _pods_completions() {
 
     # Complete arguments for flags that require a value
     case "$prev" in
-        --config|-c)
+        --config)
             readarray -t COMPREPLY < <(compgen -f -- "${cur}")
             return 0
             ;;
@@ -26,7 +26,7 @@ _pods_completions() {
 
         # Skip flags and their corresponding value arguments
         case "$word" in
-            --config|-c|--tail|--since|--until)
+            --config|--tail|--since|--until)
                 (( i++ ))
                 continue
                 ;;
@@ -59,6 +59,7 @@ _pods_completions() {
         local opts="--debug"
         case "$mode" in
             init)
+                opts+=" --simulate"
                 ;;
             default)
                 opts+=" --config --simulate --all --full"

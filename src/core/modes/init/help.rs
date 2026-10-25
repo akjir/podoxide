@@ -27,7 +27,7 @@ use crate::utilities::format::format_version_header;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header, `pods init` usage synopsis, options (`--debug`),
+/// 2. Output the version header, `pods init` usage synopsis, options (`--debug`, `--simulate`),
 ///    and actions (`create`, `help`) via [`log::write_print`].
 ///
 /// # Errors
@@ -46,6 +46,10 @@ fn write_help<W: Write>(writer: &mut W) {
     log::write_print(writer, "");
     log::write_print(writer, "OPTIONS:");
     log::write_print(writer, "  --debug            enable debug output");
+    log::write_print(
+        writer,
+        "  --simulate         preview generated commands without executing them",
+    );
     log::write_print(writer, "");
     log::write_print(writer, "ACTIONS:");
     log::write_print(
@@ -72,6 +76,9 @@ mod tests {
         assert!(output.contains("OPTIONS:\n"));
         assert!(!output.contains("--config"));
         assert!(output.contains("  --debug            enable debug output\n"));
+        assert!(output.contains(
+            "  --simulate         preview generated commands without executing them\n"
+        ));
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains(
             "  create             initialize default configuration and recipe (default)\n"

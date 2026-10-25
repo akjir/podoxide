@@ -31,6 +31,7 @@ use crate::utilities::format::{DEFAULT_TARGET_COLUMN, format_line};
 
 const MAX_GROUP_OUTPUT_LINES: usize = 4096;
 const QUOTED_ITEM_BYTES_ESTIMATE: usize = 16;
+const UNREFERENCED_PREFIX_CHARS: usize = 4;
 
 /// Entry in the rendered group hierarchy output queue.
 enum GroupOutputLine {
@@ -59,8 +60,8 @@ impl GroupValidationState<'_> {
     }
 }
 
-/// Displays the active configuration settings, directory status, group hierarchy tree, and
-/// validation summary.
+/// Displays the active configuration settings, directory status, group hierarchy tree,
+/// unreferenced recipes, and validation summary.
 ///
 /// # Workflow
 ///
@@ -70,13 +71,15 @@ impl GroupValidationState<'_> {
 /// 2. Print the resolved absolute path of `context.config.path` and `Settings:` (`Editor`,
 ///    `Simulate`).
 /// 3. Check `context.config.pods.path` and `context.config.recipes.path` on disk, count
-///    `.pod` files in `recipes.path`, and print the aligned `Directories:` status lines
-///    (`[OK]`, `[OK, N recipes found]`, or `[NOT FOUND]`).
+///    known and unreferenced `.pod` files in `recipes.path`, and print the aligned
+///    `Directories:` status lines (`[OK]`, `[OK, K known recipe(s) found]`,
+///    `[OK, K known and U unreferenced recipe(s) found]`, or `[NOT FOUND]`).
 /// 4. Iterate through sorted `context.config.recipes.groups`, expand `@<group>` references
 ///    for display, check `<recipe>.pod` file existence using a local lookup cache,
 ///    and render the aligned `Groups:` tree (`[OK]`, `[NOT FOUND]`, `[MISSING GROUP]`).
-/// 5. Compare discovered `.pod` filenames in `recipes.path` against referenced group members
-///    and print the `Validation Summary:` for missing or unreferenced recipe files.
+/// 5. When unreferenced `.pod` files exist in `recipes.path`, list their recipe stems under
+///    `Unreferenced Recipes:` with status `[UNREFERENCED]`.
+/// 6. Print the `Validation Summary:` for missing or unreferenced recipes.
 ///
 /// # Errors
 ///
@@ -205,9 +208,9 @@ fn build_groups_state(config: &Config) -> GroupValidationState<'_> {
     state
 }
 
-/// Filters discovered `.pod` filenames in `recipes_files` that are not in `referenced_recipes`.
+/// Filters discovered `.pod` filenames in `recipes_files` and returns the recipe stems not in `referenced_recipes`.
 #[must_use]
-fn collect_unreferenced_files<'a>(
+fn collect_unreferenced_recipes<'a>(
     recipes_files: Option<&'a [String]>,
     referenced_recipes: &BTreeSet<&str>,
 ) -> Vec<&'a str> {
@@ -219,7 +222,7 @@ fn collect_unreferenced_files<'a>(
     for file in files {
         let stem = file.strip_suffix(RECIPE_EXTENSION).unwrap_or(file.as_str());
         if !referenced_recipes.contains(stem) {
-            unreferenced.push(file.as_str());
+            unreferenced.push(stem);
         }
     }
     unreferenced
@@ -253,6 +256,43 @@ fn format_quoted_conjunction(items: &[&str]) -> String {
     output
 }
 
+/// Formats the status badge for the `Recipes:` line in the `Directories:` section.
+#[must_use]
+fn format_recipes_directory_status(
+    recipes_files: Option<&[String]>,
+    unreferenced_count: usize,
+) -> Cow<'static, str> {
+    let Some(files) = recipes_files else {
+        return Cow::Borrowed("[NOT FOUND]");
+    };
+    let known_count = files.len().saturating_sub(unreferenced_count);
+    if unreferenced_count == 0 {
+        let noun = if known_count == 1 {
+            "recipe"
+        } else {
+            "recipes"
+        };
+        return Cow::Owned(format!("[OK, {known_count} known {noun} found]"));
+    }
+    let noun = if unreferenced_count == 1 {
+        "recipe"
+    } else {
+        "recipes"
+    };
+    Cow::Owned(format!(
+        "[OK, {known_count} known and {unreferenced_count} unreferenced {noun} found]"
+    ))
+}
+
+/// Lists `.pod` files in `recipes_path` when the directory exists on disk.
+fn list_recipes_directory(recipes_path: &Path) -> Result<Option<Vec<String>>, PodError> {
+    if !fs::directory_exists(recipes_path) {
+        return Ok(None);
+    }
+    let files = fs::list_directory(recipes_path, Some(RECIPE_EXTENSION))?;
+    Ok(Some(files))
+}
+
 /// Records `recipe_name` in `state.referenced_recipes`, checks `<recipe>.pod` existence via `state.validation_cache`, and updates `state.missing_recipes`.
 fn record_referenced_recipe<'a>(
     state: &mut GroupValidationState<'a>,
@@ -273,20 +313,36 @@ fn record_referenced_recipe<'a>(
 /// Renders the full configuration report for `config` to `stdout`.
 fn show_with<W: Write>(config: &Config, stdout: &mut W) -> Result<(), PodError> {
     write_header_and_settings(config, stdout);
-    let recipes_files = write_directories_section(config, stdout)?;
     let state = build_groups_state(config);
-    write_groups_section(&state, stdout);
+    let recipes_files = list_recipes_directory(&config.recipes.path)?;
     let unreferenced =
-        collect_unreferenced_files(recipes_files.as_deref(), &state.referenced_recipes);
-    write_validation_summary(&state.missing_recipes, &unreferenced, stdout);
+        collect_unreferenced_recipes(recipes_files.as_deref(), &state.referenced_recipes);
+    write_directories_section(config, recipes_files.as_deref(), unreferenced.len(), stdout);
+    write_groups_section(&state, stdout);
+    write_unreferenced_section(&unreferenced, stdout);
+    write_validation_summary(&state.missing_recipes, unreferenced.len(), stdout);
     Ok(())
 }
 
-/// Checks `config.pods.path` and `config.recipes.path`, writes the `Directories:` section to `stdout`, and returns discovered `.pod` files when `recipes.path` exists.
+/// Calculates the alignment target column for the `Unreferenced Recipes:` section.
+#[must_use]
+fn unreferenced_target_column(unreferenced: &[&str]) -> usize {
+    let max_stem_chars = unreferenced
+        .iter()
+        .map(|stem| stem.chars().count())
+        .max()
+        .unwrap_or(0);
+    let max_line_length = max_stem_chars.saturating_add(UNREFERENCED_PREFIX_CHARS);
+    DEFAULT_TARGET_COLUMN.max(max_line_length.saturating_add(1))
+}
+
+/// Checks `config.pods.path` and `config.recipes.path` and writes the `Directories:` section to `stdout`.
 fn write_directories_section<W: Write>(
     config: &Config,
+    recipes_files: Option<&[String]>,
+    unreferenced_count: usize,
     stdout: &mut W,
-) -> Result<Option<Vec<String>>, PodError> {
+) {
     log::write_print(stdout, "Directories:");
 
     let pods_status = if fs::directory_exists(&config.pods.path) {
@@ -297,15 +353,7 @@ fn write_directories_section<W: Write>(
     let absolute_pods_path = fs::get_absolute_path(&config.pods.path);
     let pods_line = format!("  {:<14}{}", "Pods:", absolute_pods_path.display());
 
-    let recipes_files = if fs::directory_exists(&config.recipes.path) {
-        Some(fs::list_directory(&config.recipes.path, Some(RECIPE_EXTENSION))?)
-    } else {
-        None
-    };
-    let recipes_status = match &recipes_files {
-        Some(files) => Cow::Owned(format!("[OK, {} recipes found]", files.len())),
-        None => Cow::Borrowed("[NOT FOUND]"),
-    };
+    let recipes_status = format_recipes_directory_status(recipes_files, unreferenced_count);
     let absolute_recipes_path = fs::get_absolute_path(&config.recipes.path);
     let recipes_line = format!("  {:<14}{}", "Recipes:", absolute_recipes_path.display());
 
@@ -325,7 +373,6 @@ fn write_directories_section<W: Write>(
         &format_line(&recipes_line, &recipes_status, directory_target_column),
     );
     log::write_print(stdout, "");
-    Ok(recipes_files)
 }
 
 /// Writes the `Groups:` header and rendered group hierarchy lines in `state` to `stdout`.
@@ -376,38 +423,49 @@ fn write_missing_recipes_summary<W: Write>(missing_recipes: &BTreeSet<&str>, std
     log::write_print(stdout, &format!("- Recipe files for {joined} not found!"));
 }
 
-/// Writes the unreferenced recipe files bullet line to `stdout` when `unreferenced` is non-empty.
-fn write_unreferenced_recipes_summary<W: Write>(unreferenced: &[&str], stdout: &mut W) {
+/// Writes the unreferenced recipes count bullet line to `stdout` when `unreferenced_count` is non-zero.
+fn write_unreferenced_recipes_summary<W: Write>(unreferenced_count: usize, stdout: &mut W) {
+    if unreferenced_count == 0 {
+        return;
+    }
+    let noun = if unreferenced_count == 1 {
+        "recipe"
+    } else {
+        "recipes"
+    };
+    log::write_print(
+        stdout,
+        &format!("- {unreferenced_count} unreferenced {noun} found!"),
+    );
+}
+
+/// Writes the `Unreferenced Recipes:` section to `stdout` when `unreferenced` is non-empty.
+fn write_unreferenced_section<W: Write>(unreferenced: &[&str], stdout: &mut W) {
     if unreferenced.is_empty() {
         return;
     }
-    if let [single] = unreferenced {
-        log::write_print(
-            stdout,
-            &format!("- Potentially unreferenced recipe file '{single}' found!"),
-        );
-        return;
+    log::write_print(stdout, "");
+    log::write_print(stdout, "Unreferenced Recipes:");
+    let target_column = unreferenced_target_column(unreferenced);
+    for stem in unreferenced {
+        let line = format!("  • {stem}");
+        log::write_print(stdout, &format_line(&line, "[UNREFERENCED]", target_column));
     }
-    let joined = format_quoted_conjunction(unreferenced);
-    log::write_print(
-        stdout,
-        &format!("- Potentially unreferenced recipe files {joined} found!"),
-    );
 }
 
 /// Writes the `Validation Summary:` section when missing or unreferenced recipe files are detected.
 fn write_validation_summary<W: Write>(
     missing_recipes: &BTreeSet<&str>,
-    unreferenced: &[&str],
+    unreferenced_count: usize,
     stdout: &mut W,
 ) {
-    if missing_recipes.is_empty() && unreferenced.is_empty() {
+    if missing_recipes.is_empty() && unreferenced_count == 0 {
         return;
     }
     log::write_print(stdout, "");
     log::write_print(stdout, "Validation Summary:");
     write_missing_recipes_summary(missing_recipes, stdout);
-    write_unreferenced_recipes_summary(unreferenced, stdout);
+    write_unreferenced_recipes_summary(unreferenced_count, stdout);
 }
 
 #[cfg(test)]
@@ -477,6 +535,8 @@ mod tests {
         let mut stdout = Vec::new();
         show_with(&config, &mut stdout).unwrap();
         let output = String::from_utf8(stdout).unwrap();
+        assert!(output.contains("[OK, 0 known recipes found]\n"));
+        assert!(!output.contains("Unreferenced Recipes:"));
         assert!(output.contains("Validation Summary:\n"));
         assert!(output.contains("- Recipe file for 'leaf_recipe' not found!\n"));
 
@@ -491,8 +551,10 @@ mod tests {
         std_fs::create_dir_all(&pods_dir).unwrap();
         std_fs::create_dir_all(&recipes_dir).unwrap();
 
-        // Write a .pod file with invalid PSL syntax to prove show never parses .pod file contents.
+        // Write a .pod file with invalid PSL syntax to prove show never parses .pod file contents,
+        // plus a non-.pod file to verify other file types are ignored.
         fs::write_file(&recipes_dir.join("app_one.pod"), "invalid {{{ psl").unwrap();
+        fs::write_file(&recipes_dir.join("ignored.txt"), "not a recipe").unwrap();
 
         let mut config = Config::new();
         config.editor = String::from("vim");
@@ -514,9 +576,10 @@ mod tests {
         assert!(output.contains("Settings:\n  Editor:       vim\n  Simulate:     true\n"));
         assert!(output.contains("Directories:\n"));
         assert!(output.contains("[OK]\n"));
-        assert!(output.contains("[OK, 1 recipes found]\n"));
+        assert!(output.contains("[OK, 1 known recipe found]\n"));
         assert!(output.contains("Groups:\n  • all\n"));
         assert!(output.contains("    └── app_one                             [OK]\n"));
+        assert!(!output.contains("Unreferenced Recipes:"));
         assert!(!output.contains("Validation Summary:"));
 
         let mut context = Context::new();
@@ -531,7 +594,7 @@ mod tests {
         let temp_dir = create_temp_test_dir("singular");
         let recipes_dir = temp_dir.join("recipes");
         std_fs::create_dir_all(&recipes_dir).unwrap();
-        fs::write_file(&recipes_dir.join("orphan.pod"), "").unwrap();
+        fs::write_file(&recipes_dir.join("orphan.pod"), "invalid {{{ psl").unwrap();
 
         let mut config = Config::new();
         config.path = PathBuf::new();
@@ -549,9 +612,13 @@ mod tests {
         assert!(output.contains("Configuration: \n"));
         assert!(output.contains("  Pods:"));
         assert!(output.contains("[NOT FOUND]\n"));
+        assert!(output.contains("[OK, 0 known and 1 unreferenced recipe found]\n"));
+        assert!(output.contains(
+            "Unreferenced Recipes:\n  • orphan                                  [UNREFERENCED]\n"
+        ));
         assert!(output.contains("Validation Summary:\n"));
         assert!(output.contains("- Recipe file for 'missing_one' not found!\n"));
-        assert!(output.contains("- Potentially unreferenced recipe file 'orphan.pod' found!\n"));
+        assert!(output.contains("- 1 unreferenced recipe found!\n"));
 
         // Non-existent recipes.path directory also renders [NOT FOUND] cleanly
         config.recipes.path = temp_dir.join("nonexistent_recipes");
@@ -560,6 +627,7 @@ mod tests {
         let missing_dir_text = String::from_utf8(missing_recipes_dir_out).unwrap();
         assert!(missing_dir_text.contains("Recipes:"));
         assert!(missing_dir_text.contains("[NOT FOUND]\n"));
+        assert!(!missing_dir_text.contains("Unreferenced Recipes:"));
 
         let _ = std_fs::remove_dir_all(&temp_dir);
     }
@@ -620,6 +688,7 @@ mod tests {
         show_with(&config, &mut stdout).unwrap();
         let output = String::from_utf8(stdout).unwrap();
 
+        assert!(output.contains("[OK, 1 known and 2 unreferenced recipes found]\n"));
         assert!(output.contains("  • all\n"));
         assert!(output.contains("    └── missing_recipe"));
         assert!(output.contains("  • cycle_a\n    └── @cycle_b\n        └── @cycle_a\n            └── [MISSING GROUP]\n"));
@@ -633,14 +702,15 @@ mod tests {
         assert!(output.contains("    ├── @web\n    │   └── frontend"));
         assert!(output.contains("    └── @missing_end\n        └── [MISSING GROUP]\n"));
         assert!(output.contains("  • web\n"));
+        assert!(output.contains(
+            "Unreferenced Recipes:\n  • recipe_002_no_pod                       [UNREFERENCED]\n  • recipe_003_extra                        [UNREFERENCED]\n"
+        ));
         assert!(output.contains("Validation Summary:\n"));
         assert!(!output.contains("'@"));
         assert!(output.contains(
             "- Recipe files for 'frontend', 'missing_recipe' and 'very_long_missing_recipe_name_exceeding_column_forty_four' not found!\n"
         ));
-        assert!(output.contains(
-            "- Potentially unreferenced recipe files 'recipe_002_no_pod.pod' and 'recipe_003_extra.pod' found!\n"
-        ));
+        assert!(output.contains("- 2 unreferenced recipes found!\n"));
 
         let _ = std_fs::remove_dir_all(&temp_dir);
     }

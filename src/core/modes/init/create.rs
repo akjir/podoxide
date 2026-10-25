@@ -29,8 +29,8 @@ const CONFIG_TEMPLATE: &str = include_str!("../../../../pods.conf");
 const DEFAULT_RECIPE_PATH: &str = "./recipe.pod";
 const RECIPE_TEMPLATE: &str = include_str!("../../../../recipe.pod");
 
-/// Initializes the current working directory by writing the root `recipe.pod` and `pods.conf`
-/// templates to disk.
+/// Initializes the current working directory by writing (or simulating writing) the root
+/// `recipe.pod` and `pods.conf` templates to disk.
 ///
 /// # Workflow
 ///
@@ -39,12 +39,16 @@ const RECIPE_TEMPLATE: &str = include_str!("../../../../recipe.pod");
 ///    `context.config.path`.
 /// 2. Check whether `./recipe.pod` or `./pods.conf` already exists as a directory or symlink;
 ///    abort with an error before writing if either target cannot be created as a file.
-/// 3. Resolve the absolute workspace directory path and log
+/// 3. Log `"Simulate mode is active."` via [`log::write_info`] when `context.flags.simulate`
+///    is `true`.
+/// 4. Resolve the absolute workspace directory path and log
 ///    `"Initializing workspace '<workspace>'."` via [`log::write_info`].
-/// 4. Write `./recipe.pod` and log `"Created 'recipe.pod'."` via [`log::write_info`], or log
+/// 5. Write `./recipe.pod` (unless `context.flags.simulate` is `true`) and log
+///    `"Created 'recipe.pod'."` via [`log::write_info`], or log
 ///    `"File 'recipe.pod' already exists."` via [`log::write_warning`] without overwriting if
 ///    the file already exists.
-/// 5. Write `./pods.conf` and log `"Created 'pods.conf'."` via [`log::write_info`], or log
+/// 6. Write `./pods.conf` (unless `context.flags.simulate` is `true`) and log
+///    `"Created 'pods.conf'."` via [`log::write_info`], or log
 ///    `"File 'pods.conf' already exists."` via [`log::write_warning`] without overwriting if
 ///    the file already exists.
 ///
@@ -52,29 +56,50 @@ const RECIPE_TEMPLATE: &str = include_str!("../../../../recipe.pod");
 ///
 /// Returns [`PodError`] if either target path is an existing directory, symlink, or invalid
 /// path, or if writing either template file fails.
-pub fn handle(_context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<(), PodError> {
     let recipe_path = Path::new(DEFAULT_RECIPE_PATH);
     let config_path = Path::new(DEFAULT_CONFIG_PATH);
-    create_files(recipe_path, config_path, &mut io::stderr().lock())
+    create_files(
+        recipe_path,
+        config_path,
+        context.flags.simulate,
+        &mut io::stderr().lock(),
+    )
 }
 
-/// Validates that `recipe_path` and `config_path` are creatable files, logs workspace initialization, and writes or skips both embedded templates.
+/// Validates that `recipe_path` and `config_path` are creatable files, logs workspace initialization, and writes (or simulates writing) or skips both embedded templates.
 fn create_files<W: Write>(
     recipe_path: &Path,
     config_path: &Path,
+    simulate: bool,
     stderr_writer: &mut W,
 ) -> Result<(), PodError> {
     let workspace_dir = parent_or_cur_dir(recipe_path);
     ensure_target_creatable(recipe_path, workspace_dir)?;
     ensure_target_creatable(config_path, workspace_dir)?;
     ensure_distinct_targets(recipe_path, config_path)?;
+    if simulate {
+        log::write_info(stderr_writer, "Simulate mode is active.");
+    }
     let workspace_abs = fs::get_absolute_path(workspace_dir);
     log::write_info(
         stderr_writer,
         &format!("Initializing workspace '{}'.", workspace_abs.display()),
     );
-    write_template_file(recipe_path, workspace_dir, RECIPE_TEMPLATE, stderr_writer)?;
-    write_template_file(config_path, workspace_dir, CONFIG_TEMPLATE, stderr_writer)?;
+    write_template_file(
+        recipe_path,
+        workspace_dir,
+        RECIPE_TEMPLATE,
+        simulate,
+        stderr_writer,
+    )?;
+    write_template_file(
+        config_path,
+        workspace_dir,
+        CONFIG_TEMPLATE,
+        simulate,
+        stderr_writer,
+    )?;
     Ok(())
 }
 
@@ -114,11 +139,12 @@ fn ensure_target_creatable(path: &Path, workspace_dir: &Path) -> Result<(), PodE
     fs::ensure_writable_target(path)
 }
 
-/// Writes `content` to `path` and logs creation to `stderr_writer`, or logs a warning without overwriting if the file already exists.
+/// Writes `content` to `path` unless `simulate` is `true`, and logs creation or an existing-file warning to `stderr_writer`.
 fn write_template_file<W: Write>(
     path: &Path,
     workspace_dir: &Path,
     content: &str,
+    simulate: bool,
     stderr_writer: &mut W,
 ) -> Result<(), PodError> {
     let display_path = relative_display_path(path, workspace_dir);
@@ -129,7 +155,9 @@ fn write_template_file<W: Write>(
         );
         return Ok(());
     }
-    fs::write_file(path, content)?;
+    if !simulate {
+        fs::write_file(path, content)?;
+    }
     log::write_info(
         stderr_writer,
         &format!("Created '{}'.", display_path.display()),
@@ -159,6 +187,40 @@ mod tests {
     };
 
     #[test]
+    fn create_files_simulates_without_writing_files() {
+        let temp_dir = create_temp_test_dir("simulate");
+        let recipe_path = temp_dir.join("recipe.pod");
+        let config_path = temp_dir.join("pods.conf");
+        let mut stderr = Vec::new();
+
+        create_files(&recipe_path, &config_path, true, &mut stderr).unwrap();
+
+        let log_output = String::from_utf8(stderr).unwrap();
+        let workspace_abs = fs::get_absolute_path(&temp_dir);
+        assert!(log_output.contains("INFO: Simulate mode is active.\n"));
+        assert!(log_output.contains(&format!(
+            "INFO: Initializing workspace '{}'.\n",
+            workspace_abs.display()
+        )));
+        assert!(log_output.contains("INFO: Created 'recipe.pod'.\n"));
+        assert!(log_output.contains("INFO: Created 'pods.conf'.\n"));
+        assert!(!fs::file_exists(&recipe_path));
+        assert!(!fs::file_exists(&config_path));
+
+        // Existing file still triggers warning in simulate mode without writing missing file
+        fs::write_file(&recipe_path, "existing recipe").unwrap();
+        let mut stderr_existing = Vec::new();
+        create_files(&recipe_path, &config_path, true, &mut stderr_existing).unwrap();
+        let output_existing = String::from_utf8(stderr_existing).unwrap();
+        assert!(output_existing.contains("INFO: Simulate mode is active.\n"));
+        assert!(output_existing.contains("WARNING: File 'recipe.pod' already exists.\n"));
+        assert!(output_existing.contains("INFO: Created 'pods.conf'.\n"));
+        assert!(!fs::file_exists(&config_path));
+
+        let _ = std_fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
     fn create_files_warns_on_existing_files_and_rejects_directories() {
         let temp_dir = create_temp_test_dir("existing");
         let recipe_path = temp_dir.join("recipe.pod");
@@ -167,7 +229,7 @@ mod tests {
         // 1. Existing recipe.pod file: warns and still creates pods.conf
         fs::write_file(&recipe_path, "existing recipe").unwrap();
         let mut stderr = Vec::new();
-        create_files(&recipe_path, &config_path, &mut stderr).unwrap();
+        create_files(&recipe_path, &config_path, false, &mut stderr).unwrap();
         let output_first = String::from_utf8(stderr).unwrap();
         assert!(output_first.contains("WARNING: File 'recipe.pod' already exists.\n"));
         assert!(output_first.contains("INFO: Created 'pods.conf'.\n"));
@@ -179,7 +241,7 @@ mod tests {
         // 2. Existing pods.conf file: creates recipe.pod and warns for pods.conf
         fs::write_file(&config_path, "existing config").unwrap();
         let mut stderr = Vec::new();
-        create_files(&recipe_path, &config_path, &mut stderr).unwrap();
+        create_files(&recipe_path, &config_path, false, &mut stderr).unwrap();
         let output_second = String::from_utf8(stderr).unwrap();
         assert!(output_second.contains("INFO: Created 'recipe.pod'.\n"));
         assert!(output_second.contains("WARNING: File 'pods.conf' already exists.\n"));
@@ -188,7 +250,7 @@ mod tests {
 
         // 3. Both files already exist: warns for both and preserves contents
         let mut stderr = Vec::new();
-        create_files(&recipe_path, &config_path, &mut stderr).unwrap();
+        create_files(&recipe_path, &config_path, false, &mut stderr).unwrap();
         let output_both = String::from_utf8(stderr).unwrap();
         assert!(output_both.contains("WARNING: File 'recipe.pod' already exists.\n"));
         assert!(output_both.contains("WARNING: File 'pods.conf' already exists.\n"));
@@ -200,7 +262,8 @@ mod tests {
         // 4. Existing recipe.pod directory/folder: returns error without creating pods.conf
         std_fs::create_dir_all(&recipe_path).unwrap();
         let mut stderr = Vec::new();
-        let recipe_dir_err = create_files(&recipe_path, &config_path, &mut stderr).unwrap_err();
+        let recipe_dir_err =
+            create_files(&recipe_path, &config_path, false, &mut stderr).unwrap_err();
         match &recipe_dir_err {
             PodError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
             other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
@@ -216,7 +279,8 @@ mod tests {
 
         // 5. Existing pods.conf directory/folder: returns error without creating recipe.pod
         std_fs::create_dir_all(&config_path).unwrap();
-        let config_dir_err = create_files(&recipe_path, &config_path, &mut stderr).unwrap_err();
+        let config_dir_err =
+            create_files(&recipe_path, &config_path, false, &mut stderr).unwrap_err();
         match &config_dir_err {
             PodError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
             other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
@@ -239,10 +303,11 @@ mod tests {
         let config_path = temp_dir.join("pods.conf");
         let mut stderr = Vec::new();
 
-        create_files(&recipe_path, &config_path, &mut stderr).unwrap();
+        create_files(&recipe_path, &config_path, false, &mut stderr).unwrap();
 
         let log_output = String::from_utf8(stderr).unwrap();
         let workspace_abs = fs::get_absolute_path(&temp_dir);
+        assert!(!log_output.contains("INFO: Simulate mode is active.\n"));
         assert!(log_output.contains(&format!(
             "INFO: Initializing workspace '{}'.\n",
             workspace_abs.display()
@@ -316,7 +381,7 @@ mod tests {
         unix_fs::symlink(&dangling_target, &dangling_recipe).unwrap();
 
         let mut stderr = Vec::new();
-        assert!(create_files(&dangling_recipe, &config_path, &mut stderr).is_err());
+        assert!(create_files(&dangling_recipe, &config_path, false, &mut stderr).is_err());
         assert!(!fs::file_exists(&dangling_target));
         assert!(!fs::file_exists(&config_path));
         assert!(stderr.is_empty());
@@ -325,7 +390,7 @@ mod tests {
         // Dangling symlink on config_path must not leave recipe.pod orphaned
         let dangling_config_target = temp_dir.join("missing_target.conf");
         unix_fs::symlink(&dangling_config_target, &config_path).unwrap();
-        assert!(create_files(&dangling_recipe, &config_path, &mut stderr).is_err());
+        assert!(create_files(&dangling_recipe, &config_path, false, &mut stderr).is_err());
         assert!(!fs::file_exists(&dangling_recipe));
         assert!(!fs::file_exists(&dangling_config_target));
         assert!(stderr.is_empty());
@@ -333,21 +398,21 @@ mod tests {
 
         // Missing parent directory on config_path must not leave recipe.pod orphaned
         let missing_parent_config = temp_dir.join("missing_dir").join("pods.conf");
-        assert!(create_files(&dangling_recipe, &missing_parent_config, &mut stderr).is_err());
+        assert!(create_files(&dangling_recipe, &missing_parent_config, false, &mut stderr).is_err());
         assert!(!fs::file_exists(&dangling_recipe));
         assert!(stderr.is_empty());
 
         // Colliding target paths must be rejected before writing
         let dot_recipe = temp_dir.join("./recipe.pod");
-        assert!(create_files(&dangling_recipe, &dangling_recipe, &mut stderr).is_err());
-        assert!(create_files(&dangling_recipe, &dot_recipe, &mut stderr).is_err());
+        assert!(create_files(&dangling_recipe, &dangling_recipe, false, &mut stderr).is_err());
+        assert!(create_files(&dangling_recipe, &dot_recipe, false, &mut stderr).is_err());
         assert!(!fs::file_exists(&dangling_recipe));
         assert!(stderr.is_empty());
 
         // Write-only existing file must warn without overwriting
         fs::write_file(&config_path, "protected write-only").unwrap();
         std_fs::set_permissions(&config_path, std_fs::Permissions::from_mode(0o200)).unwrap();
-        create_files(&dangling_recipe, &config_path, &mut stderr).unwrap();
+        create_files(&dangling_recipe, &config_path, false, &mut stderr).unwrap();
         assert!(fs::file_exists(&dangling_recipe));
         assert!(
             String::from_utf8(stderr)

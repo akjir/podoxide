@@ -16,17 +16,33 @@
 //! Handler for `pods command exec <recipe> <command|index>`.
 
 use std::io::{self, Write};
+use std::mem;
 
 use crate::core::context::Context;
 use crate::core::pod::PodCommand;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::command::{self, ExecOptions};
+use crate::io::psl::MAX_ARGS_PER_STMT;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::string::{is_valid_text, is_valid_token, parse_ascii_u32};
 use super::{get_valid_commands, is_valid_command_entry, load_target_recipe};
 
+/// Base argument count (`exec`, `-it`, `-u`, `<user>`, `<container>`) before command tokens.
 const BASE_EXEC_ARG_COUNT: usize = 5;
+/// Initial capacity pre-allocated for parsed `execute` argv tokens.
+const INITIAL_EXEC_TOKENS_CAPACITY: usize = 8;
+
+/// Quote state while scanning a command `execute` string into argv tokens.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum QuoteState {
+    Double,
+    DoubleEscape,
+    #[default]
+    None,
+    Single,
+    UnquotedEscape,
+}
 
 /// Resolves and executes a predefined maintenance command declared in a recipe's `pod` block.
 ///
@@ -60,10 +76,13 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 
 /// Builds the `podman exec -it` argument vector for `command` targeting `container_name`.
 #[must_use]
-fn build_exec_args(command: &PodCommand, container_name: &str) -> Vec<String> {
-    let token_count = command.execute.split_whitespace().count();
+fn build_exec_args(
+    command: &PodCommand,
+    container_name: &str,
+    execute_tokens: Vec<String>,
+) -> Vec<String> {
     let capacity = bounded_capacity(
-        BASE_EXEC_ARG_COUNT.saturating_add(token_count),
+        BASE_EXEC_ARG_COUNT.saturating_add(execute_tokens.len()),
         MAX_COLLECTION_PREALLOC,
     );
     let mut arguments = Vec::with_capacity(capacity);
@@ -74,7 +93,7 @@ fn build_exec_args(command: &PodCommand, container_name: &str) -> Vec<String> {
         arguments.push(user.clone());
     }
     arguments.push(String::from(container_name));
-    arguments.extend(command.execute.split_whitespace().map(str::to_owned));
+    arguments.extend(execute_tokens);
     arguments
 }
 
@@ -92,9 +111,9 @@ fn exec_command<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<(), PodError> {
     let command = resolve_command(recipe, command_spec, stderr)?;
-    validate_command(command, recipe.pod.line)?;
+    let execute_tokens = validate_command(command, recipe.pod.line)?;
     let container_name = recipe.resolve_container_name(&command.container)?;
-    let arguments = build_exec_args(command, &container_name);
+    let arguments = build_exec_args(command, &container_name, execute_tokens);
     let prefix = format!(
         "Execute command '{}' in container '{container_name}': ",
         command.execute
@@ -181,18 +200,138 @@ fn resolve_command<'a, E: Write>(
         .ok_or_else(|| recipe_command_error(recipe.pod.line, command_spec))
 }
 
+/// Splits `input` into shell-style argv tokens, preserving single-quoted and double-quoted arguments.
+#[must_use]
+fn split_execute_tokens(input: &str) -> Option<Vec<String>> {
+    let mut tokens = Vec::with_capacity(INITIAL_EXEC_TOKENS_CAPACITY);
+    let mut current = String::new();
+    let mut in_token = false;
+    let mut state = QuoteState::None;
+    for character in input.chars() {
+        if !step_execute_char(
+            character,
+            &mut state,
+            &mut in_token,
+            &mut current,
+            &mut tokens,
+        ) {
+            return None;
+        }
+    }
+    if state != QuoteState::None {
+        return None;
+    }
+    if in_token {
+        if tokens.len() >= MAX_ARGS_PER_STMT {
+            return None;
+        }
+        tokens.push(current);
+    }
+    Some(tokens)
+}
+
+/// Processes an escaped `character` inside a double-quoted segment.
+fn step_double_escape(character: char, state: &mut QuoteState, current: &mut String) {
+    if !matches!(character, '"' | '\\' | '$' | '`') {
+        current.push('\\');
+    }
+    current.push(character);
+    *state = QuoteState::Double;
+}
+
+/// Processes `character` while inside a double-quoted segment.
+fn step_double_quoted(character: char, state: &mut QuoteState, current: &mut String) {
+    match character {
+        '"' => *state = QuoteState::None,
+        '\\' => *state = QuoteState::DoubleEscape,
+        _ => current.push(character),
+    }
+}
+
+/// Advances the quote-aware tokenizer by one `character`, returning `false` if token capacity is exceeded.
+fn step_execute_char(
+    character: char,
+    state: &mut QuoteState,
+    in_token: &mut bool,
+    current: &mut String,
+    tokens: &mut Vec<String>,
+) -> bool {
+    match *state {
+        QuoteState::Double => step_double_quoted(character, state, current),
+        QuoteState::DoubleEscape => step_double_escape(character, state, current),
+        QuoteState::None => return step_unquoted(character, state, in_token, current, tokens),
+        QuoteState::Single => {
+            if character == '\'' {
+                *state = QuoteState::None;
+            } else {
+                current.push(character);
+            }
+        }
+        QuoteState::UnquotedEscape => {
+            current.push(character);
+            *state = QuoteState::None;
+        }
+    }
+    true
+}
+
+/// Processes `character` while outside of quotes, returning `false` if `MAX_ARGS_PER_STMT` is exceeded.
+fn step_unquoted(
+    character: char,
+    state: &mut QuoteState,
+    in_token: &mut bool,
+    current: &mut String,
+    tokens: &mut Vec<String>,
+) -> bool {
+    match character {
+        '\'' => {
+            *in_token = true;
+            *state = QuoteState::Single;
+        }
+        '"' => {
+            *in_token = true;
+            *state = QuoteState::Double;
+        }
+        '\\' => {
+            *in_token = true;
+            *state = QuoteState::UnquotedEscape;
+        }
+        _ if character.is_whitespace() && *in_token => {
+            if tokens.len() >= MAX_ARGS_PER_STMT {
+                return false;
+            }
+            tokens.push(mem::take(current));
+            *in_token = false;
+        }
+        _ if character.is_whitespace() => {}
+        _ => {
+            *in_token = true;
+            current.push(character);
+        }
+    }
+    true
+}
+
 /// Validates that `command` specifies safe, non-empty `container` and `execute` fields and an optional valid `user` token.
 ///
 /// # Errors
 ///
 /// Returns [`PodError`] with [`RecipeErrorKind::InvalidCommand`] if `container` or `execute`
-/// is missing/invalid, `execute` starts with `-`, or `user` is not a valid token.
-fn validate_command(command: &PodCommand, line: usize) -> Result<(), PodError> {
+/// is missing/invalid, `execute` has unclosed quotes or starts with `-`, or `user` is not a valid token.
+fn validate_command(command: &PodCommand, line: usize) -> Result<Vec<String>, PodError> {
     if !is_valid_text(&command.container) {
         return Err(recipe_command_error(line, &command.name));
     }
-    let execute = command.execute.trim();
-    if !is_valid_text(execute) || execute.starts_with('-') {
+    if !is_valid_text(&command.execute) || command.execute.trim_start().starts_with('-') {
+        return Err(recipe_command_error(line, &command.name));
+    }
+    let Some(tokens) = split_execute_tokens(&command.execute) else {
+        return Err(recipe_command_error(line, &command.name));
+    };
+    if tokens
+        .first()
+        .is_none_or(|program| program.is_empty() || program.starts_with('-'))
+    {
         return Err(recipe_command_error(line, &command.name));
     }
     if let Some(user) = &command.user
@@ -200,7 +339,7 @@ fn validate_command(command: &PodCommand, line: usize) -> Result<(), PodError> {
     {
         return Err(recipe_command_error(line, user));
     }
-    Ok(())
+    Ok(tokens)
 }
 
 #[cfg(test)]
@@ -208,12 +347,13 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::core::config::Config;
+    use crate::core::container::Container;
     use crate::core::context::Context;
     use crate::core::pod::PodCommand;
     use crate::core::recipe::Recipe;
     use crate::error::{CliErrorKind, PodError, RecipeErrorKind};
     use crate::io::system::fs;
-    use super::{exec_command, execute_with, handle};
+    use super::{build_exec_args, exec_command, execute_with, handle, split_execute_tokens};
 
     const COMMANDS_RECIPE_PSL: &str = "\
 pod cmd_pod {
@@ -245,6 +385,10 @@ pod cmd_pod {
         container 2
         execute \"script.sh run-int-container-2\"
     }
+    command run_quoted {
+        container *db
+        execute \"sh -c 'echo hello'\"
+    }
     command missing_container {
         execute \"script.sh no-container\"
     }
@@ -269,6 +413,46 @@ container absolute_db {
     restart never
 }
 ";
+
+    #[test]
+    fn build_exec_args_and_split_execute_tokens_preserve_quoted_arguments() {
+        let mut command = PodCommand::new();
+        command.name = String::from("quoted");
+        command.container = String::from("*db");
+        command.execute = String::from("sh -c 'echo hello world'");
+
+        let tokens = split_execute_tokens(&command.execute).unwrap();
+        assert_eq!(
+            build_exec_args(&command, "cmd_pod-db", tokens),
+            vec!["exec", "-it", "cmd_pod-db", "sh", "-c", "echo hello world"]
+        );
+
+        assert_eq!(
+            split_execute_tokens("psql -U db -c \"SELECT 'a b';\"").unwrap(),
+            vec!["psql", "-U", "db", "-c", "SELECT 'a b';"]
+        );
+        assert_eq!(
+            split_execute_tokens("printf \"%s\\n\" \"a\\\"b\\\\c\" arg\\ with\\ space").unwrap(),
+            vec!["printf", "%s\\n", "a\"b\\c", "arg with space"]
+        );
+        assert_eq!(
+            split_execute_tokens("cmd '' \"\"").unwrap(),
+            vec!["cmd", "", ""]
+        );
+        assert!(split_execute_tokens("sh -c 'unterminated").is_none());
+        assert!(split_execute_tokens("sh -c \"unterminated").is_none());
+        assert!(split_execute_tokens("sh -c \"escape\\").is_none());
+        assert!(split_execute_tokens("sh -c \\").is_none());
+
+        let max_tokens_input = vec!["arg"; 64].join(" ");
+        assert_eq!(split_execute_tokens(&max_tokens_input).unwrap().len(), 64);
+
+        let overflow_tokens_input = vec!["arg"; 65].join(" ");
+        assert!(split_execute_tokens(&overflow_tokens_input).is_none());
+
+        let mid_stream_overflow = "arg ".repeat(65);
+        assert!(split_execute_tokens(&mid_stream_overflow).is_none());
+    }
 
     fn build_test_context(suffix: &str) -> (PathBuf, Context) {
         let mut directory = std::env::temp_dir();
@@ -312,6 +496,24 @@ container absolute_db {
             .commands
             .insert(String::from("flag_exec"), flag_exec);
 
+        let mut quoted_flag_exec = PodCommand::new();
+        quoted_flag_exec.name = String::from("quoted_flag_exec");
+        quoted_flag_exec.container = String::from("*db");
+        quoted_flag_exec.execute = String::from("'--privileged' sh");
+        recipe
+            .pod
+            .commands
+            .insert(String::from("quoted_flag_exec"), quoted_flag_exec);
+
+        let mut unterminated_exec = PodCommand::new();
+        unterminated_exec.name = String::from("unterminated_exec");
+        unterminated_exec.container = String::from("*db");
+        unterminated_exec.execute = String::from("sh -c 'echo hello");
+        recipe
+            .pod
+            .commands
+            .insert(String::from("unterminated_exec"), unterminated_exec);
+
         let mut flag_user = PodCommand::new();
         flag_user.name = String::from("flag_user");
         flag_user.container = String::from("*db");
@@ -322,9 +524,49 @@ container absolute_db {
             .commands
             .insert(String::from("flag_user"), flag_user);
 
+        let mut empty_program = PodCommand::new();
+        empty_program.name = String::from("empty_program");
+        empty_program.container = String::from("*db");
+        empty_program.execute = String::from("'' arg");
+        recipe
+            .pod
+            .commands
+            .insert(String::from("empty_program"), empty_program);
+
+        let mut trailing_newline = PodCommand::new();
+        trailing_newline.name = String::from("trailing_newline");
+        trailing_newline.container = String::from("*db");
+        trailing_newline.execute = String::from("script.sh\n");
+        recipe
+            .pod
+            .commands
+            .insert(String::from("trailing_newline"), trailing_newline);
+
+        let mut trailing_escaped_space = PodCommand::new();
+        trailing_escaped_space.name = String::from("trailing_escaped_space");
+        trailing_escaped_space.container = String::from("*db");
+        trailing_escaped_space.execute = String::from("script.sh arg\\ ");
+        recipe
+            .pod
+            .commands
+            .insert(String::from("trailing_escaped_space"), trailing_escaped_space);
+
+        let mut container = Container::new();
+        container.name = String::from("*db");
+        container.image = String::from("postgres");
+        recipe.containers.push(container);
+
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        for command_spec in ["flag_exec", "flag_user", "missing"] {
+        for command_spec in [
+            "flag_exec",
+            "quoted_flag_exec",
+            "unterminated_exec",
+            "flag_user",
+            "empty_program",
+            "trailing_newline",
+            "missing",
+        ] {
             let error =
                 exec_command(&recipe, command_spec, true, &mut stdout, &mut stderr).unwrap_err();
             match error {
@@ -335,6 +577,16 @@ container absolute_db {
                 other => panic!("expected PodError::Recipe(InvalidCommand), got {other:?}"),
             }
         }
+
+        exec_command(
+            &recipe,
+            "trailing_escaped_space",
+            true,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        assert!(String::from_utf8(stdout).unwrap().contains("'arg '"));
     }
 
     #[test]
@@ -411,6 +663,10 @@ container absolute_db {
             (
                 "run_int_container_2",
                 "Execute command 'script.sh run-int-container-2' in container 'cmd_pod-db': \npodman exec -it cmd_pod-db script.sh run-int-container-2\n",
+            ),
+            (
+                "run_quoted",
+                "Execute command 'sh -c 'echo hello'' in container 'cmd_pod-db': \npodman exec -it cmd_pod-db sh -c 'echo hello'\n",
             ),
             (
                 "1",
