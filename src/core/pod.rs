@@ -25,9 +25,9 @@ use crate::core::recipe::Recipe;
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::command::{self, ExecOptions};
 use crate::utilities::collection::{
-    MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity,
+    MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity, is_valid_option_value,
 };
-use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_text, is_valid_token};
+use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_token};
 
 const BASE_POD_CREATE_ARG_COUNT: usize = 4;
 
@@ -487,7 +487,7 @@ fn validate_pod_create(pod: &Pod) -> Result<(), RecipeError> {
         }
     }
     for option in &pod.options {
-        if !is_valid_text(option) {
+        if !is_valid_option_value(option) {
             return Err(RecipeError::with_token(
                 RecipeErrorKind::InvalidOption,
                 pod.line,

@@ -145,7 +145,7 @@ The `pod <id> { ... }` block configures the Podman pod and recipe metadata:
 | `registry`               | `string`    | Yes      | Default image registry prefixed to container images that do not specify `container.registry`. |
 | `path`                   | `string`    | Cond.    | Base host directory for relative volume mounts; defaults to `<pods.path>/<id>`.               |
 | `publish`                | `directive` | No       | Port mapping arguments translated into `--publish` flags on `podman pod create` (repeatable). |
-| `option`                 | `directive` | No       | Raw flag string appended directly to `podman pod create` (repeatable).                        |
+| `option`                 | `directive` | No       | Custom Podman flags/arguments not directly supported by `pods`, appended to `podman pod create` (repeatable). |
 | `command <name> { ... }` | `block`     | No       | Maintenance command sub-block executed via `pods command` (repeatable).                       |
 
 #### Port Publishing (`publish`)
@@ -182,7 +182,7 @@ Containers declared in `container [<id>] { ... }` blocks are created and started
 | `registry`        | `string`    | No       | Registry override for this container; falls back to `pod.registry`.                         |
 | `restart`         | `string`    | No       | Restart policy passed to `--restart` (for example, `always` or `on-failure`).               |
 | `volume`          | `directive` | No       | Volume mount definition `<host_dir> <container_dir> [<options>]` (repeatable).              |
-| `option`          | `directive` | No       | Raw flag string appended directly to `podman create` (repeatable).                          |
+| `option`          | `directive` | No       | Custom Podman flags/arguments not directly supported by `pods`, appended to `podman create` (repeatable). |
 | `command`         | `directive` | No       | Command and argument tokens appended after the image in `podman create` (repeatable).       |
 
 #### Container Naming Rules
@@ -200,6 +200,22 @@ Each `volume` directive specifies a host source, container destination, and opti
 | `""`               | Anonymous volume              | `<container_dir>[:<options>]`                 |
 | `data` or `./data` | Resolved against `pod.path`   | `<pod.path>/data:<container_dir>[:<options>]` |
 | `/var/data`        | Absolute host path used as-is | `/var/data:<container_dir>[:<options>]`       |
+
+#### Custom Podman Options (`option`)
+
+The `option` directive in `pod` and `container` blocks passes flags and options to `podman pod create` and `podman create` that are not directly modeled by dedicated recipe directives:
+
+| Directive Format                                                    | Generated Podman Arguments                                        |
+| :------------------------------------------------------------------ | :---------------------------------------------------------------- |
+| `option --userns=keep-id`                                           | `--userns=keep-id`                                                |
+| `option "--env DB_PASSWORD=secret"` or `option --env DB_PASSWORD=secret` | `--env` `DB_PASSWORD=secret`                                 |
+| `option "--health-cmd='redis-cli ping \| grep -q PONG \|\| exit 1'"` | `--health-cmd=redis-cli ping \| grep -q PONG \|\| exit 1`         |
+| `option --health-cmd='redis-cli ping \| grep -q PONG \|\| exit 1'`  | `--health-cmd=redis-cli ping \| grep -q PONG \|\| exit 1`         |
+| `option --health-cmd="redis-cli ping \| grep -q PONG \|\| exit 1"`  | `--health-cmd=redis-cli ping \| grep -q PONG \|\| exit 1`         |
+| `option --health-cmd 'redis-cli ping \| grep -q PONG \|\| exit 1'`  | `--health-cmd` `redis-cli ping \| grep -q PONG \|\| exit 1`       |
+| `option --health-cmd "redis-cli ping \| grep -q PONG \|\| exit 1"`  | `--health-cmd` `redis-cli ping \| grep -q PONG \|\| exit 1`       |
+
+Unescaped nested identical quotes (`option '--flag='value''` or `option "--flag="value""`) and unbalanced inner quotes are rejected with a diagnostic error.
 
 ### Recipe Example
 

@@ -29,8 +29,10 @@ use crate::core::pod::{Pod, PodCommand};
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
 use crate::io::psl::{PslBlock, PslDirective, PslDocument, PslStatement, parse_psl};
 use crate::io::system::fs;
+use crate::utilities::collection::is_valid_option_value;
 use crate::utilities::path::{
-    build_full_path, is_valid_directory, is_valid_directory_path, sanitize_path_token,
+    build_full_path, has_regular_target_name, is_valid_directory, is_valid_directory_path,
+    parent_or_cur_dir, sanitize_path_token,
 };
 use crate::utilities::string::{
     contains_control_or_bidi, is_valid_identifier, is_valid_pod_or_container_name,
@@ -92,19 +94,12 @@ impl Recipe {
     ///
     /// # Errors
     ///
-    /// Returns [`PodError`] with [`RecipeErrorKind::NotFound`] if `path` does not exist, or
-    /// [`PodError::Io`] if reading the file fails.
+    /// Returns [`PodError`] with [`RecipeErrorKind::InvalidPath`] if `path` is not a valid `.pod`
+    /// path, [`RecipeErrorKind::NotFound`] if `path` does not exist, or [`PodError::Io`] if reading
+    /// the file fails.
     pub fn read_file(path: &Path) -> Result<String, PodError> {
-        match fs::read_file(path) {
-            Ok(content) => Ok(content),
-            Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Err(
-                PodError::from(RecipeError::without_line(
-                    RecipeErrorKind::NotFound,
-                    sanitize_path_token(path),
-                )),
-            ),
-            Err(error) => Err(error),
-        }
+        validate_load_path(path)?;
+        read_validated_file(path)
     }
 
     /// Resolves a container reference (`1..=N`, `*suffix`, or name) to its matching [`Container`] in this recipe.
@@ -206,11 +201,7 @@ fn apply_container_directive(
             container.image =
                 parse_unique_token_directive(directive, seen, SEEN_CONTAINER_IMAGE, kind)?;
         }
-        "option" => parse_multi_text_directive(
-            &mut container.options,
-            directive,
-            RecipeErrorKind::InvalidOption,
-        )?,
+        "option" => parse_option_directive(&mut container.options, directive)?,
         "registry" => {
             let kind = RecipeErrorKind::InvalidRegistry;
             container.registry =
@@ -262,9 +253,7 @@ fn apply_pod_directive(
                 parse_unique_text_directive(directive, seen, SEEN_POD_DESCRIPTION, kind)?;
         }
         "name" => pod.name = parse_pod_name_directive(directive, seen)?,
-        "option" => {
-            parse_multi_text_directive(&mut pod.options, directive, RecipeErrorKind::InvalidOption)?
-        }
+        "option" => parse_option_directive(&mut pod.options, directive)?,
         "path" => pod.path = parse_pod_path_directive(directive, seen)?,
         "publish" => pod.publish.push(parse_publish_directive(directive)?),
         "registry" => {
@@ -438,6 +427,25 @@ fn invalid_volume_token<'a>(volume: &'a VolumeMount, fallback: &'a str) -> &'a s
     &volume.options
 }
 
+/// Evaluates whether `path` is a structurally valid `.pod` recipe file path.
+#[must_use]
+fn is_valid_load_path(path: &Path) -> bool {
+    if !has_regular_target_name(path) {
+        return false;
+    }
+    let Some(raw) = path.to_str() else {
+        return false;
+    };
+    if raw != raw.trim() {
+        return false;
+    }
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    file_name.ends_with(RECIPE_EXTENSION)
+        && is_valid_load_target(parent_or_cur_dir(path), file_name)
+}
+
 /// Evaluates whether `recipes_dir` and `recipe_name` form a valid recipe load target.
 #[must_use]
 fn is_valid_load_target(recipes_dir: &Path, recipe_name: &str) -> bool {
@@ -451,7 +459,7 @@ fn is_valid_load_target(recipes_dir: &Path, recipe_name: &str) -> bool {
 fn load(recipes_dir: &Path, recipe_name: &str) -> Result<(Recipe, String, String), PodError> {
     validate_load_target(recipes_dir, recipe_name)?;
     let path = build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION);
-    let content = Recipe::read_file(&path)?;
+    let content = read_validated_file(&path)?;
     let display_path = sanitize_path_token(&path);
     let recipe = parse_recipe_with_path(&content, &display_path)?;
     Ok((recipe, content, display_path))
@@ -581,6 +589,33 @@ fn parse_multi_text_directive(
         let value = argument.as_ref();
         if !is_valid_text(value) {
             return Err(RecipeError::with_token(invalid_kind, directive.line, value));
+        }
+        target.push(value.to_owned());
+    }
+    Ok(())
+}
+
+/// Appends `1..N` validated `option` directive arguments from `directive` into `target`.
+fn parse_option_directive(
+    target: &mut Vec<String>,
+    directive: &PslDirective<'_>,
+) -> Result<(), RecipeError> {
+    if directive.arguments.is_empty() {
+        return Err(RecipeError::with_token(
+            RecipeErrorKind::InvalidArgumentCount,
+            directive.line,
+            directive.name,
+        ));
+    }
+    target.reserve(directive.arguments.len());
+    for argument in &directive.arguments {
+        let value = argument.as_ref();
+        if !is_valid_option_value(value) {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::InvalidOption,
+                directive.line,
+                value,
+            ));
         }
         target.push(value.to_owned());
     }
@@ -803,6 +838,20 @@ fn pod_error_at_line(line: usize, kind: RecipeErrorKind, token: impl AsRef<str>)
     }
 }
 
+/// Reads the raw `.pod` file at `path`, mapping a missing file to [`RecipeErrorKind::NotFound`].
+fn read_validated_file(path: &Path) -> Result<String, PodError> {
+    match fs::read_file(path) {
+        Ok(content) => Ok(content),
+        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Err(
+            PodError::from(RecipeError::without_line(
+                RecipeErrorKind::NotFound,
+                sanitize_path_token(path),
+            )),
+        ),
+        Err(error) => Err(error),
+    }
+}
+
 /// Resolves a 1-based numeric container index (`1..=N`) against `recipe.containers`.
 fn resolve_by_index<'a>(
     recipe: &'a Recipe,
@@ -929,6 +978,17 @@ fn validate_and_resolve_containers(
                 &container.name,
             ));
         }
+    }
+    Ok(())
+}
+
+/// Validates that `path` is a safe `.pod` recipe file path before reading from disk.
+fn validate_load_path(path: &Path) -> Result<(), PodError> {
+    if !is_valid_load_path(path) {
+        return Err(PodError::from(RecipeError::without_line(
+            RecipeErrorKind::InvalidPath,
+            sanitize_path_token(path),
+        )));
     }
     Ok(())
 }
@@ -1077,10 +1137,10 @@ fn validate_pod_fields(
     resolve_pod_path(pod, config, file_name)
 }
 
-/// Validates that every `pod.options` entry is a safe text argument.
+/// Validates that every `pod.options` entry is a safe option argument.
 fn validate_pod_options(options: &[String], line: usize) -> Result<(), RecipeError> {
     for option in options {
-        if !is_valid_text(option) {
+        if !is_valid_option_value(option) {
             return Err(pod_error_at_line(
                 line,
                 RecipeErrorKind::InvalidOption,
@@ -1132,7 +1192,9 @@ fn validate_recipe_inner(
 #[cfg(test)]
 mod tests {
     use std::env;
+    use std::ffi::OsString;
     use std::fs;
+    use std::os::unix::ffi::OsStringExt;
     use std::path::{Path, PathBuf};
     use std::process;
     use std::str::FromStr;
@@ -1281,10 +1343,46 @@ mod tests {
             Recipe::read_file(&missing_path),
             Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::NotFound
         ));
+        let dir_as_recipe = temp_dir.join("dir_as_recipe.pod");
+        fs::create_dir_all(&dir_as_recipe).unwrap();
         assert!(matches!(
-            Recipe::read_file(&temp_dir),
+            Recipe::read_file(&dir_as_recipe),
             Err(PodError::Io(_))
         ));
+
+        let non_utf8_recipe_path =
+            PathBuf::from(OsString::from_vec(vec![b'/', b't', 0xFF, b'.', b'p', b'o', b'd']));
+        for invalid_read_path in [
+            temp_dir.as_path(),
+            Path::new(""),
+            Path::new("."),
+            Path::new(".."),
+            Path::new("../escape.pod"),
+            Path::new("/tmp/../escape.pod"),
+            Path::new("/etc/passwd"),
+            Path::new(".pod"),
+            Path::new("/tmp/.pod"),
+            Path::new("..pod"),
+            Path::new(".hidden.pod"),
+            Path::new("app.extra.pod"),
+            Path::new("-flag.pod"),
+            Path::new("/tmp/-flag.pod"),
+            Path::new("/bad:dir/app.pod"),
+            Path::new("/tmp/app.pod/"),
+            Path::new(" /tmp/app.pod"),
+            Path::new("/tmp/app.pod "),
+            Path::new("/tmp/app\n.pod"),
+            Path::new("/tmp/\u{202E}app.pod"),
+            non_utf8_recipe_path.as_path(),
+        ] {
+            let invalid_read_error = Recipe::read_file(invalid_read_path).unwrap_err();
+            match invalid_read_error {
+                PodError::Recipe(error) => assert_eq!(error.kind, RecipeErrorKind::InvalidPath),
+                other => {
+                    panic!("expected InvalidPath for '{invalid_read_path:?}', got {other:?}")
+                }
+            }
+        }
 
         for invalid_name in [
             "../escape",
@@ -1408,6 +1506,114 @@ container {
         }
 
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn parse_and_build_args_for_all_option_quoting_variants() {
+        let config = Config::new();
+        for option_line in [
+            "option   \"--health-cmd='redis-cli ping | grep -q PONG || exit 1'\"",
+            "option   '--health-cmd=\"redis-cli ping | grep -q PONG || exit 1\"'",
+            "option   --health-cmd='redis-cli ping | grep -q PONG || exit 1'",
+            "option   --health-cmd=\"redis-cli ping | grep -q PONG || exit 1\"",
+        ] {
+            let input = format!(
+                "\
+pod buci {{
+    name     \"Buci\"
+    path     /pods/buci
+    registry docker.io
+}}
+container *cache {{
+    restart never
+    image   valkey/valkey:9
+    {option_line}
+}}
+"
+            );
+            let mut recipe = Recipe::from_str(&input).unwrap();
+            validate_recipe_inner(&mut recipe, &config, "buci").unwrap();
+            assert_eq!(
+                recipe.containers[0].build_create_args(&recipe.pod).unwrap(),
+                vec![
+                    "create",
+                    "--name",
+                    "buci-cache",
+                    "--pod",
+                    "buci",
+                    "--restart",
+                    "never",
+                    "--health-cmd=redis-cli ping | grep -q PONG || exit 1",
+                    "docker.io/valkey/valkey:9",
+                ]
+            );
+        }
+
+        for option_line in [
+            "option   --health-cmd 'redis-cli ping | grep -q PONG || exit 1'",
+            "option   --health-cmd \"redis-cli ping | grep -q PONG || exit 1\"",
+        ] {
+            let input = format!(
+                "\
+pod buci {{
+    name     \"Buci\"
+    path     /pods/buci
+    registry docker.io
+}}
+container *cache {{
+    restart never
+    image   valkey/valkey:9
+    {option_line}
+}}
+"
+            );
+            let mut recipe = Recipe::from_str(&input).unwrap();
+            validate_recipe_inner(&mut recipe, &config, "buci").unwrap();
+            assert_eq!(
+                recipe.containers[0].build_create_args(&recipe.pod).unwrap(),
+                vec![
+                    "create",
+                    "--name",
+                    "buci-cache",
+                    "--pod",
+                    "buci",
+                    "--restart",
+                    "never",
+                    "--health-cmd",
+                    "redis-cli ping | grep -q PONG || exit 1",
+                    "docker.io/valkey/valkey:9",
+                ]
+            );
+        }
+
+        for invalid_psl_option in [
+            "option   '--health-cmd='redis-cli ping | grep -q PONG || exit 1''",
+            "option   \"--health-cmd=\"redis-cli ping | grep -q PONG || exit 1\"\"",
+        ] {
+            let input = format!(
+                "pod buci {{\n    name \"Buci\"\n    registry docker.io\n}}\ncontainer *cache {{\n    image valkey/valkey:9\n    {invalid_psl_option}\n}}\n"
+            );
+            let error = Recipe::from_str(&input).unwrap_err();
+            match error {
+                PodError::Psl(psl_error) => {
+                    assert_eq!(psl_error.kind, PslErrorKind::UnexpectedToken);
+                    assert_eq!(psl_error.line, 7);
+                }
+                other => panic!("expected PslError(UnexpectedToken), got {other:?}"),
+            }
+        }
+
+        for invalid_inner_quote in [
+            "option   \"--health-cmd='redis-cli ping\"",
+            "option   '--health-cmd=\"redis-cli ping'",
+            "option   \"--health-cmd='redis-cli'extra\"",
+            "option   \"--health-cmd 'redis-cli ping\"",
+        ] {
+            let input = format!(
+                "pod buci {{\n    name \"Buci\"\n    registry docker.io\n}}\ncontainer *cache {{\n    image valkey/valkey:9\n    {invalid_inner_quote}\n}}\n"
+            );
+            assert_recipe_error(&input, RecipeErrorKind::InvalidOption);
+        }
     }
 
     #[test]

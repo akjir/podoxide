@@ -24,7 +24,7 @@ use crate::core::pod::Pod;
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::command::{self, ExecOptions};
 use crate::utilities::collection::{
-    MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity,
+    MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity, is_valid_option_value,
 };
 use crate::utilities::path::{is_valid_directory, is_valid_directory_path};
 use crate::utilities::string::{
@@ -141,7 +141,7 @@ impl Container {
             RecipeErrorKind::InvalidRestartPolicy,
             self.line,
         )?;
-        validate_text_entries(&self.options, RecipeErrorKind::InvalidOption, self.line)?;
+        validate_option_entries(&self.options, self.line)?;
         validate_text_entries(&self.commands, RecipeErrorKind::InvalidCommand, self.line)?;
         validate_volume_mounts(&self.volumes, self.line, label)
     }
@@ -755,6 +755,20 @@ fn validate_container_name(container: &Container) -> Result<(), RecipeError> {
             container.line,
             container_label(&container.name),
         ));
+    }
+    Ok(())
+}
+
+/// Validates that every entry in `options` satisfies [`is_valid_option_value`].
+fn validate_option_entries(options: &[String], line: usize) -> Result<(), RecipeError> {
+    for option in options {
+        if !is_valid_option_value(option) {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::InvalidOption,
+                line,
+                option,
+            ));
+        }
     }
     Ok(())
 }

@@ -162,6 +162,12 @@ impl<'a> Parser<'a> {
         Ok(Cow::Borrowed(slice))
     }
 
+    /// Evaluates whether the bare word starting at `start` has at least one character followed by `=` immediately before `self.cursor`.
+    #[inline]
+    fn has_assignment_prefix(&self, start: usize) -> bool {
+        self.cursor > start.saturating_add(1) && self.bytes.get(self.cursor - 1) == Some(&b'=')
+    }
+
     /// Skips horizontal whitespace and evaluates whether the current statement line has ended at EOF, a comment, or a newline.
     fn is_statement_end(&mut self, statement_line: usize) -> Result<bool, PslError> {
         self.skip_horizontal_whitespace()?;
@@ -257,11 +263,28 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Scans an unquoted bare-word argument token and returns it as a borrowed slice.
+    /// Scans a single- or double-quoted value immediately following an `=` bare-word prefix and concatenates them.
+    fn parse_assigned_quote(
+        &mut self,
+        prefix: &'a str,
+        statement_line: usize,
+    ) -> Result<Cow<'a, str>, PslError> {
+        let quoted = if self.peek_byte() == Some(b'"') {
+            self.parse_double_quoted(statement_line)?
+        } else {
+            self.parse_single_quoted(statement_line)?
+        };
+        let mut combined = String::with_capacity(prefix.len().saturating_add(quoted.len()));
+        combined.push_str(prefix);
+        combined.push_str(&quoted);
+        Ok(Cow::Owned(combined))
+    }
+
+    /// Scans an unquoted bare-word argument token and returns it as a borrowed slice or an assigned `key=value` string.
     fn parse_bare_word(&mut self, statement_line: usize) -> Result<Cow<'a, str>, PslError> {
         let start = self.cursor;
         while let Some(character) = self.peek_char() {
-            if !self.step_bare_word_char(character, statement_line)? {
+            if !self.step_bare_word_char(character, start, statement_line)? {
                 break;
             }
         }
@@ -270,6 +293,9 @@ impl<'a> Parser<'a> {
             .input
             .get(start..self.cursor)
             .ok_or_else(|| PslError::new(PslErrorKind::UnexpectedToken, statement_line))?;
+        if matches!(self.peek_byte(), Some(b'"' | b'\'')) {
+            return self.parse_assigned_quote(slice, statement_line);
+        }
         Ok(Cow::Borrowed(slice))
     }
 
@@ -494,6 +520,7 @@ impl<'a> Parser<'a> {
     fn step_bare_word_char(
         &mut self,
         character: char,
+        start: usize,
         statement_line: usize,
     ) -> Result<bool, PslError> {
         match character {
@@ -509,6 +536,7 @@ impl<'a> Parser<'a> {
                 PslErrorKind::InvalidBlockHeader,
                 statement_line,
             )),
+            '"' | '\'' if self.has_assignment_prefix(start) => Ok(false),
             '}' | '"' | '\'' => Err(PslError::new(PslErrorKind::UnexpectedToken, statement_line)),
             _ if character.is_whitespace() || character.is_control() => {
                 Err(PslError::new(PslErrorKind::UnexpectedToken, statement_line))
@@ -894,10 +922,16 @@ block {
     plain_double \"no escapes here\"
     escaped_double \"line1\\nline2\\t\\\"quoted\\\"\\\\\\r\"
     single_raw 'raw \\x \\n \\0 \"literal\"'
+    assigned_single --health-cmd='redis-cli ping | grep -q PONG || exit 1'
+    assigned_double --health-cmd=\"redis-cli ping | grep -q PONG || exit 1\"
+    assigned_escaped --health-cmd=\"echo \\\"PONG\\\"\"
+    wrapped_double \"--health-cmd='redis-cli ping | grep -q PONG || exit 1'\"
+    separated_single --health-cmd 'redis-cli ping | grep -q PONG || exit 1'
+    separated_double --health-cmd \"redis-cli ping | grep -q PONG || exit 1\"
 }";
         let document = parse_psl(input).unwrap_or_else(|error| panic!("{error}"));
         let directives: Vec<_> = document.blocks[0].directives().collect();
-        assert_eq!(directives.len(), 3);
+        assert_eq!(directives.len(), 9);
 
         assert!(matches!(directives[0].arguments[0], Cow::Borrowed(_)));
         assert_eq!(directives[0].arguments[0], "no escapes here");
@@ -907,6 +941,42 @@ block {
 
         assert!(matches!(directives[2].arguments[0], Cow::Borrowed(_)));
         assert_eq!(directives[2].arguments[0], "raw \\x \\n \\0 \"literal\"");
+
+        assert!(matches!(directives[3].arguments[0], Cow::Owned(_)));
+        assert_eq!(
+            directives[3].arguments[0],
+            "--health-cmd=redis-cli ping | grep -q PONG || exit 1"
+        );
+
+        assert!(matches!(directives[4].arguments[0], Cow::Owned(_)));
+        assert_eq!(
+            directives[4].arguments[0],
+            "--health-cmd=redis-cli ping | grep -q PONG || exit 1"
+        );
+
+        assert!(matches!(directives[5].arguments[0], Cow::Owned(_)));
+        assert_eq!(directives[5].arguments[0], "--health-cmd=echo \"PONG\"");
+
+        assert!(matches!(directives[6].arguments[0], Cow::Borrowed(_)));
+        assert_eq!(
+            directives[6].arguments[0],
+            "--health-cmd='redis-cli ping | grep -q PONG || exit 1'"
+        );
+
+        assert_eq!(
+            directives[7].arguments,
+            vec![
+                Cow::Borrowed("--health-cmd"),
+                Cow::Borrowed("redis-cli ping | grep -q PONG || exit 1"),
+            ]
+        );
+        assert_eq!(
+            directives[8].arguments,
+            vec![
+                Cow::Borrowed("--health-cmd"),
+                Cow::Borrowed("redis-cli ping | grep -q PONG || exit 1"),
+            ]
+        );
     }
 
     #[test]
@@ -950,6 +1020,10 @@ pod_utf8 arg_äöü {
         );
         assert_eq!(
             parse_psl("pod 'app'{\n}\n"),
+            Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
+        );
+        assert_eq!(
+            parse_psl("pod --flag='app'{\n}\n"),
             Err(PslError::new(PslErrorKind::InvalidBlockHeader, 1))
         );
     }
@@ -1056,6 +1130,30 @@ pod_utf8 arg_äöü {
             parse_psl("general {\n    key 'foo'bar\n}\n"),
             Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
         );
+        assert_eq!(
+            parse_psl("general {\n    key ='bar'\n}\n"),
+            Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
+        );
+        assert_eq!(
+            parse_psl("general {\n    key =\"bar\"\n}\n"),
+            Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
+        );
+        assert_eq!(
+            parse_psl("general {\n    option '--health-cmd='redis-cli ping | grep -q PONG || exit 1''\n}\n"),
+            Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
+        );
+        assert_eq!(
+            parse_psl("general {\n    option \"--health-cmd=\"redis-cli ping | grep -q PONG || exit 1\"\"\n}\n"),
+            Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
+        );
+        assert_eq!(
+            parse_psl("general {\n    option --health-cmd='redis-cli'extra\n}\n"),
+            Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
+        );
+        assert_eq!(
+            parse_psl("general {\n    option --health-cmd=\"redis-cli\"extra\n}\n"),
+            Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
+        );
         // Standalone CR outside quotes (whitespace, identifier, bare word, post-quote, comment)
         assert_eq!(
             parse_psl("general {\r    key val\n}\n"),
@@ -1121,6 +1219,14 @@ pod_utf8 arg_äöü {
         );
         assert_eq!(
             parse_psl("general {\n    key \"trailing\\\n\"\n}\n"),
+            Err(PslError::new(PslErrorKind::UnterminatedString, 2))
+        );
+        assert_eq!(
+            parse_psl("general {\n    option --health-cmd='unclosed\n}\n"),
+            Err(PslError::new(PslErrorKind::UnterminatedString, 2))
+        );
+        assert_eq!(
+            parse_psl("general {\n    option --health-cmd=\"unclosed\n}\n"),
             Err(PslError::new(PslErrorKind::UnterminatedString, 2))
         );
     }

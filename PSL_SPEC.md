@@ -67,6 +67,7 @@ An **Argument** represents a parameter passed to a block header or a directive. 
 - A contiguous sequence of one or more valid UTF-8 characters excluding horizontal whitespace (`' '`, `'\t'`), newlines (`\r`, `\n`), and reserved punctuation (`{`, `}`, `#`, `"`, `'`).
 - Bare words allow domain-specific symbols without quoting, including `/`, `.`, `:`, `-`, `_`, `*`, `@`, and `=` (e.g., `example/db-server:latest`, `/var/lib/db/data`, `*db`, `@database`, `--userns=keep-id`).
 - A bare word is borrowed directly from the input buffer as a zero-copy `&str` slice.
+- **Assigned Quoted Value (`<prefix>="…"` / `<prefix>='…'`):** When a bare word contains at least one character before `=` and is immediately followed after `=` by a double-quoted (`"..."`) or single-quoted (`'...'`) string (e.g., `--health-cmd='redis-cli ping | grep -q PONG || exit 1'` or `--health-cmd="redis-cli ping | grep -q PONG || exit 1"`), the parser unquotes the value using Section 2.7.B or 2.7.C, validates the post-quote delimiter, and returns the concatenated `<prefix>=<value>` token as `Cow::Owned(String)`.
 
 #### B. Double-Quoted String (`"..."`)
 - Begins and ends with `"` (`U+0022`).
@@ -152,7 +153,10 @@ id-continue     = id-start | "0".."9" | "-" ;
 
 argument        = quoted-string
                 | single-string
+                | assigned-quote
                 | bare-word ;
+
+assigned-quote  = bare-word "=" ( quoted-string | single-string ) ;
 
 bare-word       = bare-char { bare-char } ;
 bare-char       = ? any UTF-8 char except ' ', '\t', '\r', '\n', '{', '}', '#', '"', '\'' ? ;
@@ -195,7 +199,7 @@ The PSL parser MUST return a strongly typed error enum (including the 1-based li
 - **Unclosed Block (`UnclosedBlock`):** `EOF` is reached while nesting depth $> 0$.
 - **Unmatched Closing Brace (`UnexpectedClosingBrace`):** `}` is encountered at nesting depth `0`.
 - **Unterminated Quote (`UnterminatedString`):** A `"` or `'` string reaches `\r`, `\n`, or `EOF` before its matching closing quote.
-- **Adjacent Quoted Token (`UnexpectedToken`):** A quote opens or closes in the middle of a token without separating whitespace (e.g., `foo"bar"` or `"foo"bar`).
+- **Adjacent Quoted Token (`UnexpectedToken`):** A quote opens in the middle of a token (except immediately after `=` in a non-empty bare-word prefix) or closes in the middle of a token without separating whitespace (e.g., `foo"bar"`, `"foo"bar`, `="bar"`, `'--flag='val''`, or `"--flag="val""`).
 - **Invalid Escape (`InvalidEscapeSequence`):** A `"` string contains an unknown escape sequence (e.g., `\a`, `\x`, `\0`).
 - **Limit Exceeded (`LimitExceeded`):** Any resource bound defined in Section 5 is exceeded.
 

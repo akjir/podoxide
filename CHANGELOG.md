@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added the `pods status` default mode action (`--all`, `--full`) for querying `podman ps -a`, cross-referencing managed recipes, synthesizing `Not Found` container rows, and rendering aligned runtime status tables.
 - Added `<recipe>/<container>` container targeting (`<recipe>/<index>`, `<recipe>/*<suffix>`, `<recipe>/<short_name>`, and `<recipe>/<full_name>`) to all default mode actions (`create`, `down`, `reload`, `remove`, `restart`, `start`, `status`, `stop`, `up`, and `update`) and `pods image update`, plus the `TARGET NAMES` column (`<recipe>/<index>`) after `NAMES` in `pods status --full`.
 - Added `pods config inspect` (default `config` action) and `pods recipe inspect <recipe>` for validating `.pod` recipes via `Recipe::inspect`, reporting `[ERROR]` badges in `pods config inspect` and `pods recipe list`, and synthesizing `Recipe Error` rows in `pods status`.
+- Added support for bare-word `=` assigned quotes (`--flag='...'` and `--flag="..."`) in PSL directives and inner-quote validation (`is_valid_option_value`) for `option` directives in `pod` and `container` blocks.
 
 ### Changed
 
@@ -45,6 +46,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fixed `pods command exec` splitting `execute` directives on unquoted whitespace so single-quoted and double-quoted arguments containing spaces are preserved.
 - Fixed `pods init --simulate` writing template files to disk and added `--simulate` to `pods init help`, `USAGE.md`, and `.pods-completion.bash`.
 - Fixed cyclic `@<group>` reference diagnostics in `pods.conf` pointing to the `groups {` block header instead of the offending group directive line.
+- Fixed `option` directive token splitting in `pod` and `container` blocks breaking `--flag='value with spaces'` and `--flag 'value with spaces'` into separate `podman` arguments.
 
 ### Removed
 
