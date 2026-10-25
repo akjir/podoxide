@@ -68,16 +68,16 @@ Argument parsing follows these rules:
 
 ### Modes Overview
 
-| Mode              | Actions                                                                                                     | Target                        | Description                                                       |
-| :---------------- | :---------------------------------------------------------------------------------------------------------- | :---------------------------- | :---------------------------------------------------------------- |
-| `(default)`       | `up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help`, `version` | `<recipe>`, `@<group>`        | Manage pod lifecycles and inspect runtime container status.       |
-| `logs` (`log`)    | `show`, `follow`, `help`                                                                                    | `<recipe>[/<container>]`      | Display or follow logs for a pod or a specific container.         |
-| `connect` (`con`) | `shell`, `help`                                                                                             | `<recipe>[/<container>]`      | Open an interactive shell inside a running container.             |
-| `command` (`cmd`) | `list`, `exec`, `help`                                                                                      | `<recipe> [<command>\|<idx>]` | List or execute maintenance commands defined in a recipe.         |
-| `recipe` (`rec`)  | `list`, `show`, `edit`, `help`                                                                              | `[<recipe>]`                  | List configured recipes, or display and edit a recipe file.       |
-| `config` (`cfg`)  | `show`, `edit`, `help`                                                                                      | `-`                           | Validate and display the active configuration tree or edit it.    |
-| `image` (`img`)   | `update`, `prune`, `help`                                                                                   | `[<recipe>, @<group>]`        | Pull recipe container images or preview and remove unused images. |
-| `init`            | `create`, `help`                                                                                            | `-`                           | Generate initial `pods.conf` and `recipe.pod` template files.     |
+| Mode              | Actions                                                                                                     | Target                            | Description                                                       |
+| :---------------- | :---------------------------------------------------------------------------------------------------------- | :-------------------------------- | :---------------------------------------------------------------- |
+| `(default)`       | `up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help`, `version` | `<recipe>[/<container>]`, `@<group>` | Manage pod and container lifecycles and inspect runtime status.   |
+| `logs` (`log`)    | `show`, `follow`, `help`                                                                                    | `<recipe>[/<container>]`          | Display or follow logs for a pod or a specific container.         |
+| `connect` (`con`) | `shell`, `help`                                                                                             | `<recipe>[/<container>]`          | Open an interactive shell inside a running container.             |
+| `command` (`cmd`) | `list`, `exec`, `help`                                                                                      | `<recipe> [<command>\|<idx>]`     | List or execute maintenance commands defined in a recipe.         |
+| `recipe` (`rec`)  | `list`, `show`, `edit`, `help`                                                                              | `[<recipe>]`                      | List configured recipes, or display and edit a recipe file.       |
+| `config` (`cfg`)  | `show`, `edit`, `help`                                                                                      | `-`                               | Validate and display the active configuration tree or edit it.    |
+| `image` (`img`)   | `update`, `prune`, `help`                                                                                   | `[<recipe>[/<container>], @<group>]` | Pull recipe container images or preview and remove unused images. |
+| `init`            | `create`, `help`                                                                                            | `-`                               | Generate initial `pods.conf` and `recipe.pod` template files.     |
 
 ### Global Options
 
@@ -247,11 +247,12 @@ The [Default Mode](#default-mode) and `pods image update` accept one or more rec
 
 ### Container Targets
 
-The `logs`, `connect`, and `command` modes resolve individual containers within a recipe using `<recipe>/<container>` (or `command.container`):
+The [Default Mode](#default-mode) actions, `pods image update`, `logs`, `connect`, and `command` resolve individual containers within a recipe using `<recipe>/<container>` (or `command.container`):
 
-- **Numeric Index:** `example-app/1` selects the first `container` block in the recipe.
-- **Relative Name:** `example-app/db` or `example-app/*db` selects `<pod_id>-db`.
-- **Absolute Name:** `example-app/example-stack-db` selects the container matching that exact resolved name.
+- **Numeric Index:** `example-app/1` selects the first `container` block in the recipe (`1..=N`).
+- **Explicit Relative Name:** `example-app/*db` expands directly to `<pod_id>-db` (`example-stack-db`).
+- **Unprefixed Name:** `example-app/example-stack-db` or `example-app/db` checks for an exact resolved container name match first (`example-stack-db`), then falls back to `<pod_id>-<name>` (`example-stack-db`).
+- **Exclusivity in Lifecycle Actions:** Default mode actions and `pods image update` accept either pod/group targets (`<recipe>`, `@<group>`) or one or more `<recipe>/<container>` container targets in a single invocation, deduplicating repeated `(recipe, container_name)` pairs in first-appearance order. Mixing pod/group targets with `<recipe>/<container>` targets is rejected.
 - **Direct Container Name (`connect` only):** If `<target>` contains no `/` and no matching `<target>.pod` file exists in `recipes.path`, `pods connect <target>` connects directly to a running Podman container with that name.
 
 ## Default Mode
@@ -286,7 +287,7 @@ pods [OPTIONS] <action> [TARGETS...]
 | `--all`           | Include unmanaged Podman containers in `status` output alongside managed containers.    |
 | `--config=<name>` | Load an alternative configuration file by name or path.                                 |
 | `--debug`         | Enable verbose debug logging.                                                           |
-| `--full`          | Append `COMMAND` and `PORTS` columns to the `status` output table.                      |
+| `--full`          | Insert `TARGET NAMES` (`<recipe>/<index>` for managed containers, `-` for unmanaged) after `NAMES` and append `COMMAND` and `PORTS` columns to `status`. |
 | `--simulate`      | Print generated Podman commands without executing them.                                 |
 
 ### Usage
@@ -307,6 +308,10 @@ pods stop example-app
 pods start example-app
 pods restart example-app
 
+# Stop or restart specific containers across one or more recipes without stopping their parent pods
+pods stop example-app/db example-app/2
+pods restart example-app/*app
+
 # Create a pod and its containers without starting them, or remove a stopped pod
 pods create example-app
 pods remove example-app
@@ -323,8 +328,9 @@ pods down example-app @backend
 # Show runtime status for all configured recipes
 pods status
 
-# Show extended status (including COMMAND and PORTS) for a specific recipe
+# Show extended status (including TARGET NAMES, COMMAND, and PORTS) for a recipe or container
 pods status --full example-app
+pods status --full example-app/1
 
 # Show status for all containers on the host, including unmanaged containers
 pods status --all
@@ -584,7 +590,7 @@ pods image [OPTIONS] [ACTION] [TARGETS...]
 | :------------------- | :-------------------------------------------------------------------------------------------------------------------------------- |
 | `help`               | Display command-line help for `image` mode (default when called without arguments).                                               |
 | `prune`              | Remove unused dangling container images (or all unused images when `--all` is passed).                                            |
-| `update <target...>` | Download and pull the latest container images defined in the target recipes (`<recipe>` or `@<group>`) without executing `reload`. |
+| `update <target...>` | Download and pull the latest container images defined in the target recipes (`<recipe>`, `@<group>`, or `<recipe>/<container>`) without executing `reload`. |
 
 ### Options
 
@@ -603,8 +609,9 @@ pods image [OPTIONS] [ACTION] [TARGETS...]
 # Display image mode help
 pods image help
 
-# Pull the latest container images for a recipe or group without reloading running pods (or via 'img')
+# Pull the latest container images for a recipe, group, or specific container without reloading running pods (or via 'img')
 pods image update example-app
+pods image update example-app/db
 pods image update @backend
 pods img update @backend
 

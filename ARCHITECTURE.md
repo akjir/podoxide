@@ -144,7 +144,7 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/cli.rs`       | Parses CLI arguments (`OsStr` / `OsString`), extracts global and mode-specific flags (`--config`, `--debug`, `--simulate`), and selects modes. |
 | `src/core/config.rs`    | Defines the configuration model (`pods.conf`), collects active recipes, checks recipe membership, and expands `@group` targets. |
 | `src/core/constants.rs` | Defines global application metadata and the compile-time build version constant (`APP_NAME`, `APP_VERSION`). |
-| `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and builds Podman commands. |
+| `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and executes container lifecycle operations (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`, `pull`, `update`). |
 | `src/core/context.rs`   | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
 | `src/core/log.rs`       | Provides structured output and diagnostic logging (`debug`, `info`, `pod_error`, `print`, `write_*`) with debug state control. |
 | `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`) across containers. |
@@ -196,18 +196,18 @@ Executes primary pod lifecycle operations and displays container runtime status 
 
 | File                                | Function |
 | :---------------------------------- | :------- |
-| `src/core/modes/default/mod.rs`     | Validates the requested default action, expands `@group` targets, and dispatches to the action handler. |
-| `src/core/modes/default/create.rs`  | Loads and validates target recipes, then creates pods and containers in top-to-bottom declaration order without starting them. |
-| `src/core/modes/default/down.rs`    | Stops target containers in reverse startup order and removes the containers and parent pod (`stop` + `remove`). |
+| `src/core/modes/default/mod.rs`     | Validates the requested default action, expands `@group` and `<recipe>` targets or resolves `<recipe>/<container>` targets, and dispatches to the action handler. |
+| `src/core/modes/default/create.rs`  | Loads and validates target recipes, then creates pods and containers (or targeted containers) without starting them. |
+| `src/core/modes/default/down.rs`    | Stops target containers in reverse startup order and removes the containers and parent pod (or targeted containers) (`stop` + `remove`). |
 | `src/core/modes/default/help.rs`    | Formats and outputs the global CLI help text for `pods`. |
-| `src/core/modes/default/reload.rs`  | Tears down and rebuilds target pods and containers from their `.pod` recipes (`down` + `up`). |
-| `src/core/modes/default/remove.rs`  | Removes target containers in reverse startup order and removes the parent pod without stopping them first. |
-| `src/core/modes/default/restart.rs` | Stops and starts existing target pods and containers without removing or recreating them (`stop` + `start`). |
-| `src/core/modes/default/start.rs`   | Starts existing stopped target pods and their containers in top-to-bottom declaration order. |
-| `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes, and formats the runtime status table. |
-| `src/core/modes/default/stop.rs`    | Stops running target containers in reverse bottom-to-top order and stops the parent pod without removing them. |
-| `src/core/modes/default/up.rs`      | Loads and validates target recipes, then creates and starts pods and containers in top-to-bottom order (`create` + `start`). |
-| `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes and rebuilds the pods (`image update` + `reload`). |
+| `src/core/modes/default/reload.rs`  | Tears down and rebuilds target pods and containers (or targeted containers) from their `.pod` recipes (`down` + `up`). |
+| `src/core/modes/default/remove.rs`  | Removes target containers in reverse startup order and removes the parent pod (or targeted containers) without stopping them first. |
+| `src/core/modes/default/restart.rs` | Stops and starts existing target pods and containers (or targeted containers) without removing or recreating them (`stop` + `start`). |
+| `src/core/modes/default/start.rs`   | Starts existing stopped target pods and their containers (or targeted containers) in top-to-bottom declaration order. |
+| `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes or targeted containers, and formats the runtime status table (including `TARGET NAMES` in `--full` mode). |
+| `src/core/modes/default/stop.rs`    | Stops running target containers in reverse bottom-to-top order and stops the parent pod (or targeted containers) without removing them. |
+| `src/core/modes/default/up.rs`      | Loads and validates target recipes, then creates and starts pods and containers (or targeted containers) in top-to-bottom order (`create` + `start`). |
+| `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes (or targeted containers) and rebuilds them (`image update` + `reload`). |
 | `src/core/modes/default/version.rs` | Formats and outputs the application version string for `pods version`. |
 
 ### Image Mode (`src/core/modes/image/`)

@@ -15,28 +15,29 @@
 
 //! Handler for `pods update <target...>`.
 
+use crate::core::container;
 use crate::core::context::Context;
 use crate::core::pod;
 use crate::error::PodError;
 use super::execute_lifecycle_action;
 
 /// Pulls the latest container images for target recipes and rebuilds the pods
-/// (`image update` + `reload`).
+/// (`image update` + `reload`), or pulls and reloads explicitly targeted containers.
 ///
 /// # Workflow
 ///
-/// 1. Expand `@<group>` and `<recipe>` targets in `context.parameters` against
-///    `context.config.recipes.groups`, preserving first-appearance order and deduplicating
-///    repeated recipes.
-/// 2. Iterate sequentially over the expanded target recipe names:
-///    - Read and validate only the targeted `<recipes.path>/<recipe>.pod` file.
-///    - Pull the latest container images from their resolved registries (`<registry>/<image>`).
-///    - Reload the pod and its containers (`down` + `up`).
+/// 1. Expand `@<group>` and `<recipe>` targets (or resolve `<recipe>/<container>` targets) in
+///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
+///    order and deduplicating repeated targets.
+/// 2. For pod/group targets: pull the latest container images and reload the pod and its
+///    containers (`down` + `up`).
+/// 3. For container targets: pull the latest image for each targeted container and reload only
+///    those containers (`down` + `up`) without tearing down the parent pod.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if target expansion fails, a targeted `.pod` recipe file cannot be
-/// read or validated, or a `podman` pull/reload command fails.
+/// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
+/// cannot be read or validated, or a `podman` pull/reload command fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
-    execute_lifecycle_action(context, pod::update)
+    execute_lifecycle_action(context, pod::update, container::update)
 }

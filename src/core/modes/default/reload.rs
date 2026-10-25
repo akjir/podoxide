@@ -15,29 +15,28 @@
 
 //! Handler for `pods reload <target...>`.
 
+use crate::core::container;
 use crate::core::context::Context;
 use crate::core::pod;
 use crate::error::PodError;
 use super::execute_lifecycle_action;
 
-/// Tears down and rebuilds target pods and containers from their `.pod` recipes (`down` + `up`).
+/// Tears down and rebuilds target pods and containers from their `.pod` recipes (`down` + `up`),
+/// or reloads explicitly targeted containers.
 ///
 /// # Workflow
 ///
-/// 1. Expand `@<group>` and `<recipe>` targets in `context.parameters` against
-///    `context.config.recipes.groups`, preserving first-appearance order and deduplicating
-///    repeated recipes.
-/// 2. Iterate sequentially over the expanded target recipe names:
-///    - Read and validate only the targeted `<recipes.path>/<recipe>.pod` file.
-///    - Execute `pod::down` (stop and remove containers in reverse `N..1` order and remove
-///      the pod).
-///    - Execute `pod::up` (create the pod and create and start containers in top-to-bottom `1..N`
-///      order).
+/// 1. Expand `@<group>` and `<recipe>` targets (or resolve `<recipe>/<container>` targets) in
+///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
+///    order and deduplicating repeated targets.
+/// 2. For pod/group targets: execute `pod::down` followed by `pod::up`.
+/// 3. For container targets: execute `container::down` followed by `container::up` without
+///    tearing down or recreating the parent pod.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if target expansion fails, a targeted `.pod` recipe file cannot be
-/// read or validated, or a `podman` teardown/creation command fails.
+/// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
+/// cannot be read or validated, or a `podman` teardown/creation command fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
-    execute_lifecycle_action(context, pod::reload)
+    execute_lifecycle_action(context, pod::reload, container::reload)
 }

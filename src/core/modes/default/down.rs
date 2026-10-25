@@ -15,29 +15,31 @@
 
 //! Handler for `pods down <target...>`.
 
+use crate::core::container;
 use crate::core::context::Context;
 use crate::core::pod;
 use crate::error::PodError;
 use super::execute_lifecycle_action;
 
 /// Stops target containers in reverse bottom-to-top order (`N..1`) and removes the containers
-/// and parent pod (`stop` + `remove`).
+/// and parent pod (`stop` + `remove`), or stops and removes explicitly targeted containers.
 ///
 /// # Workflow
 ///
-/// 1. Expand `@<group>` and `<recipe>` targets in `context.parameters` against
-///    `context.config.recipes.groups`, preserving first-appearance order and deduplicating
-///    repeated recipes.
-/// 2. Iterate sequentially over the expanded target recipe names:
-///    - Read and validate only the targeted `<recipes.path>/<recipe>.pod` file.
-///    - Stop containers in reverse bottom-to-top order (`N` down to `1`) and stop the pod.
-///    - Remove containers in reverse bottom-to-top order (`N` down to `1`) and remove the
-///      parent pod.
+/// 1. Expand `@<group>` and `<recipe>` targets (or resolve `<recipe>/<container>` targets) in
+///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
+///    order and deduplicating repeated targets.
+/// 2. For pod/group targets: stop containers in reverse order (`N..1`), stop the pod, remove
+///    containers in reverse order (`N..1`), and remove the pod.
+/// 3. For container targets: stop and remove only the targeted containers without stopping or
+///    removing the parent pod.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if target expansion fails, a targeted `.pod` recipe file cannot be
-/// read or validated, or a `podman` stop/remove command fails.
+/// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
+/// cannot be read or validated, or a `podman` stop/remove command fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
-    execute_lifecycle_action(context, pod::down)
+    execute_lifecycle_action(context, pod::down, |item, _pod, simulate| {
+        container::down(item, simulate)
+    })
 }

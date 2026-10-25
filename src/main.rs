@@ -381,6 +381,13 @@ mod tests {
             (&["remove", "recipe"], "podman rm example-stack-db\n"),
             (&["start", "recipe"], "podman start example-stack-db\n"),
             (&["stop", "recipe"], "podman pod stop example-stack\n"),
+            (&["stop", "recipe/db"], "podman stop example-stack-db\n"),
+            (&["stop", "recipe/1"], "podman stop example-stack-db\n"),
+            (&["stop", "recipe/*app"], "podman stop example-stack-app\n"),
+            (
+                &["stop", "recipe/example-stack-app"],
+                "podman stop example-stack-app\n",
+            ),
             (&["restart", "recipe"], "podman start example-stack-app\n"),
             (&["reload", "recipe"], "podman pod rm example-stack\n"),
             (
@@ -544,6 +551,8 @@ mod tests {
         );
         assert_eq!(execute(["up", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["up", "@all"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["up", "recipe/db", "recipe/2"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["up", "recipe", "recipe/db"]), ExitCode::FAILURE);
         assert_eq!(execute(["up", "example-app"]), ExitCode::FAILURE);
         assert_eq!(execute(["cmd", "list", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["cfg", "show"]), ExitCode::SUCCESS);
@@ -551,6 +560,7 @@ mod tests {
         assert_eq!(execute(["con", "recipe"]), ExitCode::FAILURE);
         assert_eq!(execute(["img", "prune"]), ExitCode::SUCCESS);
         assert_eq!(execute(["img", "update", "recipe"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["img", "update", "recipe/db"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init", "help"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init", "--simulate"]), ExitCode::SUCCESS);
         assert_eq!(execute(["init"]), ExitCode::SUCCESS);

@@ -28,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added `logs` mode (`pods logs` / `pods log`) with `show`, `follow`, and `help` actions and `--since`, `--until`, `--tail`, and `--timestamps` flags for fetching or streaming pod and container logs.
 - Added `recipe` mode (`pods recipe` / `pods rec`) with `list` (`--all`), `show`, `edit`, and `help` actions for listing configured and unlinked `.pod` recipes, viewing numbered recipe source lines, and opening recipes in the configured editor.
 - Added the `pods status` default mode action (`--all`, `--full`) for querying `podman ps -a`, cross-referencing managed recipes, synthesizing `Not Found` container rows, and rendering aligned runtime status tables.
+- Added `<recipe>/<container>` container targeting (`<recipe>/<index>`, `<recipe>/*<suffix>`, `<recipe>/<short_name>`, and `<recipe>/<full_name>`) to all default mode actions (`create`, `down`, `reload`, `remove`, `restart`, `start`, `status`, `stop`, `up`, and `update`) and `pods image update`, plus the `TARGET NAMES` column (`<recipe>/<index>`) after `NAMES` in `pods status --full`.
 
 ### Changed
 

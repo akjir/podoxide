@@ -91,6 +91,15 @@ impl Recipe {
         read_file(path)
     }
 
+    /// Resolves a container reference (`1..=N`, `*suffix`, or name) to its matching [`Container`] in this recipe.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
+    pub fn resolve_container(&self, container_spec: &str) -> Result<&Container, RecipeError> {
+        resolve_container(self, container_spec)
+    }
+
     /// Resolves a container reference (`1..=N`, `*suffix`, or name) against this recipe's containers.
     ///
     /// # Errors
@@ -121,9 +130,10 @@ impl FromStr for Recipe {
 /// Evaluates whether `<recipes_dir>/<recipe_name>.pod` is a valid path that exists on disk.
 #[must_use]
 pub fn file_exists(recipes_dir: &Path, recipe_name: &str) -> bool {
-    is_valid_directory(recipes_dir)
-        && is_valid_recipe_identifier(recipe_name)
-        && fs::file_exists(&build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION))
+    if !is_valid_load_target(recipes_dir, recipe_name) {
+        return false;
+    }
+    fs::file_exists(&build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION))
 }
 
 /// Loads and parses a `.pod` recipe file from `recipes_dir` and `recipe_name`.
@@ -155,53 +165,25 @@ pub fn read_file(path: &Path) -> Result<String, PodError> {
     }
 }
 
+/// Resolves a container reference (`1..=N`, `*suffix`, or name) to its matching [`Container`] in `recipe.containers`.
+///
+/// # Errors
+///
+/// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
+pub fn resolve_container<'a>(
+    recipe: &'a Recipe,
+    container_spec: &str,
+) -> Result<&'a Container, RecipeError> {
+    resolve_container_entry(recipe, container_spec).map(|(container, _)| container)
+}
+
 /// Resolves a container reference (`1..=N`, `*suffix`, or name) against `recipe.containers`.
 ///
 /// # Errors
 ///
 /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
 pub fn resolve_container_name(recipe: &Recipe, container_spec: &str) -> Result<String, RecipeError> {
-    if !recipe.has_pod
-        || !is_valid_pod_or_container_name(&recipe.pod.id)
-        || !is_valid_text(container_spec)
-    {
-        return Err(pod_error_at_line(
-            recipe.pod.line,
-            RecipeErrorKind::ContainerNotFound,
-            container_spec,
-        ));
-    }
-    if let Some(index) =
-        parse_ascii_u32(container_spec).and_then(|value| usize::try_from(value).ok())
-    {
-        return resolve_by_index(recipe, index, container_spec);
-    }
-    let normalized = normalize_name(container_spec);
-    if let Some(suffix) = normalized.strip_prefix('*') {
-        let target = format!("{}-{suffix}", recipe.pod.id);
-        if let Some(found) = find_container_by_name(&recipe.containers, &recipe.pod.id, &target) {
-            return Ok(found);
-        }
-        return Err(pod_error_at_line(
-            recipe.pod.line,
-            RecipeErrorKind::ContainerNotFound,
-            container_spec,
-        ));
-    }
-    let prefixed = format!("{}-{normalized}", recipe.pod.id);
-    if let Some(found) = find_container_by_exact_or_prefixed(
-        &recipe.containers,
-        &recipe.pod.id,
-        &normalized,
-        &prefixed,
-    ) {
-        return Ok(found);
-    }
-    Err(pod_error_at_line(
-        recipe.pod.line,
-        RecipeErrorKind::ContainerNotFound,
-        container_spec,
-    ))
+    resolve_container_entry(recipe, container_spec).map(|(_, name)| name)
 }
 
 /// Validates required pod and container fields, applies default pod paths, and resolves container names.
@@ -419,7 +401,7 @@ fn attach_validate_diagnostic(
     config: &Config,
     file_name: &str,
 ) -> PodError {
-    if validate_load_target(&config.recipes.path, file_name).is_err() {
+    if !is_valid_load_target(&config.recipes.path, file_name) {
         return PodError::from(error);
     }
     let path = build_full_path(&config.recipes.path, file_name, RECIPE_EXTENSION);
@@ -442,12 +424,12 @@ fn build_recipe(document: &PslDocument<'_>) -> Result<Recipe, RecipeError> {
 
 /// Searches `containers` in a single pass for an exact match on `exact` or a fallback match on `prefixed`.
 #[must_use]
-fn find_container_by_exact_or_prefixed(
-    containers: &[Container],
+fn find_container_by_exact_or_prefixed<'a>(
+    containers: &'a [Container],
     pod_id: &str,
     exact: &str,
     prefixed: &str,
-) -> Option<String> {
+) -> Option<(&'a Container, String)> {
     let mut fallback = None;
     for (index, container) in containers.iter().enumerate() {
         let Ok(resolved) =
@@ -456,10 +438,10 @@ fn find_container_by_exact_or_prefixed(
             continue;
         };
         if resolved == exact {
-            return Some(resolved);
+            return Some((container, resolved));
         }
         if fallback.is_none() && resolved == prefixed {
-            fallback = Some(resolved);
+            fallback = Some((container, resolved));
         }
     }
     fallback
@@ -467,11 +449,11 @@ fn find_container_by_exact_or_prefixed(
 
 /// Searches `containers` for a container whose resolved name matches `target`.
 #[must_use]
-fn find_container_by_name(
-    containers: &[Container],
+fn find_container_by_name<'a>(
+    containers: &'a [Container],
     pod_id: &str,
     target: &str,
-) -> Option<String> {
+) -> Option<(&'a Container, String)> {
     for (index, container) in containers.iter().enumerate() {
         let Ok(resolved) =
             resolve_container_name_value(&container.name, pod_id, index + 1, container.line)
@@ -479,7 +461,7 @@ fn find_container_by_name(
             continue;
         };
         if resolved == target {
-            return Some(resolved);
+            return Some((container, resolved));
         }
     }
     None
@@ -553,6 +535,15 @@ fn invalid_volume_token<'a>(volume: &'a VolumeMount, fallback: &'a str) -> &'a s
         return invalid_publish_token(&volume.container_dir, fallback);
     }
     &volume.options
+}
+
+/// Evaluates whether `recipes_dir` and `recipe_name` form a valid recipe load target.
+#[must_use]
+fn is_valid_load_target(recipes_dir: &Path, recipe_name: &str) -> bool {
+    let stem = recipe_name
+        .strip_suffix(RECIPE_EXTENSION)
+        .unwrap_or(recipe_name);
+    is_valid_directory(recipes_dir) && is_valid_recipe_identifier(stem)
 }
 
 /// Sets `flag` in `seen` for `directive` or returns [`RecipeErrorKind::DuplicateDirective`].
@@ -642,7 +633,7 @@ fn parse_container_name_arg(block: &PslBlock<'_>) -> Result<String, RecipeError>
         return Ok(String::new());
     };
     let raw_name = raw_argument.as_ref();
-    if raw_name.trim().is_empty() || contains_control_or_bidi(raw_name) {
+    if !is_valid_text(raw_name) {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidContainerName,
             block.line,
@@ -739,15 +730,14 @@ fn parse_pod_name_directive(
 ) -> Result<String, RecipeError> {
     mark_seen(seen, SEEN_POD_NAME, directive)?;
     let value = parse_single_argument(directive)?;
-    let trimmed = value.trim();
-    if !is_valid_text(trimmed) {
+    if !is_valid_text(value) {
         return Err(RecipeError::with_token(
             RecipeErrorKind::MissingPodName,
             directive.line,
             directive.name,
         ));
     }
-    Ok(trimmed.to_owned())
+    Ok(value.trim().to_owned())
 }
 
 /// Marks `SEEN_POD_PATH` as seen and parses the `pod.path` directory path directive.
@@ -903,11 +893,11 @@ fn pod_error_at_line(line: usize, kind: RecipeErrorKind, token: impl AsRef<str>)
 }
 
 /// Resolves a 1-based numeric container index (`1..=N`) against `recipe.containers`.
-fn resolve_by_index(
-    recipe: &Recipe,
+fn resolve_by_index<'a>(
+    recipe: &'a Recipe,
     index: usize,
     raw_spec: &str,
-) -> Result<String, RecipeError> {
+) -> Result<(&'a Container, String), RecipeError> {
     let Some(container) = index
         .checked_sub(1)
         .and_then(|zero_based| recipe.containers.get(zero_based))
@@ -918,7 +908,57 @@ fn resolve_by_index(
             raw_spec,
         ));
     };
-    resolve_container_name_value(&container.name, &recipe.pod.id, index, container.line)
+    let resolved =
+        resolve_container_name_value(&container.name, &recipe.pod.id, index, container.line)?;
+    Ok((container, resolved))
+}
+
+/// Resolves `container_spec` (`1..=N`, `*suffix`, or name) against `recipe.containers`, returning the matched [`Container`] and its resolved name.
+fn resolve_container_entry<'a>(
+    recipe: &'a Recipe,
+    container_spec: &str,
+) -> Result<(&'a Container, String), RecipeError> {
+    if !recipe.has_pod
+        || !is_valid_pod_or_container_name(&recipe.pod.id)
+        || !is_valid_text(container_spec)
+    {
+        return Err(pod_error_at_line(
+            recipe.pod.line,
+            RecipeErrorKind::ContainerNotFound,
+            container_spec,
+        ));
+    }
+    if let Some(index) =
+        parse_ascii_u32(container_spec).and_then(|value| usize::try_from(value).ok())
+    {
+        return resolve_by_index(recipe, index, container_spec);
+    }
+    let normalized = normalize_name(container_spec);
+    if let Some(suffix) = normalized.strip_prefix('*') {
+        let target = format!("{}-{suffix}", recipe.pod.id);
+        if let Some(found) = find_container_by_name(&recipe.containers, &recipe.pod.id, &target) {
+            return Ok(found);
+        }
+        return Err(pod_error_at_line(
+            recipe.pod.line,
+            RecipeErrorKind::ContainerNotFound,
+            container_spec,
+        ));
+    }
+    let prefixed = format!("{}-{normalized}", recipe.pod.id);
+    if let Some(found) = find_container_by_exact_or_prefixed(
+        &recipe.containers,
+        &recipe.pod.id,
+        &normalized,
+        &prefixed,
+    ) {
+        return Ok(found);
+    }
+    Err(pod_error_at_line(
+        recipe.pod.line,
+        RecipeErrorKind::ContainerNotFound,
+        container_spec,
+    ))
 }
 
 /// Validates `pod.path` or populates it from `<config.pods.path>/<pod.id>` when omitted.
@@ -972,10 +1012,7 @@ fn validate_and_resolve_containers(
 
 /// Validates that `recipes_dir` and `recipe_name` are safe before constructing the `.pod` file path.
 fn validate_load_target(recipes_dir: &Path, recipe_name: &str) -> Result<(), PodError> {
-    let stem = recipe_name
-        .strip_suffix(RECIPE_EXTENSION)
-        .unwrap_or(recipe_name);
-    if !is_valid_directory(recipes_dir) || !is_valid_recipe_identifier(stem) {
+    if !is_valid_load_target(recipes_dir, recipe_name) {
         let invalid_path = build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION);
         return Err(PodError::from(RecipeError::without_line(
             RecipeErrorKind::InvalidPath,
@@ -1076,14 +1113,14 @@ fn validate_pod_fields(
     }
     pod.id = normalized_id;
 
-    let trimmed_name = pod.name.trim();
-    if !is_valid_text(trimmed_name) {
+    if !is_valid_text(&pod.name) {
         return Err(pod_error_at_line(
             pod.line,
             RecipeErrorKind::MissingPodName,
             file_name,
         ));
     }
+    let trimmed_name = pod.name.trim();
     if pod.name.len() != trimmed_name.len() {
         pod.name = trimmed_name.to_owned();
     }
@@ -1183,7 +1220,7 @@ mod tests {
     use crate::core::pod::PodCommand;
     use crate::error::{PodError, PslErrorKind, RecipeErrorKind};
     use crate::io::system::fs as system_fs;
-    use super::{Recipe, load, resolve_container_name, validate};
+    use super::{Recipe, file_exists, load, read_file, resolve_container_name, validate};
 
     fn assert_recipe_error(input: &str, expected_kind: RecipeErrorKind) {
         let error = Recipe::from_str(input).unwrap_err();
@@ -1289,8 +1326,16 @@ mod tests {
             vec![String::from("start-server.sh")]
         );
         assert_eq!(
+            root_recipe.resolve_container("*app").unwrap().name,
+            "example-stack-app"
+        );
+        assert_eq!(
             root_recipe.resolve_container_name("*app").unwrap(),
             "example-stack-app"
+        );
+        assert_eq!(
+            root_recipe.resolve_container("1").unwrap().name,
+            "example-stack-db"
         );
         assert_eq!(
             root_recipe.resolve_container_name("1").unwrap(),
@@ -1311,6 +1356,25 @@ mod tests {
                 .to_string()
                 .contains("Recipe error: recipe file not found:")
         );
+        assert!(!Recipe::file_exists(&temp_dir, "missing_recipe"));
+        assert!(!file_exists(&temp_dir, "missing_recipe"));
+        let missing_path = temp_dir.join("missing_recipe.pod");
+        assert!(matches!(
+            Recipe::read_file(&missing_path),
+            Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::NotFound
+        ));
+        assert!(matches!(
+            read_file(&missing_path),
+            Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::NotFound
+        ));
+        assert!(matches!(
+            Recipe::read_file(&temp_dir),
+            Err(PodError::Io(_))
+        ));
+        assert!(matches!(
+            read_file(&temp_dir),
+            Err(PodError::Io(_))
+        ));
 
         for invalid_name in [
             "../escape",
@@ -1322,6 +1386,8 @@ mod tests {
             ".hidden.pod",
             "app.extra.pod",
         ] {
+            assert!(!Recipe::file_exists(&temp_dir, invalid_name));
+            assert!(!file_exists(&temp_dir, invalid_name));
             let invalid_target_error = load(&temp_dir, invalid_name).unwrap_err();
             match invalid_target_error {
                 PodError::Recipe(error) => assert_eq!(error.kind, RecipeErrorKind::InvalidPath),
@@ -1330,6 +1396,8 @@ mod tests {
         }
 
         for invalid_dir in [Path::new("../escape"), Path::new("/bad:dir")] {
+            assert!(!Recipe::file_exists(invalid_dir, "webapp"));
+            assert!(!file_exists(invalid_dir, "webapp"));
             let invalid_dir_error = load(invalid_dir, "webapp").unwrap_err();
             match invalid_dir_error {
                 PodError::Recipe(error) => assert_eq!(error.kind, RecipeErrorKind::InvalidPath),
@@ -1375,6 +1443,12 @@ container {
 }
 ";
         system_fs::write_file(&valid_path, webapp_content).unwrap();
+        assert!(Recipe::file_exists(&temp_dir, "webapp"));
+        assert!(Recipe::file_exists(&temp_dir, "webapp.pod"));
+        assert!(file_exists(&temp_dir, "webapp"));
+        assert!(file_exists(&temp_dir, "webapp.pod"));
+        assert_eq!(Recipe::read_file(&valid_path).unwrap(), webapp_content);
+        assert_eq!(read_file(&valid_path).unwrap(), webapp_content);
 
         let mut loaded = load(&temp_dir, "webapp.pod").unwrap();
         let mut custom_config = Config::new();
@@ -1565,6 +1639,70 @@ container *web {
                 "registry.io/web-service:20",
             ]
         );
+
+        let nginx_input = "\
+pod nginx {
+    name     \"Nginx\"
+    path     /pods/nginx
+    registry docker.io
+    publish  443 443 TCP
+    publish  443 443 UDP
+    # Use \"--network pasta\" on Podman >= 5.0
+    option   \"--network slirp4netns:port_handler=slirp4netns\"
+}
+
+container *app {
+    restart never
+    image   nginx:stable-alpine
+    volume  nginx.conf /etc/nginx/nginx.conf ro,Z
+    volume  certs      /etc/nginx/certs      ro,Z
+    volume  bots       /etc/nginx/bots.d     ro,Z
+    volume  config     /etc/nginx/conf.d     ro,Z
+    volume  log        /var/log/nginx        Z
+}
+";
+        let mut nginx_recipe = Recipe::from_str(nginx_input).unwrap();
+        nginx_recipe.validate(&config, "nginx").unwrap();
+        assert_eq!(
+            nginx_recipe.pod.build_create_args(),
+            vec![
+                "pod",
+                "create",
+                "--name",
+                "nginx",
+                "--publish",
+                "443:443/TCP",
+                "--publish",
+                "443:443/UDP",
+                "--network",
+                "slirp4netns:port_handler=slirp4netns",
+            ]
+        );
+        assert_eq!(
+            nginx_recipe.containers[0]
+                .build_create_args(&nginx_recipe.pod)
+                .unwrap(),
+            vec![
+                "create",
+                "--name",
+                "nginx-app",
+                "--pod",
+                "nginx",
+                "--restart",
+                "never",
+                "--volume",
+                "/pods/nginx/nginx.conf:/etc/nginx/nginx.conf:ro,Z",
+                "--volume",
+                "/pods/nginx/certs:/etc/nginx/certs:ro,Z",
+                "--volume",
+                "/pods/nginx/bots:/etc/nginx/bots.d:ro,Z",
+                "--volume",
+                "/pods/nginx/config:/etc/nginx/conf.d:ro,Z",
+                "--volume",
+                "/pods/nginx/log:/var/log/nginx:Z",
+                "docker.io/nginx:stable-alpine",
+            ]
+        );
     }
 
     #[test]
@@ -1618,6 +1756,18 @@ container *web {
         );
         assert_recipe_error(
             "pod app {\n    name \"   \"\n}\n",
+            RecipeErrorKind::MissingPodName,
+        );
+        assert_recipe_error(
+            "pod app {\n    name \"\\nApp\\n\"\n}\n",
+            RecipeErrorKind::MissingPodName,
+        );
+        assert_recipe_error(
+            "pod app {\n    name \"\\tApp\\t\"\n}\n",
+            RecipeErrorKind::MissingPodName,
+        );
+        assert_recipe_error(
+            "pod app {\n    name \"\u{0085}App\u{0085}\"\n}\n",
             RecipeErrorKind::MissingPodName,
         );
         assert_recipe_error(
@@ -1865,6 +2015,20 @@ container *web {
             "recipe_001_empty",
             RecipeErrorKind::MissingPodName,
         );
+        for control_name in ["\nApp\n", "\tApp\t", "\u{0085}App\u{0085}"] {
+            no_name.pod.name = String::from(control_name);
+            assert_validate_error(
+                &mut no_name,
+                &config_with_pod_path,
+                "control_pod_name",
+                RecipeErrorKind::MissingPodName,
+            );
+        }
+        no_name.pod.name = String::from("  Trimmed Name  ");
+        no_name
+            .validate(&config_with_pod_path, "trimmed_pod_name")
+            .unwrap();
+        assert_eq!(no_name.pod.name, "Trimmed Name");
 
         let mut no_registry = Recipe::from_str(
             "pod test {\n    name Test\n}\ncontainer {\n    image alpine:latest\n}\n",

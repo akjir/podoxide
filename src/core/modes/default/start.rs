@@ -15,27 +15,29 @@
 
 //! Handler for `pods start <target...>`.
 
+use crate::core::container;
 use crate::core::context::Context;
 use crate::core::pod;
 use crate::error::PodError;
 use super::execute_lifecycle_action;
 
 /// Starts existing stopped target pods by starting their containers in top-to-bottom declaration
-/// order (`1..N`) without recreating them.
+/// order (`1..N`) without recreating them, or starts explicitly targeted containers.
 ///
 /// # Workflow
 ///
-/// 1. Expand `@<group>` and `<recipe>` targets in `context.parameters` against
-///    `context.config.recipes.groups`, preserving first-appearance order and deduplicating
-///    repeated recipes.
-/// 2. Iterate sequentially over the expanded target recipe names:
-///    - Read and validate only the targeted `<recipes.path>/<recipe>.pod` file.
-///    - Start each container in top-to-bottom declaration order (`1` to `N`).
+/// 1. Expand `@<group>` and `<recipe>` targets (or resolve `<recipe>/<container>` targets) in
+///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
+///    order and deduplicating repeated targets.
+/// 2. For pod/group targets: start each container in top-to-bottom declaration order (`1..N`).
+/// 3. For container targets: start only the targeted containers.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if target expansion fails, a targeted `.pod` recipe file cannot be
-/// read or validated, or a `podman` start command fails.
+/// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
+/// cannot be read or validated, or a `podman` start command fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
-    execute_lifecycle_action(context, pod::start)
+    execute_lifecycle_action(context, pod::start, |item, _pod, simulate| {
+        container::start(item, simulate)
+    })
 }

@@ -15,32 +15,30 @@
 
 //! Handler for `pods image update <target...>`.
 
+use crate::core::container;
 use crate::core::context::Context;
 use crate::core::modes::default::execute_lifecycle_action;
 use crate::core::pod;
 use crate::error::PodError;
 
 /// Pulls the latest container images from configured registries for all containers in target
-/// recipes without reloading running pods.
+/// recipes or explicitly targeted containers (`<recipe>/<container>`) without reloading running pods.
 ///
 /// # Workflow
 ///
-/// 1. Expand `@<group>` and `<recipe>` targets in `context.parameters` against
-///    `context.config.recipes.groups`, preserving first-appearance order and deduplicating
-///    repeated recipes.
-/// 2. Iterate sequentially over the expanded target recipe names:
-///    - Read and validate only the targeted `<recipes.path>/<recipe>.pod` file.
-///    - For each container in `1..N` declaration order, resolve the full image reference
-///      (`<container.registry | pod.registry>/<container.image>`) and execute (or simulate)
-///      `podman pull <image_ref>`.
-///    - Do not stop, remove, or reload the running pod.
+/// 1. Expand `@<group>` and `<recipe>` targets (or resolve `<recipe>/<container>` targets) in
+///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
+///    order and deduplicating repeated targets.
+/// 2. For pod/group targets: pull the latest image (`podman pull <image_ref>`) for each
+///    container in `1..N` declaration order.
+/// 3. For container targets: pull the latest image only for the targeted containers.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if target expansion fails, a targeted `.pod` recipe file cannot be
-/// read or validated, or `podman pull` fails.
+/// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
+/// cannot be read or validated, or `podman pull` fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
-    execute_lifecycle_action(context, pod::pull)
+    execute_lifecycle_action(context, pod::pull, container::pull)
 }
 
 #[cfg(test)]
@@ -75,6 +73,14 @@ mod tests {
         }
 
         context.parameters = vec![String::from("@all")];
+        assert!(handle(&context).is_ok());
+
+        context.parameters = vec![
+            String::from("recipe/1"),
+            String::from("recipe/*db"),
+            String::from("recipe/db"),
+            String::from("recipe/example-stack-db"),
+        ];
         assert!(handle(&context).is_ok());
     }
 }

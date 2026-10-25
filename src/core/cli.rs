@@ -280,7 +280,7 @@ fn parse_default_positionals(
     if action.requires_targets() && positionals.is_empty() {
         return Err(CliError::new(CliErrorKind::MissingTarget));
     }
-    validate_group_or_recipe_targets(&positionals)?;
+    validate_lifecycle_targets(&positionals)?;
     Ok((ModeAction::Default(action), positionals))
 }
 
@@ -367,7 +367,7 @@ fn parse_image_positionals(
             if positionals.is_empty() {
                 return Err(CliError::new(CliErrorKind::MissingTarget));
             }
-            validate_group_or_recipe_targets(&positionals)?;
+            validate_lifecycle_targets(&positionals)?;
             Ok((ModeAction::Image(ImageAction::Update), positionals))
         }
     }
@@ -577,6 +577,17 @@ fn validate_container_target(target: &str) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Validates a `<recipe>/<container>` target argument requiring an explicit `'/'` separator.
+fn validate_explicit_container_target(target: &str) -> Result<(), CliError> {
+    let Some((recipe, container)) = target.split_once('/') else {
+        return Err(CliError::with_argument(CliErrorKind::InvalidTarget, target));
+    };
+    if !is_valid_target_segment(recipe) || !is_valid_target_segment(container) {
+        return Err(CliError::with_argument(CliErrorKind::InvalidTarget, target));
+    }
+    Ok(())
+}
+
 /// Validates a single `<recipe>` or `@<group>` target argument.
 fn validate_group_or_recipe_target(target: &str) -> Result<(), CliError> {
     let segment = target.strip_prefix('@').unwrap_or(target);
@@ -586,8 +597,17 @@ fn validate_group_or_recipe_target(target: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Validates a slice of `<recipe>` or `@<group>` target arguments.
-fn validate_group_or_recipe_targets(parameters: &[String]) -> Result<(), CliError> {
+/// Validates a slice of lifecycle targets, enforcing either all `<recipe>`/`@<group>` targets or all `<recipe>/<container>` targets.
+fn validate_lifecycle_targets(parameters: &[String]) -> Result<(), CliError> {
+    let Some(first) = parameters.first() else {
+        return Ok(());
+    };
+    if first.contains('/') {
+        for parameter in parameters {
+            validate_explicit_container_target(parameter)?;
+        }
+        return Ok(());
+    }
     for parameter in parameters {
         validate_group_or_recipe_target(parameter)?;
     }
@@ -808,6 +828,46 @@ mod tests {
             assert_eq!(context.parameters, vec!["example-app", "@backend"]);
             assert!(context.requires_config());
 
+            let mut container_context = Context::new();
+            parse_args(
+                &mut container_context,
+                [
+                    keyword,
+                    "buce/buce-app",
+                    "buce/*app",
+                    "buce/app",
+                    "buce/1",
+                    "other_pod/db",
+                ],
+            )
+            .unwrap();
+            assert_eq!(container_context.mode, Mode::Default);
+            assert_eq!(
+                container_context.action,
+                ModeAction::Default(expected_action)
+            );
+            assert_eq!(
+                container_context.parameters,
+                vec![
+                    "buce/buce-app",
+                    "buce/*app",
+                    "buce/app",
+                    "buce/1",
+                    "other_pod/db",
+                ]
+            );
+
+            for mixed_targets in [
+                [keyword, "@all", "other_pod", "buce/app"].as_slice(),
+                [keyword, "other_pod", "buce/app"].as_slice(),
+                [keyword, "buce/app", "other_pod"].as_slice(),
+                [keyword, "buce/app", "@all"].as_slice(),
+            ] {
+                let mut mixed_context = Context::new();
+                let mixed_error = parse_args(&mut mixed_context, mixed_targets).unwrap_err();
+                assert_eq!(mixed_error.kind, CliErrorKind::InvalidTarget);
+            }
+
             let mut missing_context = Context::new();
             let missing_target = parse_args(&mut missing_context, [keyword]).unwrap_err();
             assert_eq!(missing_target.kind, CliErrorKind::MissingTarget);
@@ -823,6 +883,15 @@ mod tests {
         assert!(status_default.flags.all);
         assert!(status_default.flags.full);
         assert!(status_default.requires_config());
+
+        let mut status_containers = Context::new();
+        parse_args(&mut status_containers, ["status", "buce/app", "buce/1"]).unwrap();
+        assert_eq!(status_containers.parameters, vec!["buce/app", "buce/1"]);
+
+        let mut status_mixed = Context::new();
+        let status_mixed_err =
+            parse_args(&mut status_mixed, ["status", "buce", "buce/1"]).unwrap_err();
+        assert_eq!(status_mixed_err.kind, CliErrorKind::InvalidTarget);
 
         let mut empty_invocation = Context::new();
         parse_args(&mut empty_invocation, Vec::<String>::new()).unwrap();
@@ -1096,6 +1165,29 @@ mod tests {
         parse_args(&mut image_update, ["img", "update", "@backend"]).unwrap();
         assert_eq!(image_update.action, ModeAction::Image(ImageAction::Update));
         assert!(image_update.requires_config());
+
+        let mut image_update_containers = Context::new();
+        parse_args(
+            &mut image_update_containers,
+            ["image", "update", "buce/app", "buce/1"],
+        )
+        .unwrap();
+        assert_eq!(
+            image_update_containers.action,
+            ModeAction::Image(ImageAction::Update)
+        );
+        assert_eq!(
+            image_update_containers.parameters,
+            vec!["buce/app", "buce/1"]
+        );
+
+        let mut image_update_mixed = Context::new();
+        let image_mixed_err = parse_args(
+            &mut image_update_mixed,
+            ["image", "update", "@backend", "buce/app"],
+        )
+        .unwrap_err();
+        assert_eq!(image_mixed_err.kind, CliErrorKind::InvalidTarget);
 
         let mut init_create = Context::new();
         parse_args(&mut init_create, ["init"]).unwrap();

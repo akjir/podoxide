@@ -15,28 +15,30 @@
 
 //! Handler for `pods stop <target...>`.
 
+use crate::core::container;
 use crate::core::context::Context;
 use crate::core::pod;
 use crate::error::PodError;
 use super::execute_lifecycle_action;
 
 /// Stops running target containers in reverse bottom-to-top order (`N..1`) and stops the
-/// parent pod without removing them.
+/// parent pod without removing them, or stops explicitly targeted containers.
 ///
 /// # Workflow
 ///
-/// 1. Expand `@<group>` and `<recipe>` targets in `context.parameters` against
-///    `context.config.recipes.groups`, preserving first-appearance order and deduplicating
-///    repeated recipes.
-/// 2. Iterate sequentially over the expanded target recipe names:
-///    - Read and validate only the targeted `<recipes.path>/<recipe>.pod` file.
-///    - Stop containers in reverse bottom-to-top order (`N` down to `1`) and stop the parent
-///      pod without removing the containers or pod.
+/// 1. Expand `@<group>` and `<recipe>` targets (or resolve `<recipe>/<container>` targets) in
+///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
+///    order and deduplicating repeated targets.
+/// 2. For pod/group targets: stop containers in reverse bottom-to-top order (`N..1`) and stop
+///    the parent pod.
+/// 3. For container targets: stop only the targeted containers without stopping the parent pod.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if target expansion fails, a targeted `.pod` recipe file cannot be
-/// read or validated, or a `podman` stop command fails.
+/// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
+/// cannot be read or validated, or a `podman` stop command fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
-    execute_lifecycle_action(context, pod::stop)
+    execute_lifecycle_action(context, pod::stop, |item, _pod, simulate| {
+        container::stop(item, simulate)
+    })
 }

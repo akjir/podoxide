@@ -235,7 +235,6 @@ pub fn down_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    validate_recipe_containers(recipe)?;
     stop_with(recipe, simulate, stdout, stderr)?;
     remove_with(recipe, simulate, stdout, stderr)
 }
@@ -268,7 +267,7 @@ pub fn pull_with<W: Write, E: Write>(
         &format!("Update pod '{}' ('{}') ...", recipe.pod.name, recipe.pod.id),
     );
     for item in &recipe.containers {
-        container::update_with(item, &recipe.pod, simulate, stdout, stderr)?;
+        container::pull_with(item, &recipe.pod, simulate, stdout, stderr)?;
     }
     Ok(())
 }
@@ -351,7 +350,6 @@ pub fn restart_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    validate_recipe_containers(recipe)?;
     stop_with(recipe, simulate, stdout, stderr)?;
     start_with(recipe, simulate, stdout, stderr)
 }
@@ -436,7 +434,6 @@ pub fn up_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    validate_recipe_create(recipe)?;
     create_with(recipe, simulate, stdout, stderr)?;
     start_with(recipe, simulate, stdout, stderr)
 }
@@ -532,14 +529,7 @@ fn validate_recipe_containers(recipe: &Recipe) -> Result<(), RecipeError> {
 fn validate_recipe_create(recipe: &Recipe) -> Result<(), RecipeError> {
     validate_pod_create(&recipe.pod)?;
     for item in &recipe.containers {
-        if !is_valid_pod_or_container_name(&item.name) {
-            return Err(RecipeError::with_token(
-                RecipeErrorKind::InvalidContainerName,
-                item.line,
-                &item.name,
-            ));
-        }
-        item.validate()?;
+        item.validate_create(&recipe.pod)?;
     }
     Ok(())
 }
@@ -555,6 +545,13 @@ fn validate_recipe_pull(recipe: &Recipe) -> Result<(), RecipeError> {
         ));
     }
     for item in &recipe.containers {
+        if !is_valid_pod_or_container_name(&item.name) {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::InvalidContainerName,
+                item.line,
+                &item.name,
+            ));
+        }
         item.validate()?;
     }
     Ok(())
@@ -567,6 +564,7 @@ mod tests {
     use std::str::FromStr;
 
     use crate::core::config::Config;
+    use crate::core::container::VolumeMount;
     use crate::core::log::MAX_LOG_MESSAGE_BYTES;
     use crate::core::recipe::Recipe;
     use crate::error::{PodError, RecipeErrorKind};
@@ -586,6 +584,37 @@ mod tests {
         fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
         }
+    }
+
+    fn assert_create_lifecycles_reject(
+        recipe: &Recipe,
+        expected_kind: RecipeErrorKind,
+        expected_line: usize,
+    ) {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert!(matches!(
+            create_with(recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == expected_kind && error.line == Some(expected_line)
+        ));
+        assert!(matches!(
+            up_with(recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == expected_kind && error.line == Some(expected_line)
+        ));
+        assert!(matches!(
+            reload_with(recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == expected_kind && error.line == Some(expected_line)
+        ));
+        assert!(matches!(
+            update_with(recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == expected_kind && error.line == Some(expected_line)
+        ));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
     }
 
     fn assert_invalid_pod_id_rejected(recipe: &Recipe, invalid_id: &str) {
@@ -902,80 +931,19 @@ mod tests {
         let mut bad_publish = base_recipe.clone();
         bad_publish.pod.line = 11;
         bad_publish.pod.publish = vec![String::from("--privileged")];
-        assert!(matches!(
-            create_with(&bad_publish, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidPublish && error.line == Some(11)
-        ));
-        assert!(matches!(
-            up_with(&bad_publish, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidPublish && error.line == Some(11)
-        ));
-        assert!(matches!(
-            reload_with(&bad_publish, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidPublish && error.line == Some(11)
-        ));
-        assert!(matches!(
-            update_with(&bad_publish, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidPublish && error.line == Some(11)
-        ));
-        assert!(stdout.is_empty());
-        assert!(stderr.is_empty());
+        assert_create_lifecycles_reject(&bad_publish, RecipeErrorKind::InvalidPublish, 11);
 
         let mut bad_option = base_recipe.clone();
         bad_option.pod.line = 13;
         bad_option.pod.options = vec![String::from("--flag\nspoof")];
-        assert!(matches!(
-            create_with(&bad_option, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidOption && error.line == Some(13)
-        ));
-        assert!(matches!(
-            up_with(&bad_option, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidOption && error.line == Some(13)
-        ));
-        assert!(matches!(
-            reload_with(&bad_option, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidOption && error.line == Some(13)
-        ));
-        assert!(matches!(
-            update_with(&bad_option, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidOption && error.line == Some(13)
-        ));
-        assert!(stdout.is_empty());
-        assert!(stderr.is_empty());
+        assert_create_lifecycles_reject(&bad_option, RecipeErrorKind::InvalidOption, 13);
 
         let mut bad_image = base_recipe.clone();
         bad_image.containers[1].line = 24;
         bad_image.containers[1].image = String::from("--help");
-        assert!(matches!(
-            create_with(&bad_image, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
-        ));
-        assert!(matches!(
-            up_with(&bad_image, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
-        ));
-        assert!(matches!(
-            reload_with(&bad_image, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
-        ));
+        assert_create_lifecycles_reject(&bad_image, RecipeErrorKind::InvalidImage, 24);
         assert!(matches!(
             pull_with(&bad_image, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
-        ));
-        assert!(matches!(
-            update_with(&bad_image, true, &mut stdout, &mut stderr),
             Err(PodError::Recipe(error))
                 if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
         ));
@@ -985,23 +953,9 @@ mod tests {
         let mut bad_name = base_recipe.clone();
         bad_name.containers[1].line = 25;
         bad_name.containers[1].name = String::from("--all");
+        assert_create_lifecycles_reject(&bad_name, RecipeErrorKind::InvalidContainerName, 25);
         assert!(matches!(
-            create_with(&bad_name, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
-        ));
-        assert!(matches!(
-            up_with(&bad_name, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
-        ));
-        assert!(matches!(
-            reload_with(&bad_name, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
-        ));
-        assert!(matches!(
-            update_with(&bad_name, true, &mut stdout, &mut stderr),
+            pull_with(&bad_name, true, &mut stdout, &mut stderr),
             Err(PodError::Recipe(error))
                 if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
         ));
@@ -1033,21 +987,39 @@ mod tests {
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
 
-        let mut bad_registry = base_recipe;
+        let mut empty_name = base_recipe.clone();
+        empty_name.containers[1].line = 26;
+        empty_name.containers[1].name.clear();
+        assert_create_lifecycles_reject(&empty_name, RecipeErrorKind::InvalidContainerName, 26);
+        assert!(matches!(
+            pull_with(&empty_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(26)
+        ));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let mut bad_registry = base_recipe.clone();
         bad_registry.pod.line = 12;
         bad_registry.pod.registry = String::from("--tls-verify=false");
+        assert_create_lifecycles_reject(&bad_registry, RecipeErrorKind::InvalidRegistry, 12);
         assert!(matches!(
             pull_with(&bad_registry, true, &mut stdout, &mut stderr),
             Err(PodError::Recipe(error))
                 if error.kind == RecipeErrorKind::InvalidRegistry && error.line == Some(12)
         ));
-        assert!(matches!(
-            update_with(&bad_registry, true, &mut stdout, &mut stderr),
-            Err(PodError::Recipe(error))
-                if error.kind == RecipeErrorKind::InvalidRegistry && error.line == Some(12)
-        ));
         assert!(stdout.is_empty());
         assert!(stderr.is_empty());
+
+        let mut bad_volume_path = base_recipe;
+        bad_volume_path.pod.path = PathBuf::new();
+        bad_volume_path.containers[1].line = 27;
+        bad_volume_path.containers[1].volumes.push(VolumeMount {
+            container_dir: String::from("/data"),
+            host_dir: String::from("./data"),
+            options: String::new(),
+        });
+        assert_create_lifecycles_reject(&bad_volume_path, RecipeErrorKind::InvalidVolume, 27);
     }
 
     #[test]

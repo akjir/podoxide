@@ -95,7 +95,7 @@ fn write_targets_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "TARGETS:");
     log::write_print(
         writer,
-        "  *                  names of recipes or groups defined in a config (update only)",
+        "  *                  names of recipes, @groups, or <recipe>/<container> targets (update only)",
     );
 }
 
@@ -136,7 +136,7 @@ mod tests {
         ));
         assert!(output.contains("TARGETS:\n"));
         assert!(output.contains(
-            "  *                  names of recipes or groups defined in a config (update only)\n"
+            "  *                  names of recipes, @groups, or <recipe>/<container> targets (update only)\n"
         ));
 
         let context = Context::new();

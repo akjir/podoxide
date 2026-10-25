@@ -15,30 +15,28 @@
 
 //! Handler for `pods create <target...>`.
 
+use crate::core::container;
 use crate::core::context::Context;
 use crate::core::pod;
 use crate::error::PodError;
 use super::execute_lifecycle_action;
 
 /// Creates target pods and their containers in top-to-bottom declaration order (`1..N`)
-/// without starting them.
+/// without starting them, or creates explicitly targeted containers (`<recipe>/<container>`).
 ///
 /// # Workflow
 ///
-/// 1. Expand `@<group>` and `<recipe>` targets in `context.parameters` against
-///    `context.config.recipes.groups`, preserving first-appearance order and deduplicating
-///    repeated recipes.
-/// 2. Iterate sequentially over the expanded target recipe names:
-///    - Read and validate only the targeted `<recipes.path>/<recipe>.pod` file.
-///    - Create the Podman pod (`podman pod create ...`) with configured port mappings and
-///      options.
-///    - Create each container (`podman create ...`) in top-to-bottom declaration order
-///      (`1` to `N`) without starting the pod or containers.
+/// 1. Expand `@<group>` and `<recipe>` targets (or resolve `<recipe>/<container>` targets) in
+///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
+///    order and deduplicating repeated targets.
+/// 2. For pod/group targets: create the Podman pod (`podman pod create ...`) and create each
+///    container (`podman create ...`) in top-to-bottom declaration order (`1` to `N`).
+/// 3. For container targets: create only the targeted containers without creating the parent pod.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if target expansion fails, a targeted `.pod` recipe file cannot be
-/// read or validated, or a `podman` creation command fails.
+/// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
+/// cannot be read or validated, or a `podman` creation command fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
-    execute_lifecycle_action(context, pod::create)
+    execute_lifecycle_action(context, pod::create, container::create)
 }

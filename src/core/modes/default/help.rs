@@ -91,7 +91,7 @@ fn write_help<W: Write>(writer: &mut W) {
     log::write_print(writer, "TARGETS:");
     log::write_print(
         writer,
-        "  *                  names of recipes or groups defined in a config",
+        "  *                  names of recipes, @groups, or <recipe>/<container> targets",
     );
     log::write_print(writer, "");
     log::write_print(writer, "For more: pods [MODE] help");
@@ -211,7 +211,7 @@ mod tests {
         assert!(output.contains("  version            display version information and exit\n"));
         assert!(output.contains("TARGETS:\n"));
         assert!(output.contains(
-            "  *                  names of recipes or groups defined in a config\n"
+            "  *                  names of recipes, @groups, or <recipe>/<container> targets\n"
         ));
         assert!(output.contains("For more: pods [MODE] help\n"));
 
