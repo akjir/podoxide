@@ -50,7 +50,7 @@ pods init
 2. Validate the configuration and inspect resolved paths:
 
 ```bash
-pods config show
+pods config inspect
 ```
 
 3. Preview and start a recipe or `@group`:

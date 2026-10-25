@@ -58,6 +58,7 @@ podoxide/
     │       ├── config/
     │       │   ├── edit.rs
     │       │   ├── help.rs
+    │       │   ├── inspect.rs
     │       │   ├── mod.rs
     │       │   └── show.rs
     │       ├── connect/
@@ -95,6 +96,7 @@ podoxide/
     │       └── recipe/
     │           ├── edit.rs
     │           ├── help.rs
+    │           ├── inspect.rs
     │           ├── list.rs
     │           ├── mod.rs
     │           └── show.rs
@@ -142,13 +144,13 @@ The `src/core/` directory contains application state, domain models, argument pa
 | :---------------------- | :------- |
 | `src/core/mod.rs`       | Declares and re-exports the core domain modules and the `modes` submodule. |
 | `src/core/cli.rs`       | Parses CLI arguments (`OsStr` / `OsString`), extracts global and mode-specific flags (`--config`, `--debug`, `--simulate`), and selects modes. |
-| `src/core/config.rs`    | Defines the configuration model (`pods.conf`), collects active recipes, checks recipe membership, and expands `@group` targets. |
+| `src/core/config.rs`    | Defines the configuration model (`pods.conf`), reads configuration files, collects active recipes, checks recipe membership, and expands `@group` targets. |
 | `src/core/constants.rs` | Defines global application metadata and the compile-time build version constant (`APP_NAME`, `APP_VERSION`). |
 | `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and executes container lifecycle operations (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`, `pull`, `update`). |
 | `src/core/context.rs`   | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
-| `src/core/log.rs`       | Provides structured output and diagnostic logging (`debug`, `info`, `pod_error`, `print`, `write_*`) with debug state control. |
+| `src/core/log.rs`       | Provides structured output, numbered-line printing (`write_numbered_lines`), and diagnostic logging (`debug`, `info`, `pod_error`, `print`, `write_*`) with debug state control. |
 | `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`) across containers. |
-| `src/core/recipe.rs`    | Defines the `.pod` recipe model, validates pod and container definitions, and resolves target container specifications (`<recipe>/<spec>`). |
+| `src/core/recipe.rs`    | Defines the `.pod` recipe model, loads and validates pod and container definitions (`Recipe::inspect`), and resolves target container specifications (`<recipe>/<spec>`). |
 
 ## CLI Modes (`src/core/modes/`)
 
@@ -171,14 +173,15 @@ Executes or lists predefined maintenance commands declared inside a recipe's `po
 
 ### Config Mode (`src/core/modes/config/`)
 
-Inspects, validates, and edits the active `pods.conf` configuration file.
+Inspects, validates, displays, and edits the active `pods.conf` configuration file.
 
-| File                            | Function |
-| :------------------------------ | :------- |
-| `src/core/modes/config/mod.rs`  | Parses `config` mode parameters and dispatches to `show` (default), `edit`, or `help`. |
-| `src/core/modes/config/edit.rs` | Opens the active configuration file in the configured editor process. |
-| `src/core/modes/config/help.rs` | Formats and outputs the CLI help text for `pods config`. |
-| `src/core/modes/config/show.rs` | Displays configuration settings, directory status, group hierarchy trees, and missing or unreferenced recipes. |
+| File                               | Function |
+| :--------------------------------- | :------- |
+| `src/core/modes/config/mod.rs`     | Parses `config` mode parameters and dispatches to `inspect` (default), `show`, `edit`, or `help`. |
+| `src/core/modes/config/edit.rs`    | Opens the active configuration file in the configured editor process. |
+| `src/core/modes/config/help.rs`    | Formats and outputs the CLI help text for `pods config`. |
+| `src/core/modes/config/inspect.rs` | Displays configuration settings, directory status, group hierarchy trees with recipe validation status (`[OK]`, `[ERROR]`, `[NOT FOUND]`), and missing, invalid, or unreferenced recipes. |
+| `src/core/modes/config/show.rs`    | Reads the active configuration file and outputs its contents with 1-based line numbers. |
 
 ### Connect Mode (`src/core/modes/connect/`)
 
@@ -204,7 +207,7 @@ Executes primary pod lifecycle operations and displays container runtime status 
 | `src/core/modes/default/remove.rs`  | Removes target containers in reverse startup order and removes the parent pod (or targeted containers) without stopping them first. |
 | `src/core/modes/default/restart.rs` | Stops and starts existing target pods and containers (or targeted containers) without removing or recreating them (`stop` + `start`). |
 | `src/core/modes/default/start.rs`   | Starts existing stopped target pods and their containers (or targeted containers) in top-to-bottom declaration order. |
-| `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes or targeted containers, and formats the runtime status table (including `TARGET NAMES` in `--full` mode). |
+| `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes or targeted containers, synthesizes `Not Found` and `Recipe Error` rows, and formats the runtime status table (including `TARGET NAMES` in `--full` mode). |
 | `src/core/modes/default/stop.rs`    | Stops running target containers in reverse bottom-to-top order and stops the parent pod (or targeted containers) without removing them. |
 | `src/core/modes/default/up.rs`      | Loads and validates target recipes, then creates and starts pods and containers (or targeted containers) in top-to-bottom order (`create` + `start`). |
 | `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes (or targeted containers) and rebuilds them (`image update` + `reload`). |
@@ -244,15 +247,16 @@ Fetches or streams Podman logs for a recipe's pod or a specific container.
 
 ### Recipe Mode (`src/core/modes/recipe/`)
 
-Lists, inspects, and edits `.pod` recipe files.
+Lists, inspects, displays, and edits `.pod` recipe files.
 
-| File                            | Function |
-| :------------------------------ | :------- |
-| `src/core/modes/recipe/mod.rs`  | Parses `recipe` mode parameters, validates recipe targets, and dispatches to `list`, `show`, `edit`, or `help`. |
-| `src/core/modes/recipe/edit.rs` | Opens the specified `.pod` recipe file in the configured text editor. |
-| `src/core/modes/recipe/help.rs` | Formats and outputs the CLI help text for `pods recipe`. |
-| `src/core/modes/recipe/list.rs` | Lists configured recipes with descriptions and file status, plus unlinked `.pod` files when `--all` is set. |
-| `src/core/modes/recipe/show.rs` | Reads a `.pod` recipe file and outputs its contents with line numbers. |
+| File                               | Function |
+| :--------------------------------- | :------- |
+| `src/core/modes/recipe/mod.rs`     | Parses `recipe` mode parameters, validates recipe targets, and dispatches to `list`, `inspect`, `show`, `edit`, or `help`. |
+| `src/core/modes/recipe/edit.rs`    | Opens the specified `.pod` recipe file in the configured text editor. |
+| `src/core/modes/recipe/help.rs`    | Formats and outputs the CLI help text for `pods recipe`. |
+| `src/core/modes/recipe/inspect.rs` | Validates a single registered `.pod` recipe via `Recipe::inspect` and outputs confirmation or a diagnostic error. |
+| `src/core/modes/recipe/list.rs`    | Lists configured recipes with descriptions and validation status (`[OK]`, `[ERROR]`, `[NOT FOUND]`), plus unlinked `.pod` files when `--all` is set. |
+| `src/core/modes/recipe/show.rs`    | Reads a `.pod` recipe file and outputs its contents with 1-based line numbers. |
 
 ## I/O, Process Execution & PSL (`src/io/`)
 
@@ -300,7 +304,7 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 | :---------------------------- | :------- |
 | `src/utilities/mod.rs`        | Declares and re-exports the utility submodules. |
 | `src/utilities/collection.rs` | Provides slice and vector helpers such as option token splitting (`append_option_tokens`), order-preserving deduplication (`dedup_preserve_order`), and bounded pre-allocation utilities (`bounded_capacity`). |
-| `src/utilities/format.rs`     | Formats shell-escaped command strings (`format_command`), 1-based list indices (`format_index_prefix`), and byte counts (`format_bytes`), parses human-readable sizes (`parse_size_to_bytes`), aligns status columns (`format_line`), and formats CLI version headers (`format_version_header`). |
+| `src/utilities/format.rs`     | Formats shell-escaped command strings (`format_command`), 1-based list indices (`format_index_prefix`), quoted conjunctions (`format_quoted_conjunction`), recipe inspection hints (`format_recipe_error_hint`), and byte counts (`format_bytes`), parses human-readable sizes (`parse_size_to_bytes`), aligns status columns (`format_line`), and formats CLI version headers (`format_version_header`). |
 | `src/utilities/path.rs`       | Provides lexical path normalization (`normalize_lexical_path`, `pop_relative_or_absolute`), full path construction (`build_full_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), directory, editor, and target path validation (`has_regular_target_name`, `is_valid_directory`, `is_valid_directory_path`, `is_valid_editor_value`, `is_valid_target_path`, `validate_editor`), path token sanitization (`sanitize_path_token`), extension matching (`matches_extension`), parent traversal checks (`has_parent_dir`), and `.conf` stem/path resolution (`extract_config_stem`, `resolve_config_name`, `resolve_config_path`). |
 | `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character detection and sanitization (`contains_control_or_bidi`, `contains_control_or_whitespace`, `is_bidi_control`, `sanitize_char`, `sanitize_text`), empty value literal detection (`is_empty_value_literal`), shell quoting (`escape_shell`, `is_safe_shell_byte`), identifier, target, token, text, and pod/container name validation and normalization (`is_identifier_continue`, `is_identifier_start`, `is_valid_group_target`, `is_valid_identifier`, `is_valid_pod_or_container_name`, `is_valid_recipe_identifier`, `is_valid_target_segment`, `is_valid_text`, `is_valid_token`, `normalize_name`), and strict ASCII integer parsing (`parse_ascii_u32`). |
 

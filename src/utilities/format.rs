@@ -17,6 +17,7 @@
 
 use crate::core::constants::{APP_NAME, APP_VERSION};
 use crate::core::log::MAX_LOG_MESSAGE_BYTES;
+use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::string::escape_shell;
 
 const BYTES_PER_GB: u64 = 1_000_000_000;
@@ -27,6 +28,7 @@ const BYTES_PER_TB: u64 = 1_000_000_000_000;
 pub const DEFAULT_TARGET_COLUMN: usize = 44;
 const ESTIMATED_ARG_BYTES: usize = 12;
 const MAX_SIZE_STRING_BYTES: usize = 64;
+const QUOTED_ITEM_BYTES_ESTIMATE: usize = 16;
 
 /// Formats a byte count into a human-readable decimal size string (`B`, `kB`, `MB`, or `GB`).
 #[must_use]
@@ -89,6 +91,49 @@ pub fn format_line(line: &str, status: &str, target_column: usize) -> String {
     formatted
 }
 
+/// Formats a slice of items as `'item1', 'item2' and 'itemN'`.
+#[must_use]
+pub fn format_quoted_conjunction(items: &[&str]) -> String {
+    let Some((last, prefix)) = items.split_last() else {
+        return String::new();
+    };
+    if prefix.is_empty() {
+        return format!("'{last}'");
+    }
+    let capacity = bounded_capacity(
+        items.len().saturating_mul(QUOTED_ITEM_BYTES_ESTIMATE),
+        MAX_COLLECTION_PREALLOC,
+    );
+    let mut output = String::with_capacity(capacity);
+    for (i, item) in prefix.iter().enumerate() {
+        if i > 0 {
+            output.push_str(", ");
+        }
+        output.push('\'');
+        output.push_str(item);
+        output.push('\'');
+    }
+    output.push_str(" and '");
+    output.push_str(last);
+    output.push('\'');
+    output
+}
+
+/// Formats the remediation hint message for one or more recipes that failed inspection.
+#[must_use]
+pub fn format_recipe_error_hint(invalid_recipes: &[&str]) -> String {
+    match invalid_recipes {
+        [] => String::new(),
+        [single] => {
+            format!("Recipe '{single}' has errors! Run 'pods recipe inspect {single}' for details.")
+        }
+        many => {
+            let joined = format_quoted_conjunction(many);
+            format!("Recipes {joined} have errors! Run 'pods recipe inspect <recipe>' for details.")
+        }
+    }
+}
+
 /// Formats the application version header (`Podoxide v<version>`), appending ` - <title>` when `mode_title` is non-empty.
 #[must_use]
 pub fn format_version_header(mode_title: Option<&str>) -> String {
@@ -143,7 +188,8 @@ mod tests {
     use crate::core::log::MAX_LOG_MESSAGE_BYTES;
     use super::{
         DEFAULT_TARGET_COLUMN, MAX_SIZE_STRING_BYTES, format_bytes, format_command,
-        format_index_prefix, format_line, format_version_header, parse_size_to_bytes,
+        format_index_prefix, format_line, format_quoted_conjunction, format_recipe_error_hint,
+        format_version_header, parse_size_to_bytes,
     };
 
     #[test]
@@ -214,6 +260,30 @@ mod tests {
 
         let clamped = format_line("x", "[OK]", usize::MAX);
         assert_eq!(clamped.chars().count(), MAX_LOG_MESSAGE_BYTES + 4);
+    }
+
+    #[test]
+    fn format_quoted_conjunction_and_recipe_error_hint_handle_empty_single_and_multiple_items() {
+        assert_eq!(format_quoted_conjunction(&[]), "");
+        assert_eq!(format_quoted_conjunction(&["only"]), "'only'");
+        assert_eq!(
+            format_quoted_conjunction(&["first", "second"]),
+            "'first' and 'second'"
+        );
+        assert_eq!(
+            format_quoted_conjunction(&["first", "second", "third"]),
+            "'first', 'second' and 'third'"
+        );
+
+        assert_eq!(format_recipe_error_hint(&[]), "");
+        assert_eq!(
+            format_recipe_error_hint(&["nginx"]),
+            "Recipe 'nginx' has errors! Run 'pods recipe inspect nginx' for details."
+        );
+        assert_eq!(
+            format_recipe_error_hint(&["buci", "nginx"]),
+            "Recipes 'buci' and 'nginx' have errors! Run 'pods recipe inspect <recipe>' for details."
+        );
     }
 
     #[test]

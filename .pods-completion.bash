@@ -95,8 +95,8 @@ _pods_completions() {
             logs)    sub_actions="show follow help" ;;
             init)    sub_actions="create help" ;;
             command) sub_actions="exec list help" ;;
-            config)  sub_actions="show edit help" ;;
-            recipe)  sub_actions="edit help list show" ;;
+            config)  sub_actions="edit help inspect show" ;;
+            recipe)  sub_actions="edit help inspect list show" ;;
             image)   sub_actions="help prune update" ;;
         esac
 

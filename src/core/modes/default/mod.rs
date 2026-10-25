@@ -99,7 +99,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 }
 
 /// Parses and validates all `<recipe>/<container>` parameters and checks configuration membership.
-pub(super) fn collect_container_specs(context: &Context) -> Result<Vec<(&str, &str)>, PodError> {
+fn collect_container_specs(context: &Context) -> Result<Vec<(&str, &str)>, PodError> {
     let capacity = bounded_capacity(context.parameters.len(), MAX_COLLECTION_PREALLOC);
     let mut specs = Vec::with_capacity(capacity);
     for parameter in &context.parameters {
@@ -113,26 +113,6 @@ pub(super) fn collect_container_specs(context: &Context) -> Result<Vec<(&str, &s
         specs.push((recipe_name, container_spec));
     }
     Ok(specs)
-}
-
-/// Loads target recipes, resolves each container specification, and deduplicates `(recipe, container_name)` pairs in first-appearance order.
-pub(super) fn resolve_container_targets<'a>(
-    config: &Config,
-    specs: &[(&'a str, &'a str)],
-) -> Result<ResolvedTargets<'a>, PodError> {
-    let capacity = bounded_capacity(specs.len(), MAX_COLLECTION_PREALLOC);
-    let mut recipes = BTreeMap::new();
-    let mut resolved = Vec::with_capacity(capacity);
-    let mut seen = BTreeSet::new();
-    for &(recipe_name, container_spec) in specs {
-        let recipe = load_or_get_recipe(&mut recipes, config, recipe_name)?;
-        let container = recipe.resolve_container(container_spec)?;
-        let entry = (recipe_name, container.name.clone());
-        if seen.insert(entry.clone()) {
-            resolved.push(entry);
-        }
-    }
-    Ok((recipes, resolved))
 }
 
 /// Resolves, deduplicates, and executes `container_action` across explicit `<recipe>/<container>` targets.
@@ -170,8 +150,7 @@ fn execute_pod_targets(
     }
     let targets = context.config.expand_targets(&context.parameters)?;
     for target in &targets {
-        let mut recipe = Recipe::load(&context.config.recipes.path, target)?;
-        recipe.validate(&context.config, target)?;
+        let recipe = Recipe::inspect(&context.config, target)?;
         pod_action(&recipe, context.config.simulate)?;
     }
     Ok(())
@@ -186,8 +165,7 @@ fn load_or_get_recipe<'a, 'b>(
     match recipes.entry(recipe_name) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
         Entry::Vacant(entry) => {
-            let mut recipe = Recipe::load(&config.recipes.path, recipe_name)?;
-            recipe.validate(config, recipe_name)?;
+            let recipe = Recipe::inspect(config, recipe_name)?;
             Ok(entry.insert(recipe))
         }
     }
@@ -210,6 +188,25 @@ fn parse_container_target(target: &str) -> Result<(&str, &str), PodError> {
     Ok((recipe_name, container_spec))
 }
 
+/// Loads target recipes, resolves each container specification, and deduplicates `(recipe, container_name)` pairs in first-appearance order.
+fn resolve_container_targets<'a>(
+    config: &Config,
+    specs: &[(&'a str, &'a str)],
+) -> Result<ResolvedTargets<'a>, PodError> {
+    let capacity = bounded_capacity(specs.len(), MAX_COLLECTION_PREALLOC);
+    let mut recipes = BTreeMap::new();
+    let mut resolved = Vec::with_capacity(capacity);
+    let mut seen = BTreeSet::new();
+    for &(recipe_name, container_spec) in specs {
+        let recipe = load_or_get_recipe(&mut recipes, config, recipe_name)?;
+        let container = recipe.resolve_container(container_spec)?;
+        if seen.insert((recipe_name, container.line)) {
+            resolved.push((recipe_name, container.name.clone()));
+        }
+    }
+    Ok((recipes, resolved))
+}
+
 #[cfg(test)]
 mod tests {
     use std::env;
@@ -224,7 +221,9 @@ mod tests {
     use crate::core::pod;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
     use crate::io::system::fs;
-    use super::{execute_lifecycle_action, handle};
+    use super::{
+        collect_container_specs, execute_lifecycle_action, handle, resolve_container_targets,
+    };
 
     const ALPHA_RECIPE_PSL: &str = "\
 pod alpha_pod {
@@ -332,6 +331,15 @@ recipes {
             String::from("recipe/example-stack-db"),
             String::from("recipe/app"),
         ];
+        let specs = collect_container_specs(&context).unwrap();
+        let (_, resolved) = resolve_container_targets(&context.config, &specs).unwrap();
+        assert_eq!(
+            resolved,
+            vec![
+                ("recipe", String::from("example-stack-db")),
+                ("recipe", String::from("example-stack-app")),
+            ]
+        );
         assert!(execute_lifecycle_action(&context, pod::up, container::up).is_ok());
 
         // Unknown recipe in container target fails with ConfigErrorKind::RecipeNotFound.

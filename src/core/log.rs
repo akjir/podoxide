@@ -80,6 +80,14 @@ pub fn write_info<W: Write>(writer: &mut W, message: &str) {
     write_line(writer, "INFO: ", message);
 }
 
+/// Writes each line of `content` prefixed with its 1-based line number (`"{line_number:3}: {line}"`) to `writer`.
+pub fn write_numbered_lines<W: Write>(writer: &mut W, content: &str) {
+    for (zero_based, line) in content.lines().enumerate() {
+        let line_number = zero_based + 1;
+        write_print(writer, &format!("{line_number:3}: {line}"));
+    }
+}
+
 /// Writes a structured [`PodError`] (including any multi-line compiler diagnostic) to `writer`.
 pub fn write_pod_error<W: Write>(writer: &mut W, error: &PodError) {
     let rendered = error.to_string();
@@ -126,8 +134,8 @@ mod tests {
     use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
     use super::{
         MAX_LOG_MESSAGE_BYTES, debug, info, is_debug_enabled, pod_error, print,
-        set_debug_enabled, write_debug, write_error, write_info, write_pod_error, write_print,
-        write_warning,
+        set_debug_enabled, write_debug, write_error, write_info, write_numbered_lines,
+        write_pod_error, write_print, write_warning,
     };
 
     struct FailingWriter;
@@ -219,6 +227,7 @@ mod tests {
         );
         write_error(&mut buffer, "Podman 5.8.0 or higher is required.");
         write_print(&mut buffer, "Podoxide v0.1.0");
+        write_numbered_lines(&mut buffer, "first line\nsecond line\n");
 
         let output = String::from_utf8(buffer).unwrap();
         assert!(output.contains("DEBUG: Debug mode is enabled.\n"));
@@ -227,6 +236,7 @@ mod tests {
         assert!(output.contains("WARNING: Podoxide is running with elevated privileges (sudo).\n"));
         assert!(output.contains("ERROR: Podman 5.8.0 or higher is required.\n"));
         assert!(output.contains("Podoxide v0.1.0\n"));
+        assert!(output.contains("  1: first line\n  2: second line\n"));
 
         let mut diagnostic_buffer = Vec::new();
         let recipe_error = RecipeError::with_token(

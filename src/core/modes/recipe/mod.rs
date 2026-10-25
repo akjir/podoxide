@@ -17,6 +17,7 @@
 
 pub mod edit;
 pub mod help;
+pub mod inspect;
 pub mod list;
 pub mod show;
 
@@ -29,15 +30,15 @@ use crate::error::{CliError, CliErrorKind, ConfigError, ConfigErrorKind, PodErro
 use crate::utilities::path::{build_full_path, is_valid_directory, sanitize_path_token};
 use crate::utilities::string::is_valid_target_segment;
 
-/// Dispatches `recipe` mode execution to the resolved sub-action (`edit`, `help`, `list`, or
-/// `show`).
+/// Dispatches `recipe` mode execution to the resolved sub-action (`edit`, `help`, `inspect`,
+/// `list`, or `show`).
 ///
 /// # Workflow
 ///
 /// 1. Log that `recipe` mode is active when debug logging is enabled.
-/// 2. Route [`ModeAction::Recipe`] in enum declaration order (`Edit`, `Help`, `List`, `Show`)
-///    to the corresponding action module ([`edit::handle`], [`help::handle`], [`list::handle`],
-///    [`show::handle`]).
+/// 2. Route [`ModeAction::Recipe`] in enum declaration order (`Edit`, `Help`, `Inspect`, `List`,
+///    `Show`) to the corresponding action module ([`edit::handle`], [`help::handle`],
+///    [`inspect::handle`], [`list::handle`], [`show::handle`]).
 ///
 /// # Errors
 ///
@@ -48,6 +49,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
     match context.action() {
         ModeAction::Recipe(RecipeAction::Edit) => edit::handle(context),
         ModeAction::Recipe(RecipeAction::Help) => help::handle(context),
+        ModeAction::Recipe(RecipeAction::Inspect) => inspect::handle(context),
         ModeAction::Recipe(RecipeAction::List) => list::handle(context),
         ModeAction::Recipe(RecipeAction::Show) => show::handle(context),
         _ => Err(PodError::from(CliError::with_argument(
@@ -192,6 +194,7 @@ mod tests {
         for action in [
             RecipeAction::Edit,
             RecipeAction::Help,
+            RecipeAction::Inspect,
             RecipeAction::List,
             RecipeAction::Show,
         ] {
@@ -199,7 +202,10 @@ mod tests {
             context.config = root_config.clone();
             context.mode = Mode::Recipe;
             context.action = ModeAction::Recipe(action);
-            if matches!(action, RecipeAction::Edit | RecipeAction::Show) {
+            if matches!(
+                action,
+                RecipeAction::Edit | RecipeAction::Inspect | RecipeAction::Show
+            ) {
                 context.parameters = vec![String::from("recipe")];
             }
             assert!(handle(&context).is_ok());

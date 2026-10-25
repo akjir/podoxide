@@ -28,7 +28,7 @@ use crate::utilities::format::format_version_header;
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
 /// 2. Output the version header, `pods config` usage synopsis, options (`--config`,
-///    `--debug`, `--simulate`), and actions (`help`, `edit`, `show`) via [`log::write_print`].
+///    `--debug`, `--simulate`), and actions (`help`, `edit`, `inspect`, `show`) via [`log::write_print`].
 ///
 /// # Errors
 ///
@@ -58,6 +58,7 @@ fn write_help<W: Write>(writer: &mut W) {
     log::write_print(writer, "ACTIONS:");
     log::write_print(writer, "  help               display this help and exit");
     log::write_print(writer, "  edit               edit config");
+    log::write_print(writer, "  inspect            inspect config");
     log::write_print(writer, "  show               show config");
 }
 
@@ -84,6 +85,7 @@ mod tests {
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains("  help               display this help and exit\n"));
         assert!(output.contains("  edit               edit config\n"));
+        assert!(output.contains("  inspect            inspect config\n"));
         assert!(output.contains("  show               show config\n"));
 
         let context = Context::new();

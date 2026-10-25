@@ -26,6 +26,7 @@ use crate::core::recipe::Recipe;
 use crate::error::PodError;
 use crate::io::exec::command;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
+use crate::utilities::format::format_recipe_error_hint;
 use crate::utilities::string::clamp_utf8_prefix;
 
 const COLUMN_SEPARATOR: &str = "   ";
@@ -51,6 +52,7 @@ const MAX_STATUS_RECORDS: usize = 1024;
 const MISSING_STATUS: &str = "Not Found";
 const MISSING_VALUE: &str = "-";
 const PS_FORMAT: &str = "{{.ID}};;;{{.Image}};;;{{.Command}};;;{{.CreatedAt}};;;{{.Status}};;;{{.Ports}};;;{{.Names}};;;{{.PodName}};;;{{.Restarts}}";
+const RECIPE_ERROR_STATUS: &str = "Recipe Error";
 
 /// Expected metadata for a managed container declared in a configured `.pod` recipe.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,6 +60,9 @@ struct ExpectedContainer {
     pod_id: String,
     target_name: String,
 }
+
+/// Resolved expected container metadata paired with sorted invalid recipe names.
+type ExpectedTargets = (BTreeMap<String, ExpectedContainer>, Vec<String>);
 
 /// Single container row in the rendered runtime status table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,23 +80,6 @@ struct StatusRow<'a> {
 }
 
 impl<'a> StatusRow<'a> {
-    /// Creates a synthesized `"Not Found"` [`StatusRow`] for a missing managed container.
-    #[must_use]
-    const fn missing(names: &'a str, pod: &'a str, target_names: &'a str) -> Self {
-        Self {
-            command: MISSING_VALUE,
-            created: MISSING_VALUE,
-            id: MISSING_VALUE,
-            image: MISSING_VALUE,
-            names,
-            pod,
-            ports: MISSING_VALUE,
-            restarts: MISSING_VALUE,
-            status: MISSING_STATUS,
-            target_names,
-        }
-    }
-
     /// Returns the seven default column values in display order.
     #[must_use]
     const fn default_cells(&self) -> [&'a str; DEFAULT_COLUMN_COUNT] {
@@ -122,6 +110,40 @@ impl<'a> StatusRow<'a> {
             self.ports,
         ]
     }
+
+    /// Creates a synthesized `"Not Found"` [`StatusRow`] for a missing managed container.
+    #[must_use]
+    const fn missing(names: &'a str, pod: &'a str, target_names: &'a str) -> Self {
+        Self {
+            command: MISSING_VALUE,
+            created: MISSING_VALUE,
+            id: MISSING_VALUE,
+            image: MISSING_VALUE,
+            names,
+            pod,
+            ports: MISSING_VALUE,
+            restarts: MISSING_VALUE,
+            status: MISSING_STATUS,
+            target_names,
+        }
+    }
+
+    /// Creates a synthesized `"Recipe Error"` [`StatusRow`] for a missing or invalid `.pod` recipe.
+    #[must_use]
+    const fn recipe_error(names: &'a str) -> Self {
+        Self {
+            command: MISSING_VALUE,
+            created: MISSING_VALUE,
+            id: MISSING_VALUE,
+            image: MISSING_VALUE,
+            names,
+            pod: MISSING_VALUE,
+            ports: MISSING_VALUE,
+            restarts: MISSING_VALUE,
+            status: RECIPE_ERROR_STATUS,
+            target_names: names,
+        }
+    }
 }
 
 /// Queries `podman ps -a`, cross-references managed recipes, and formats the runtime status
@@ -133,14 +155,17 @@ impl<'a> StatusRow<'a> {
 ///    - If `context.parameters` contains `<recipe>/<container>` targets, resolve only the
 ///      targeted containers and their `<recipe>/<index>` target names.
 ///    - If `context.parameters` contains `@<group>` or `<recipe>` targets, expand and
-///      deduplicate them against `context.config.recipes.groups`.
-///    - If `context.parameters` is empty, collect all unique configured recipes from
+///      deduplicate them against `context.config.recipes.groups` and inspect each recipe via
+///      [`Recipe::inspect`].
+///    - If `context.parameters` is empty, collect and inspect all unique configured recipes from
 ///      `context.config.recipes.groups`.
 /// 2. Query `podman ps -a --format ...` to retrieve all host container records.
 /// 3. Filter or merge container records (`--all` includes unmanaged host containers; missing
-///    managed containers are synthesized with status `"Not Found"`).
+///    managed containers are synthesized with status `"Not Found"`; missing or invalid recipes
+///    are synthesized with status `"Recipe Error"`).
 /// 4. Sort rows by `(pod, names)` and print the aligned status table (`--full` inserts
-///    `TARGET NAMES` after `NAMES` and appends `COMMAND` and `PORTS` columns).
+///    `TARGET NAMES` after `NAMES` and appends `COMMAND` and `PORTS` columns), followed by a
+///    `pods recipe inspect` hint when any targeted recipe failed inspection.
 ///
 /// # Errors
 ///
@@ -171,17 +196,32 @@ fn append_missing_rows<'a>(
     }
 }
 
-/// Filters or merges `podman ps` output with `expected` managed containers and sorts the result by `(pod, names)`.
+/// Appends synthesized `"Recipe Error"` rows for missing or invalid recipes in `invalid_recipes`.
+fn append_recipe_error_rows<'a>(
+    invalid_recipes: &'a [String],
+    display_rows: &mut Vec<StatusRow<'a>>,
+) {
+    for recipe_name in invalid_recipes {
+        if display_rows.len() >= MAX_STATUS_RECORDS {
+            break;
+        }
+        display_rows.push(StatusRow::recipe_error(recipe_name.as_str()));
+    }
+}
+
+/// Filters or merges `podman ps` output with `expected` managed containers and `invalid_recipes`, sorting the result by `(pod, names)`.
 #[must_use]
 fn build_display_rows<'a>(
     ps_output: &'a str,
     expected: &'a BTreeMap<String, ExpectedContainer>,
+    invalid_recipes: &'a [String],
     include_all: bool,
 ) -> Vec<StatusRow<'a>> {
+    let base_count = expected.len().saturating_add(invalid_recipes.len());
     let estimated = if include_all {
-        expected.len().max(INITIAL_STATUS_CAPACITY)
+        base_count.max(INITIAL_STATUS_CAPACITY)
     } else {
-        expected.len()
+        base_count
     };
     let capacity = bounded_capacity(estimated, MAX_COLLECTION_PREALLOC);
     let mut display_rows = Vec::with_capacity(capacity);
@@ -204,6 +244,7 @@ fn build_display_rows<'a>(
     }
 
     append_missing_rows(expected, &found_names, &mut display_rows);
+    append_recipe_error_rows(invalid_recipes, &mut display_rows);
     display_rows.sort_unstable_by(|left, right| {
         left.pod
             .cmp(right.pod)
@@ -212,26 +253,23 @@ fn build_display_rows<'a>(
     display_rows
 }
 
-/// Loads and validates each target recipe in `targets` to map expected container names to [`ExpectedContainer`] metadata.
+/// Inspects each target recipe in `targets` to map expected container names to [`ExpectedContainer`] metadata and collect invalid recipe names.
 #[must_use]
-fn collect_expected_containers(
-    config: &Config,
-    targets: &[Cow<'_, str>],
-) -> BTreeMap<String, ExpectedContainer> {
+fn collect_expected_containers(config: &Config, targets: &[Cow<'_, str>]) -> ExpectedTargets {
     let mut expected = BTreeMap::new();
+    let mut invalid_set = BTreeSet::new();
     for target in targets {
-        if expected.len() >= MAX_STATUS_RECORDS {
+        if expected.len().saturating_add(invalid_set.len()) >= MAX_STATUS_RECORDS {
             break;
         }
-        insert_recipe_containers(config, target.as_ref(), &mut expected);
+        insert_recipe_containers(config, target.as_ref(), &mut expected, &mut invalid_set);
     }
-    expected
+    let invalid_recipes = invalid_set.into_iter().collect();
+    (expected, invalid_recipes)
 }
 
 /// Resolves explicit `<recipe>/<container>` CLI parameters into a map of expected container metadata.
-fn collect_targeted_containers(
-    context: &Context,
-) -> Result<BTreeMap<String, ExpectedContainer>, PodError> {
+fn collect_targeted_containers(context: &Context) -> Result<ExpectedTargets, PodError> {
     let specs = super::collect_container_specs(context)?;
     let (recipes, resolved) = super::resolve_container_targets(&context.config, &specs)?;
     let mut expected = BTreeMap::new();
@@ -241,7 +279,7 @@ fn collect_targeted_containers(
         }
         insert_targeted_container(&recipes, recipe_name, container_name, &mut expected);
     }
-    Ok(expected)
+    Ok((expected, Vec::new()))
 }
 
 /// Computes the maximum visible character width for each active column across headers and `rows`.
@@ -269,14 +307,20 @@ where
     W: Write,
     F: FnMut(&[&str]) -> Option<String>,
 {
-    let expected = resolve_expected_containers(context)?;
+    let (expected, invalid_recipes) = resolve_expected_containers(context)?;
     let ps_output = query_podman_status(capture)?;
-    let display_rows = build_display_rows(&ps_output, &expected, context.flags.all);
+    let display_rows = build_display_rows(
+        &ps_output,
+        &expected,
+        &invalid_recipes,
+        context.flags.all,
+    );
     if display_rows.is_empty() {
         log::write_print(stdout, "No containers found.");
         return Ok(());
     }
     write_status_table(&display_rows, context.flags.full, stdout);
+    write_invalid_recipes_hint(&invalid_recipes, stdout);
     Ok(())
 }
 
@@ -301,18 +345,17 @@ fn format_table_row(cells: &[&str], widths: &[usize]) -> String {
     line
 }
 
-/// Loads and validates `target` from `config.recipes.path` and inserts its container names mapped to [`ExpectedContainer`] into `expected`.
+/// Inspects `target` via [`Recipe::inspect`] and inserts its container names into `expected`, or records `target` in `invalid_recipes` on failure.
 fn insert_recipe_containers(
     config: &Config,
     target: &str,
     expected: &mut BTreeMap<String, ExpectedContainer>,
+    invalid_recipes: &mut BTreeSet<String>,
 ) {
-    let Ok(mut recipe) = Recipe::load(&config.recipes.path, target) else {
+    let Ok(recipe) = Recipe::inspect(config, target) else {
+        invalid_recipes.insert(target.to_owned());
         return;
     };
-    if recipe.validate(config, target).is_err() {
-        return;
-    }
     let pod_id = &recipe.pod.id;
     for (index, container) in recipe.containers.into_iter().enumerate() {
         if expected.len() >= MAX_STATUS_RECORDS {
@@ -405,10 +448,8 @@ where
         .ok_or_else(|| PodError::from(io::Error::other("Failed to query podman status.")))
 }
 
-/// Resolves expected managed containers from `<recipe>/<container>` targets, `@<group>`/`<recipe>` targets, or all configured recipes.
-fn resolve_expected_containers(
-    context: &Context,
-) -> Result<BTreeMap<String, ExpectedContainer>, PodError> {
+/// Resolves expected managed containers and invalid recipes from `<recipe>/<container>` targets, `@<group>`/`<recipe>` targets, or all configured recipes.
+fn resolve_expected_containers(context: &Context) -> Result<ExpectedTargets, PodError> {
     if context
         .parameters
         .iter()
@@ -450,6 +491,20 @@ fn update_column_widths(widths: &mut [usize], cells: &[&str]) {
             *width = char_len;
         }
     }
+}
+
+/// Writes a blank line and the `pods recipe inspect` hint when `invalid_recipes` is non-empty.
+fn write_invalid_recipes_hint<W: Write>(invalid_recipes: &[String], stdout: &mut W) {
+    if invalid_recipes.is_empty() {
+        return;
+    }
+    let capacity = bounded_capacity(invalid_recipes.len(), MAX_COLLECTION_PREALLOC);
+    let mut refs = Vec::with_capacity(capacity);
+    for name in invalid_recipes {
+        refs.push(name.as_str());
+    }
+    log::write_print(stdout, "");
+    log::write_print(stdout, &format_recipe_error_hint(&refs));
 }
 
 /// Formats and writes the aligned status header and container rows to `stdout`.
@@ -645,7 +700,7 @@ container \"*app-1\" {
             other => panic!("expected PodError::Config(RecipeNotFound), got {other:?}"),
         }
 
-        // 2. Group target (@all) resolves and renders expected containers.
+        // 2. Group target (@all) resolves and renders expected containers and Recipe Error rows.
         context.parameters = vec![String::from("@all")];
         let mut group_stdout = Vec::new();
         let mut mock_capture = |_: &[&str]| Some(String::from(MOCK_PS_OUTPUT));
@@ -653,6 +708,18 @@ container \"*app-1\" {
         let group_output = String::from_utf8(group_stdout).unwrap();
         assert!(group_output.contains("test_simple_cnt_pod-app-1"));
         assert!(group_output.contains("test_pod-my-db"));
+        assert!(group_output.contains("invalid_recipe"));
+        assert!(group_output.contains("Recipe Error"));
+
+        // 2b. Single invalid recipe target renders Recipe Error row and singular hint.
+        context.parameters = vec![String::from("invalid_recipe")];
+        let mut invalid_stdout = Vec::new();
+        execute_with(&context, &mut mock_capture, &mut invalid_stdout).unwrap();
+        let invalid_output = String::from_utf8(invalid_stdout).unwrap();
+        assert!(invalid_output.contains("invalid_recipe   Recipe Error"));
+        assert!(invalid_output.contains(
+            "\nRecipe 'invalid_recipe' has errors! Run 'pods recipe inspect invalid_recipe' for details.\n"
+        ));
 
         // 3. Failed `podman ps` returns PodError::Io containing "Failed to query podman status."
         let mut fail_capture = |_: &[&str]| -> Option<String> { None };
@@ -711,9 +778,9 @@ container \"*app-1\" {
             );
         }
         let empty_expected = BTreeMap::new();
-        let bounded_ps_rows = build_display_rows(&oversized_ps, &empty_expected, true);
+        let bounded_ps_rows = build_display_rows(&oversized_ps, &empty_expected, &[], true);
         assert_eq!(bounded_ps_rows.len(), MAX_STATUS_RECORDS);
-        let bounded_missing_rows = build_display_rows("", &oversized_expected, false);
+        let bounded_missing_rows = build_display_rows("", &oversized_expected, &[], false);
         assert_eq!(bounded_missing_rows.len(), MAX_STATUS_RECORDS);
 
         let mut single_expected = BTreeMap::new();
@@ -724,7 +791,8 @@ container \"*app-1\" {
                 target_name: String::from("recipe/1"),
             },
         );
-        let filtered_after_limit = build_display_rows(&oversized_ps, &single_expected, false);
+        let filtered_after_limit =
+            build_display_rows(&oversized_ps, &single_expected, &[], false);
         assert_eq!(filtered_after_limit.len(), 1);
         assert_eq!(filtered_after_limit[0].status, "Not Found");
 
@@ -736,7 +804,9 @@ container \"*app-1\" {
         assert_eq!(clamped_cell_row.len(), MAX_LOG_MESSAGE_BYTES);
         let clamped_row = format_table_row(&["a"], &[usize::MAX]);
         assert_eq!(clamped_row.len(), MAX_LOG_MESSAGE_BYTES);
-        assert!(collect_expected_containers(&context.config, &[]).is_empty());
+        let (empty_map, empty_invalid) = collect_expected_containers(&context.config, &[]);
+        assert!(empty_map.is_empty());
+        assert!(empty_invalid.is_empty());
 
         let _ = std_fs::remove_dir_all(&temp_dir);
     }
@@ -797,7 +867,7 @@ b2c3d4e5f6a1   test_pod   test_pod-1       Up 5 mins   1          5 mins ago   a
 -              test_pod   totally_custom   Not Found   -          -            -            \n";
         assert_eq!(output, expected_table);
 
-        // Default target resolution (empty parameters) with --all includes unmanaged containers and all configured recipes.
+        // Default target resolution (empty parameters) with --all includes unmanaged containers, Recipe Error rows, and all configured recipes.
         context.parameters.clear();
         context.flags.all = true;
         let mut all_stdout = Vec::new();
@@ -807,18 +877,24 @@ b2c3d4e5f6a1   test_pod   test_pod-1       Up 5 mins   1          5 mins ago   a
         let expected_all_table = "\
 ID             POD                   NAMES                       STATUS                 RESTARTS   CREATED       IMAGE        \n\
 c3d4e5f6a1b2                         unmanaged_container         Exited (0) 1 day ago   0          1 day ago     busybox      \n\
+-              -                     invalid_recipe              Recipe Error           -          -             -            \n\
+-              -                     missing_recipe              Recipe Error           -          -             -            \n\
 b2c3d4e5f6a1   test_pod              test_pod-1                  Up 5 mins              1          5 mins ago    alpine:latest\n\
 -              test_pod              test_pod-my-db              Not Found              -          -             -            \n\
 -              test_pod              totally_custom              Not Found              -          -             -            \n\
-a1b2c3d4e5f6   test_simple_cnt_pod   test_simple_cnt_pod-app-1   Up 2 hours (healthy)   0          2 hours ago   nginx:alpine \n";
+a1b2c3d4e5f6   test_simple_cnt_pod   test_simple_cnt_pod-app-1   Up 2 hours (healthy)   0          2 hours ago   nginx:alpine \n\
+\n\
+Recipes 'invalid_recipe' and 'missing_recipe' have errors! Run 'pods recipe inspect <recipe>' for details.\n";
         assert_eq!(all_output, expected_all_table);
 
-        // With --all --full, unmanaged containers display `-` in TARGET NAMES while managed containers display `<recipe>/<index>`.
+        // With --all --full, unmanaged containers display `-` in TARGET NAMES, Recipe Error rows display `<recipe>`, and managed containers display `<recipe>/<index>`.
         context.flags.full = true;
         let mut all_full_stdout = Vec::new();
         execute_with(&context, &mut capture, &mut all_full_stdout).unwrap();
         let all_full_output = String::from_utf8(all_full_stdout).unwrap();
         assert!(all_full_output.contains("unmanaged_container         -"));
+        assert!(all_full_output.contains("invalid_recipe              invalid_recipe"));
+        assert!(all_full_output.contains("missing_recipe              missing_recipe"));
         assert!(all_full_output.contains("test_pod-1                  recipe_017_container_naming/1"));
         assert!(all_full_output.contains("test_pod-my-db              recipe_017_container_naming/2"));
         assert!(all_full_output.contains("totally_custom              recipe_017_container_naming/3"));

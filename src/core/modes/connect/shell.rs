@@ -170,8 +170,7 @@ fn resolve_recipe_container(
     recipe_name: &str,
     container_spec: Option<&str>,
 ) -> Result<String, PodError> {
-    let mut recipe = Recipe::load(&context.config.recipes.path, recipe_name)?;
-    recipe.validate(&context.config, recipe_name)?;
+    let recipe = Recipe::inspect(&context.config, recipe_name)?;
     let effective_spec = match container_spec {
         Some(spec) => spec,
         None if recipe.containers.len() == 1 => DEFAULT_CONTAINER_INDEX,

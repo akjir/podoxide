@@ -224,7 +224,7 @@ fn parse_config_positionals(
     positionals: Vec<String>,
 ) -> Result<(ModeAction, Vec<String>), CliError> {
     let Some(first) = positionals.first() else {
-        return Ok((ModeAction::Config(ConfigAction::Show), Vec::new()));
+        return Ok((ModeAction::Config(ConfigAction::Inspect), Vec::new()));
     };
     let action = ConfigAction::from_str(first)?;
     ensure_no_extra_arguments(&positionals, 1)?;
@@ -479,6 +479,7 @@ fn parse_recipe_positionals(
             ensure_no_extra_arguments(&positionals, 1)?;
             Ok((ModeAction::Recipe(RecipeAction::Help), Vec::new()))
         }
+        "inspect" => parse_recipe_target(RecipeAction::Inspect, positionals, 1),
         "list" => {
             ensure_no_extra_arguments(&positionals, 1)?;
             Ok((ModeAction::Recipe(RecipeAction::List), Vec::new()))
@@ -488,7 +489,7 @@ fn parse_recipe_positionals(
     }
 }
 
-/// Extracts and validates the `<recipe>` target for `recipe show` or `recipe edit`.
+/// Extracts and validates the `<recipe>` target for `recipe edit`, `recipe inspect`, or `recipe show`.
 fn parse_recipe_target(
     action: RecipeAction,
     mut positionals: Vec<String>,
@@ -824,7 +825,6 @@ mod tests {
             parse_args(&mut context, [keyword, "example-app", "@backend"]).unwrap();
             assert_eq!(context.mode, Mode::Default);
             assert_eq!(context.action, ModeAction::Default(expected_action));
-            assert_eq!(context.default_action(), Some(expected_action));
             assert_eq!(context.parameters, vec!["example-app", "@backend"]);
             assert!(context.requires_config());
 
@@ -1065,7 +1065,6 @@ mod tests {
             command_alias_exec.action,
             ModeAction::Command(CommandAction::Exec)
         );
-        assert_eq!(command_alias_exec.default_action(), None);
         assert_eq!(command_alias_exec.parameters, vec!["example-app", "migrate"]);
 
         let mut command_default_help = Context::new();
@@ -1097,13 +1096,21 @@ mod tests {
         );
         assert_eq!(command_implicit_exec.parameters, vec!["example-app", "1"]);
 
-        let mut config_alias_show = Context::new();
-        parse_args(&mut config_alias_show, ["cfg"]).unwrap();
+        let mut config_alias_inspect = Context::new();
+        parse_args(&mut config_alias_inspect, ["cfg"]).unwrap();
+        let mut config_inspect = Context::new();
+        parse_args(&mut config_inspect, ["config", "inspect"]).unwrap();
+        assert_eq!(config_alias_inspect, config_inspect);
+        assert_eq!(config_alias_inspect.mode, Mode::Config);
+        assert_eq!(
+            config_alias_inspect.action,
+            ModeAction::Config(ConfigAction::Inspect)
+        );
+
         let mut config_show = Context::new();
         parse_args(&mut config_show, ["config", "show"]).unwrap();
-        assert_eq!(config_alias_show, config_show);
-        assert_eq!(config_alias_show.mode, Mode::Config);
-        assert_eq!(config_alias_show.action, ModeAction::Config(ConfigAction::Show));
+        assert_eq!(config_show.mode, Mode::Config);
+        assert_eq!(config_show.action, ModeAction::Config(ConfigAction::Show));
 
         let mut config_edit = Context::new();
         parse_args(&mut config_edit, ["cfg", "edit"]).unwrap();
@@ -1251,6 +1258,14 @@ mod tests {
         let mut recipe_edit = Context::new();
         parse_args(&mut recipe_edit, ["recipe", "edit", "example-app"]).unwrap();
         assert_eq!(recipe_edit.action, ModeAction::Recipe(RecipeAction::Edit));
+
+        let mut recipe_inspect = Context::new();
+        parse_args(&mut recipe_inspect, ["recipe", "inspect", "example-app"]).unwrap();
+        assert_eq!(
+            recipe_inspect.action,
+            ModeAction::Recipe(RecipeAction::Inspect)
+        );
+        assert_eq!(recipe_inspect.parameters, vec!["example-app"]);
     }
 
     #[test]
@@ -1430,6 +1445,7 @@ mod tests {
             ["logs", "follow"].as_slice(),
             ["recipe", "show"].as_slice(),
             ["recipe", "edit"].as_slice(),
+            ["recipe", "inspect"].as_slice(),
         ] {
             let mut context = Context::new();
             let error = parse_args(&mut context, missing_target_args).unwrap_err();

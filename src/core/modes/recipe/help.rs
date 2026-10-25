@@ -28,7 +28,7 @@ use crate::utilities::format::format_version_header;
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
 /// 2. Output the version header, `pods recipe` usage synopsis, options (`--all`, `--config`,
-///    `--debug`, `--simulate`), actions (`help`, `edit`, `list`, `show`), and `<recipe>`
+///    `--debug`, `--simulate`), actions (`help`, `edit`, `inspect`, `list`, `show`), and `<recipe>`
 ///    argument description via [`log::write_print`].
 ///
 /// # Errors
@@ -44,6 +44,7 @@ fn write_actions_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "ACTIONS:");
     log::write_print(writer, "  help               display this help and exit");
     log::write_print(writer, "  edit               edit recipe");
+    log::write_print(writer, "  inspect            inspect recipe");
     log::write_print(writer, "  list               list all recipes");
     log::write_print(writer, "  show               show recipe");
 }
@@ -106,6 +107,7 @@ mod tests {
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains("  help               display this help and exit\n"));
         assert!(output.contains("  edit               edit recipe\n"));
+        assert!(output.contains("  inspect            inspect recipe\n"));
         assert!(output.contains("  list               list all recipes\n"));
         assert!(output.contains("  show               show recipe\n"));
         assert!(output.contains("NAME:\n"));

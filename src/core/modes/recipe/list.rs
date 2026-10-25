@@ -19,13 +19,16 @@ use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::Path;
 
+use crate::core::config::Config;
 use crate::core::context::Context;
 use crate::core::log;
 use crate::core::recipe::{RECIPE_EXTENSION, Recipe};
 use crate::error::PodError;
 use crate::io::system::fs;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
-use crate::utilities::format::{DEFAULT_TARGET_COLUMN, format_index_prefix, format_line};
+use crate::utilities::format::{
+    DEFAULT_TARGET_COLUMN, format_index_prefix, format_line, format_recipe_error_hint,
+};
 use crate::utilities::path::is_valid_directory;
 
 /// Formatted recipe list line paired with its right-aligned status label.
@@ -34,7 +37,7 @@ struct RecipeListEntry {
     status: &'static str,
 }
 
-/// Lists all recipes registered in `pods.conf` with descriptions and file status, plus
+/// Lists all recipes registered in `pods.conf` with descriptions and validation status, plus
 /// unlinked `.pod` files on disk when `--all` is set.
 ///
 /// # Workflow
@@ -42,14 +45,16 @@ struct RecipeListEntry {
 /// 1. Collect the sorted list and lookup set of unique recipe names referenced across
 ///    `context.config.recipes.groups`.
 /// 2. For each configured recipe:
-///    - Check whether `<recipes.path>/<recipe>.pod` exists on disk (`[OK]` vs `[NOT FOUND]`).
-///    - When the file exists, read and parse `<recipe>.pod` (suppressing validation warnings)
-///      to extract `pod.name` and `pod.description`.
+///    - Check whether `<recipes.path>/<recipe>.pod` exists on disk (`[NOT FOUND]` when missing).
+///    - When the file exists, inspect `<recipe>.pod` via [`Recipe::inspect`] (`[OK]` when valid,
+///      `[ERROR]` when invalid) and extract `pod.name` and `pod.description` on success.
 ///    - Format the numbered entry `"  <idx>) <recipe> (<name>): <description>"` aligned with
 ///      its status column.
 /// 3. When `context.flags.all` is `true`, list `.pod` filenames in `recipes.path` that are
 ///    not referenced in `context.config.recipes.groups` under `Unlinked Recipe Files:` with
 ///    status `[UNREFERENCED]`. Do not read or parse the contents of unreferenced `.pod` files.
+/// 4. When one or more configured recipes fail inspection, append a blank line followed by a
+///    hint pointing to `pods recipe inspect <recipe>`.
 ///
 /// # Errors
 ///
@@ -58,42 +63,70 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
     list_with(context, &mut io::stdout().lock())
 }
 
-/// Builds the formatted lines and maximum visible line length for all configured recipes.
+/// Builds the formatted lines, invalid recipe list, and maximum visible line length for all configured recipes.
 #[must_use]
-fn build_configured_entries(
-    recipes_path: &Path,
-    configured_recipes: &BTreeSet<&str>,
+fn build_configured_entries<'a>(
+    config: &Config,
+    configured_recipes: &BTreeSet<&'a str>,
     total_count: usize,
-) -> (Vec<RecipeListEntry>, usize) {
+) -> (Vec<RecipeListEntry>, Vec<&'a str>, usize) {
     let capacity = bounded_capacity(configured_recipes.len(), MAX_COLLECTION_PREALLOC);
     let mut entries = Vec::with_capacity(capacity);
+    let mut invalid_recipes = Vec::with_capacity(capacity);
     let mut max_length = 0;
     for (zero_based, &target) in configured_recipes.iter().enumerate() {
-        let entry =
-            build_single_configured_entry(recipes_path, target, zero_based + 1, total_count);
+        let (entry, is_invalid) =
+            build_single_configured_entry(config, target, zero_based + 1, total_count);
+        if is_invalid {
+            invalid_recipes.push(target);
+        }
         let visible_length = entry.line.chars().count();
         if visible_length > max_length {
             max_length = visible_length;
         }
         entries.push(entry);
     }
-    (entries, max_length)
+    (entries, invalid_recipes, max_length)
 }
 
-/// Builds a single numbered [`RecipeListEntry`] and checks `<recipes.path>/<target>.pod` on disk.
+/// Builds a single numbered [`RecipeListEntry`] by checking file existence and inspecting `<target>.pod`.
 #[must_use]
 fn build_single_configured_entry(
-    recipes_path: &Path,
+    config: &Config,
     target: &str,
     index: usize,
     total_count: usize,
-) -> RecipeListEntry {
-    let exists = Recipe::file_exists(recipes_path, target);
-    let status = if exists { "[OK]" } else { "[NOT FOUND]" };
+) -> (RecipeListEntry, bool) {
     let prefix = format_index_prefix(index, total_count);
-    let label = format_recipe_label(recipes_path, target, exists);
-    let line = format!("  {prefix} {label}");
-    RecipeListEntry { line, status }
+    if !Recipe::file_exists(&config.recipes.path, target) {
+        let line = format!("  {prefix} {target}");
+        return (
+            RecipeListEntry {
+                line,
+                status: "[NOT FOUND]",
+            },
+            false,
+        );
+    }
+    if let Ok(recipe) = Recipe::inspect(config, target) {
+        let label = format_recipe_label(target, &recipe);
+        let line = format!("  {prefix} {label}");
+        return (
+            RecipeListEntry {
+                line,
+                status: "[OK]",
+            },
+            false,
+        );
+    }
+    let line = format!("  {prefix} {target}");
+    (
+        RecipeListEntry {
+            line,
+            status: "[ERROR]",
+        },
+        true,
+    )
 }
 
 /// Builds the formatted lines and maximum visible line length for unreferenced `.pod` files.
@@ -143,22 +176,15 @@ fn collect_unreferenced_files(
     Ok(unreferenced)
 }
 
-/// Formats `<target> [(<name>)][: <description>]` by loading `<target>.pod` when `exists` is `true`.
+/// Formats `<target> (<name>)[: <description>]` for a validated [`Recipe`].
 #[must_use]
-fn format_recipe_label(recipes_path: &Path, target: &str, exists: bool) -> String {
-    if !exists {
-        return String::from(target);
-    }
-    let Ok(recipe) = Recipe::load(recipes_path, target) else {
-        return String::from(target);
-    };
+fn format_recipe_label(target: &str, recipe: &Recipe) -> String {
     let name = recipe.pod.name.trim();
     let description = recipe.pod.description.trim();
-    match (!name.is_empty(), !description.is_empty()) {
-        (false, false) => String::from(target),
-        (true, false) => format!("{target} ({name})"),
-        (false, true) => format!("{target}: {description}"),
-        (true, true) => format!("{target} ({name}): {description}"),
+    if description.is_empty() {
+        format!("{target} ({name})")
+    } else {
+        format!("{target} ({name}): {description}")
     }
 }
 
@@ -173,10 +199,12 @@ fn list_with<W: Write>(context: &Context, stdout: &mut W) -> Result<(), PodError
         return Ok(());
     }
     let total_count = configured_recipes.len().saturating_add(unreferenced.len());
+    let mut invalid_recipes = Vec::new();
     if !configured_recipes.is_empty() {
         log::write_print(stdout, "Recipes:");
-        let (entries, max_length) =
-            build_configured_entries(recipes_path, &configured_recipes, total_count);
+        let (entries, invalid, max_length) =
+            build_configured_entries(&context.config, &configured_recipes, total_count);
+        invalid_recipes = invalid;
         write_entries(&entries, max_length, stdout);
     }
     if !unreferenced.is_empty() {
@@ -187,6 +215,10 @@ fn list_with<W: Write>(context: &Context, stdout: &mut W) -> Result<(), PodError
         let (entries, max_length) =
             build_unreferenced_entries(&unreferenced, configured_recipes.len(), total_count);
         write_entries(&entries, max_length, stdout);
+    }
+    if !invalid_recipes.is_empty() {
+        log::write_print(stdout, "");
+        log::write_print(stdout, &format_recipe_error_hint(&invalid_recipes));
     }
     Ok(())
 }
@@ -214,12 +246,6 @@ mod tests {
     use crate::error::PodError;
     use crate::io::system::fs;
     use super::{handle, list_with};
-
-    const DESCRIPTION_ONLY_PSL: &str = "\
-pod desc_only {
-    description \"Description without name\"
-}
-";
 
     const DESCRIPTION_RECIPE_PSL: &str = "\
 pod super_pod {
@@ -265,21 +291,16 @@ container *simple {
             DESCRIPTION_RECIPE_PSL,
         )
         .unwrap();
-        fs::write_file(
-            &temp_dir.join("recipe_023_desc_only.pod"),
-            DESCRIPTION_ONLY_PSL,
-        )
-        .unwrap();
         fs::write_file(&temp_dir.join("unlinked_broken.pod"), "invalid {{{ psl").unwrap();
 
         let mut context = Context::new();
+        context.config.pods.path = PathBuf::from("/pods");
         context.config.recipes.path = temp_dir.clone();
         context.config.recipes.groups.insert(
             String::from("all"),
             vec![
                 String::from("recipe_011_simple_container"),
                 String::from("recipe_022_description"),
-                String::from("recipe_023_desc_only"),
             ],
         );
 
@@ -293,11 +314,9 @@ container *simple {
         assert!(output.contains(
             "  2) recipe_022_description (Super Pod): Super Pod is great [OK]\n"
         ));
-        assert!(output.contains(
-            "  3) recipe_023_desc_only: Description without name         [OK]\n"
-        ));
         assert!(!output.contains("Unlinked Recipe Files:"));
         assert!(!output.contains("[UNREFERENCED]"));
+        assert!(!output.contains("pods recipe inspect"));
 
         context.flags.all = true;
         let mut all_stdout = Vec::new();
@@ -306,7 +325,7 @@ container *simple {
         assert!(all_output.contains("Recipes:\n"));
         assert!(all_output.contains("\n\nUnlinked Recipe Files:\n"));
         assert!(
-            all_output.contains("  4) unlinked_broken.pod                    [UNREFERENCED]\n")
+            all_output.contains("  3) unlinked_broken.pod                    [UNREFERENCED]\n")
         );
 
         assert!(handle(&context).is_ok());
@@ -329,7 +348,6 @@ container *simple {
             "There are no recipes defined in config.\n"
         );
 
-        // When --all is set and unlinked files exist on disk, only Unlinked Recipe Files is shown.
         context.flags.all = true;
         let mut all_stdout = Vec::new();
         list_with(&context, &mut all_stdout).unwrap();
@@ -338,7 +356,6 @@ container *simple {
         assert!(all_output.starts_with("Unlinked Recipe Files:\n"));
         assert!(all_output.contains("  1) orphan.pod                             [UNREFERENCED]\n"));
 
-        // When --all is set and no files exist on disk, the empty message is printed.
         std_fs::remove_file(temp_dir.join("orphan.pod")).unwrap();
         let mut empty_all_stdout = Vec::new();
         list_with(&context, &mut empty_all_stdout).unwrap();
@@ -360,6 +377,7 @@ container *simple {
         }
 
         let mut context = Context::new();
+        context.config.pods.path = PathBuf::from("/pods");
         context.config.recipes.path = temp_dir.clone();
         context
             .config
@@ -393,9 +411,16 @@ container *simple {
         assert!(
             default_output.contains("  2) missing_recipe                         [NOT FOUND]\n")
         );
-        assert!(default_output.contains("  3) recipe_001_empty                       [OK]\n"));
-        assert!(default_output.contains("  4) recipe_002_invalid                     [OK]\n"));
+        assert!(
+            default_output.contains("  3) recipe_001_empty                       [ERROR]\n")
+        );
+        assert!(
+            default_output.contains("  4) recipe_002_invalid                     [ERROR]\n")
+        );
         assert!(!default_output.contains("Unlinked Recipe Files:"));
+        assert!(default_output.contains(
+            "\nRecipes 'recipe_001_empty' and 'recipe_002_invalid' have errors! Run 'pods recipe inspect <recipe>' for details.\n"
+        ));
 
         // With --all (4 configured + 8 unreferenced = 12 items, indices 1..9 padded)
         context.flags.all = true;
@@ -404,13 +429,16 @@ container *simple {
         let all_output = String::from_utf8(all_stdout).unwrap();
         assert!(all_output.contains("   1) frontend                              [NOT FOUND]\n"));
         assert!(all_output.contains("   2) missing_recipe                        [NOT FOUND]\n"));
-        assert!(all_output.contains("   3) recipe_001_empty                      [OK]\n"));
-        assert!(all_output.contains("   4) recipe_002_invalid                    [OK]\n"));
+        assert!(all_output.contains("   3) recipe_001_empty                      [ERROR]\n"));
+        assert!(all_output.contains("   4) recipe_002_invalid                    [ERROR]\n"));
         assert!(all_output.contains("Unlinked Recipe Files:\n"));
         assert!(all_output.contains("   5) extra_01.pod                          [UNREFERENCED]\n"));
         assert!(all_output.contains("   9) extra_05.pod                          [UNREFERENCED]\n"));
         assert!(all_output.contains("  10) extra_06.pod                          [UNREFERENCED]\n"));
         assert!(all_output.contains("  12) extra_08.pod                          [UNREFERENCED]\n"));
+        assert!(all_output.contains(
+            "\nRecipes 'recipe_001_empty' and 'recipe_002_invalid' have errors! Run 'pods recipe inspect <recipe>' for details.\n"
+        ));
 
         // Unreadable directory propagates I/O error when --all is set (unless running as root).
         let unreadable_dir = temp_dir.join("unreadable");

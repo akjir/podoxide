@@ -563,7 +563,6 @@ mod tests {
     use std::path::PathBuf;
     use std::str::FromStr;
 
-    use crate::core::config::Config;
     use crate::core::container::VolumeMount;
     use crate::core::log::MAX_LOG_MESSAGE_BYTES;
     use crate::core::recipe::Recipe;
@@ -1117,10 +1116,10 @@ container three {
     registry custom.io
 }
 "#;
-        let mut config = Config::new();
-        config.pods.path = PathBuf::from("/pods");
         let mut recipe = Recipe::from_str(psl).unwrap();
-        recipe.validate(&config, "order").unwrap();
+        for (index, container) in recipe.containers.iter_mut().enumerate() {
+            container.ensure_name(&recipe.pod.id, index + 1).unwrap();
+        }
         recipe
     }
 }

@@ -17,19 +17,20 @@
 
 pub mod edit;
 pub mod help;
+pub mod inspect;
 pub mod show;
 
 use crate::core::context::{ConfigAction, Context, ModeAction};
 use crate::core::log;
 use crate::error::{CliError, CliErrorKind, PodError};
 
-/// Dispatches `config` mode execution to the resolved sub-action (`edit`, `help`, or `show`).
+/// Dispatches `config` mode execution to the resolved sub-action (`edit`, `help`, `inspect`, or `show`).
 ///
 /// # Workflow
 ///
 /// 1. Log that `config` mode is active when debug logging is enabled.
-/// 2. Route [`ModeAction::Config`] in enum declaration order (`Edit`, `Help`, `Show`)
-///    to the corresponding action module ([`edit::handle`], [`help::handle`], [`show::handle`]).
+/// 2. Route [`ModeAction::Config`] in enum declaration order (`Edit`, `Help`, `Inspect`, `Show`)
+///    to the corresponding action module ([`edit::handle`], [`help::handle`], [`inspect::handle`], [`show::handle`]).
 ///
 /// # Errors
 ///
@@ -40,6 +41,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
     match context.action() {
         ModeAction::Config(ConfigAction::Edit) => edit::handle(context),
         ModeAction::Config(ConfigAction::Help) => help::handle(context),
+        ModeAction::Config(ConfigAction::Inspect) => inspect::handle(context),
         ModeAction::Config(ConfigAction::Show) => show::handle(context),
         _ => Err(PodError::from(CliError::with_argument(
             CliErrorKind::UnknownAction,
@@ -61,7 +63,12 @@ mod tests {
     fn handle_routes_config_actions_and_rejects_mismatched_action() {
         let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
 
-        for action in [ConfigAction::Edit, ConfigAction::Help, ConfigAction::Show] {
+        for action in [
+            ConfigAction::Edit,
+            ConfigAction::Help,
+            ConfigAction::Inspect,
+            ConfigAction::Show,
+        ] {
             let mut context = Context::new();
             context.config = root_config.clone();
             context.mode = Mode::Config;

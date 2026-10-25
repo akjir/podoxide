@@ -74,19 +74,54 @@ impl Config {
     ///
     /// Returns [`PodError`] if an `@<group>` target does not exist in `self.recipes.groups`, a group contains a cycle or invalid target, or a `<recipe>` target is not referenced in any configured group.
     pub fn expand_targets(&self, targets: &[String]) -> Result<Vec<String>, PodError> {
-        expand_targets(self, targets)
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
+        if log::is_debug_enabled() {
+            log::debug(&format!("Targets   - {}", targets.join(" ")));
+        }
+        let capacity = bounded_capacity(targets.len(), MAX_COLLECTION_PREALLOC);
+        let mut collected = Vec::with_capacity(capacity);
+        let mut expanded_groups = BTreeSet::new();
+        let mut visiting = BTreeSet::new();
+
+        for target in targets {
+            expand_single_target(
+                self,
+                target.as_str(),
+                &mut visiting,
+                &mut expanded_groups,
+                &mut collected,
+            )?;
+        }
+
+        let deduplicated = dedup_preserve_order(&collected);
+        if log::is_debug_enabled() && !deduplicated.is_empty() {
+            log::debug(&format!("Untangled - {}", deduplicated.join(" ")));
+        }
+        Ok(deduplicated)
     }
 
     /// Collects the sorted set of unique recipe names referenced across all groups in `self.recipes.groups`.
     #[must_use]
     pub fn get_recipes(&self) -> BTreeSet<&str> {
-        get_recipes(self)
+        let mut recipes = BTreeSet::new();
+        for group_targets in self.recipes.groups.values() {
+            collect_group_recipes(group_targets, &mut recipes);
+        }
+        recipes
     }
 
     /// Evaluates whether `recipe_name` is referenced in any group of `self.recipes.groups`.
     #[must_use]
     pub fn has_recipe(&self, recipe_name: &str) -> bool {
-        has_recipe(self, recipe_name)
+        if recipe_name.starts_with('@') || !is_valid_recipe_identifier(recipe_name) {
+            return false;
+        }
+        self.recipes
+            .groups
+            .values()
+            .any(|entries| group_contains_recipe(entries, recipe_name))
     }
 
     /// Loads and validates a configuration file from `path`.
@@ -95,7 +130,25 @@ impl Config {
     ///
     /// Returns [`PodError`] when reading, parsing, or validating the configuration fails.
     pub fn load(path: &Path) -> Result<Self, PodError> {
-        load(path)
+        let config_name = validate_load_path(path)?;
+        let content = read_validated_file(path)?;
+        let display_path = sanitize_path_token(path);
+        let mut config = parse_config_with_path(&content, &display_path)?;
+        config.name = config_name.to_owned();
+        config.path = path.to_path_buf();
+        Ok(config)
+    }
+
+    /// Reads the raw `.conf` file at `path`, mapping a missing file to [`ConfigErrorKind::NotFound`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PodError`] with [`ConfigErrorKind::InvalidPath`] if `path` is not a valid `.conf`
+    /// path, [`ConfigErrorKind::NotFound`] if `path` does not exist, or [`PodError::Io`] if reading
+    /// the file fails.
+    pub fn read_file(path: &Path) -> Result<String, PodError> {
+        validate_load_path(path)?;
+        read_validated_file(path)
     }
 }
 
@@ -156,78 +209,6 @@ impl Default for RecipesConfig {
             path: PathBuf::from(DEFAULT_RECIPES_PATH),
         }
     }
-}
-
-/// Expands `@<group>` and `<recipe>` targets against `config.recipes.groups`, preserving first-appearance order and deduplicating repeated recipes.
-///
-/// # Errors
-///
-/// Returns [`PodError`] if an `@<group>` target does not exist in `config.recipes.groups`, a group contains a cycle or invalid target, or a `<recipe>` target is not referenced in any configured group.
-pub fn expand_targets(config: &Config, targets: &[String]) -> Result<Vec<String>, PodError> {
-    if targets.is_empty() {
-        return Ok(Vec::new());
-    }
-    if log::is_debug_enabled() {
-        log::debug(&format!("Targets   - {}", targets.join(" ")));
-    }
-    let capacity = bounded_capacity(targets.len(), MAX_COLLECTION_PREALLOC);
-    let mut collected = Vec::with_capacity(capacity);
-    let mut expanded_groups = BTreeSet::new();
-    let mut visiting = BTreeSet::new();
-
-    for target in targets {
-        expand_single_target(
-            config,
-            target.as_str(),
-            &mut visiting,
-            &mut expanded_groups,
-            &mut collected,
-        )?;
-    }
-
-    let deduplicated = dedup_preserve_order(&collected);
-    if log::is_debug_enabled() && !deduplicated.is_empty() {
-        log::debug(&format!("Untangled - {}", deduplicated.join(" ")));
-    }
-    Ok(deduplicated)
-}
-
-/// Collects the sorted set of unique recipe names referenced across all groups in `config.recipes.groups`.
-#[must_use]
-pub fn get_recipes(config: &Config) -> BTreeSet<&str> {
-    let mut recipes = BTreeSet::new();
-    for group_targets in config.recipes.groups.values() {
-        collect_group_recipes(group_targets, &mut recipes);
-    }
-    recipes
-}
-
-/// Evaluates whether `recipe_name` is referenced in any group of `config.recipes.groups`.
-#[must_use]
-pub fn has_recipe(config: &Config, recipe_name: &str) -> bool {
-    if recipe_name.starts_with('@') || !is_valid_recipe_identifier(recipe_name) {
-        return false;
-    }
-    config
-        .recipes
-        .groups
-        .values()
-        .any(|entries| group_contains_recipe(entries, recipe_name))
-}
-
-/// Loads and validates a configuration file from `path`.
-///
-/// # Errors
-///
-/// Returns [`PodError`] when reading, parsing, or validating the configuration fails.
-pub fn load(path: &Path) -> Result<Config, PodError> {
-    let config_name = validate_load_path(path)?;
-    let content = read_config_file(path)?;
-    let display_path = sanitize_path_token(path);
-    let mut config = parse_config_with_path(&content, &display_path)?;
-    config.name = config_name.to_owned();
-    config.path = path.to_path_buf();
-    Ok(config)
 }
 
 /// Validates and applies a single directive inside the `general` block (`editor` or `simulate`).
@@ -463,7 +444,8 @@ fn collect_group_recipes<'a>(group_targets: &'a [String], recipes: &mut BTreeSet
 
 /// Validates and collects all `<recipe>` and `@<group>` target arguments for a group directive.
 fn collect_group_targets(directive: &PslDirective<'_>) -> Result<Vec<String>, ConfigError> {
-    let mut targets = Vec::with_capacity(directive.arguments.len());
+    let capacity = bounded_capacity(directive.arguments.len(), MAX_COLLECTION_PREALLOC);
+    let mut targets = Vec::with_capacity(capacity);
     for argument in &directive.arguments {
         let target = argument.as_ref();
         if !is_valid_group_target(target) {
@@ -581,7 +563,7 @@ fn expand_single_target<'a>(
             collected,
         );
     }
-    if !has_recipe(config, target) {
+    if !config.has_recipe(target) {
         return Err(ConfigError::without_line(
             ConfigErrorKind::RecipeNotFound,
             target,
@@ -712,18 +694,18 @@ fn parse_recipes_block(recipes: &mut RecipesConfig, block: &PslBlock<'_>) -> Res
 
 /// Extracts the sole argument of a directive or returns [`ConfigErrorKind::InvalidArgumentCount`].
 fn parse_single_argument<'a>(directive: &'a PslDirective<'a>) -> Result<&'a str, ConfigError> {
-    if directive.arguments.len() != 1 {
+    let [argument] = directive.arguments.as_slice() else {
         return Err(ConfigError::with_token(
             ConfigErrorKind::InvalidArgumentCount,
             directive.line,
             directive.name,
         ));
-    }
-    Ok(directive.arguments[0].as_ref())
+    };
+    Ok(argument.as_ref())
 }
 
-/// Reads the configuration file at `path`, mapping a missing file to [`ConfigErrorKind::NotFound`].
-fn read_config_file(path: &Path) -> Result<String, PodError> {
+/// Reads the raw file at `path`, mapping a missing file to [`ConfigErrorKind::NotFound`].
+fn read_validated_file(path: &Path) -> Result<String, PodError> {
     match fs::read_file(path) {
         Ok(content) => Ok(content),
         Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Err(PodError::from(
@@ -757,7 +739,7 @@ fn validate_groups_acyclic(
 /// Validates that `path` is a safe configuration file path and returns its configuration stem.
 fn validate_load_path(path: &Path) -> Result<&str, PodError> {
     path.to_str()
-        .filter(|_| !has_parent_dir(path))
+        .filter(|raw| raw.ends_with(".conf") && !has_parent_dir(path))
         .and_then(extract_config_stem)
         .ok_or_else(|| {
             PodError::from(ConfigError::without_line(
@@ -831,7 +813,7 @@ mod tests {
     use crate::io::system::fs as system_fs;
     use super::{
         Config, DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH, DEFAULT_RECIPES_PATH, PodsConfig,
-        RecipesConfig, expand_targets, get_recipes, has_recipe, load,
+        RecipesConfig,
     };
 
     fn assert_config_error(input: &str, expected_kind: ConfigErrorKind) {
@@ -862,7 +844,7 @@ recipes {
         let config = Config::from_str(config_input).unwrap();
 
         assert!(config.has_recipe("target"));
-        assert!(has_recipe(&config, "push"));
+        assert!(config.has_recipe("push"));
         assert!(!config.has_recipe("invalid"));
         assert!(!config.has_recipe("@stack"));
         assert!(!config.has_recipe("../evil"));
@@ -875,7 +857,7 @@ recipes {
             vec![String::from("target")]
         );
         assert_eq!(
-            expand_targets(&config, &[String::from("@stack")]).unwrap(),
+            config.expand_targets(&[String::from("@stack")]).unwrap(),
             vec![String::from("push"), String::from("pop")]
         );
         assert_eq!(
@@ -1011,7 +993,6 @@ recipes {
         let config = Config::from_str(config_input).unwrap();
         let expected = BTreeSet::from(["cache-server", "db-server", "web-frontend"]);
         assert_eq!(config.get_recipes(), expected);
-        assert_eq!(get_recipes(&config), expected);
 
         let mut manual_config = Config::new();
         manual_config.recipes.groups.insert(
@@ -1027,7 +1008,6 @@ recipes {
         );
         let manual_expected = BTreeSet::from(["valid_recipe"]);
         assert_eq!(manual_config.get_recipes(), manual_expected);
-        assert_eq!(get_recipes(&manual_config), manual_expected);
     }
 
     #[test]
@@ -1225,7 +1205,7 @@ recipes {
 ";
         system_fs::write_file(&staging_path, staging_content).unwrap();
 
-        let loaded = load(&staging_path).unwrap();
+        let loaded = Config::load(&staging_path).unwrap();
         assert_eq!(loaded.name, "staging");
         assert_eq!(loaded.path, staging_path);
         assert_eq!(loaded.editor, "nano");
@@ -1293,6 +1273,72 @@ recipes {
             Some(&vec![String::from("example-app")])
         );
         assert_eq!(RecipesConfig::new().path, PathBuf::from(DEFAULT_RECIPES_PATH));
+    }
+
+    #[test]
+    fn read_file_reads_valid_conf_and_rejects_missing_or_invalid_paths() {
+        let content = Config::read_file(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
+        assert!(content.contains("recipes {"));
+
+        let temp_dir =
+            env::temp_dir().join(format!("podoxide_config_read_file_test_{}", process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let missing_path = temp_dir.join("missing.conf");
+        let missing_error = Config::read_file(&missing_path).unwrap_err();
+        match missing_error {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::NotFound);
+                assert_eq!(
+                    config_error.token.as_deref(),
+                    Some(missing_path.to_str().unwrap())
+                );
+            }
+            other => panic!("expected PodError::Config(NotFound), got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        for invalid_path in [
+            "",
+            ".",
+            "..",
+            "../secret.conf",
+            "/tmp/../secret.conf",
+            "-flag.conf",
+            "/tmp/-flag.conf",
+            ".conf",
+            "/tmp/.conf",
+            "..conf",
+            "/tmp/pods.txt",
+            "/tmp/pods.conf/",
+            " /tmp/pods.conf",
+            "/tmp/pods.conf\n",
+            "/tmp/\u{202E}pods.conf",
+        ] {
+            let error = Config::read_file(Path::new(invalid_path)).unwrap_err();
+            match error {
+                PodError::Config(config_error) => {
+                    assert_eq!(config_error.kind, ConfigErrorKind::InvalidPath);
+                }
+                other => panic!(
+                    "expected PodError::Config(InvalidPath) for {invalid_path:?}, got {other:?}"
+                ),
+            }
+        }
+
+        let invalid_utf8_os_string = OsString::from_vec(vec![
+            b'/', b't', b'm', b'p', b'/', 0xff, 0xfe, b'.', b'c', b'o', b'n', b'f',
+        ]);
+        let invalid_utf8_error =
+            Config::read_file(Path::new(&invalid_utf8_os_string)).unwrap_err();
+        match invalid_utf8_error {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::InvalidPath);
+            }
+            other => panic!("expected PodError::Config(InvalidPath), got {other:?}"),
+        }
     }
 
     #[test]
@@ -1407,7 +1453,7 @@ recipes {
             assert!(Config::from_str(&editor_input).is_ok());
         }
 
-        // 5. Unvalidated path argument in Config::load / load
+        // 5. Unvalidated path argument in Config::load and Config::read_file
         for malicious_load_path in [
             "",
             ".",
@@ -1419,6 +1465,7 @@ recipes {
             ".conf",
             "/tmp/.conf",
             "..conf",
+            "/tmp/pods.txt",
             "/tmp/staging.conf/",
             " /tmp/staging.conf",
             "/tmp/staging.conf\n",

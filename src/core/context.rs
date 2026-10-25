@@ -63,6 +63,7 @@ pub enum ConfigAction {
     Edit,
     Help,
     #[default]
+    Inspect,
     Show,
 }
 
@@ -71,6 +72,7 @@ impl Display for ConfigAction {
         let label = match self {
             Self::Edit => "edit",
             Self::Help => "help",
+            Self::Inspect => "inspect",
             Self::Show => "show",
         };
         formatter.write_str(label)
@@ -84,6 +86,7 @@ impl FromStr for ConfigAction {
         match input {
             "edit" => Ok(Self::Edit),
             "help" => Ok(Self::Help),
+            "inspect" => Ok(Self::Inspect),
             "show" => Ok(Self::Show),
             _ => Err(CliError::with_argument(CliErrorKind::UnknownAction, input)),
         }
@@ -144,16 +147,6 @@ impl Context {
         self.action
     }
 
-    /// Returns the [`DefaultAction`] when the selected mode is [`Mode::Default`].
-    #[inline]
-    #[must_use]
-    pub const fn default_action(&self) -> Option<DefaultAction> {
-        match self.action {
-            ModeAction::Default(action) => Some(action),
-            _ => None,
-        }
-    }
-
     /// Loads `pods.conf` if required by the selected mode and syncs the `simulate` flag.
     ///
     /// # Errors
@@ -178,13 +171,6 @@ impl Context {
     #[must_use]
     pub const fn mode(&self) -> Mode {
         self.mode
-    }
-
-    /// Returns the positional parameter arguments slice.
-    #[inline]
-    #[must_use]
-    pub fn parameters(&self) -> &[String] {
-        &self.parameters
     }
 
     /// Returns `true` if this context's mode and action require loading `pods.conf`.
@@ -483,22 +469,6 @@ impl ModeAction {
                 | Self::Recipe(RecipeAction::Help)
         )
     }
-
-    /// Returns the [`Mode`] corresponding to this [`ModeAction`].
-    #[inline]
-    #[must_use]
-    pub const fn mode(self) -> Mode {
-        match self {
-            Self::Command(_) => Mode::Command,
-            Self::Config(_) => Mode::Config,
-            Self::Connect(_) => Mode::Connect,
-            Self::Default(_) => Mode::Default,
-            Self::Image(_) => Mode::Image,
-            Self::Init(_) => Mode::Init,
-            Self::Logs(_) => Mode::Logs,
-            Self::Recipe(_) => Mode::Recipe,
-        }
-    }
 }
 
 impl Default for ModeAction {
@@ -527,6 +497,7 @@ impl Display for ModeAction {
 pub enum RecipeAction {
     Edit,
     Help,
+    Inspect,
     #[default]
     List,
     Show,
@@ -537,6 +508,7 @@ impl Display for RecipeAction {
         let label = match self {
             Self::Edit => "edit",
             Self::Help => "help",
+            Self::Inspect => "inspect",
             Self::List => "list",
             Self::Show => "show",
         };
@@ -551,6 +523,7 @@ impl FromStr for RecipeAction {
         match input {
             "edit" => Ok(Self::Edit),
             "help" => Ok(Self::Help),
+            "inspect" => Ok(Self::Inspect),
             "list" => Ok(Self::List),
             "show" => Ok(Self::Show),
             _ => Err(CliError::with_argument(CliErrorKind::UnknownAction, input)),
@@ -576,14 +549,13 @@ mod tests {
 
     fn assert_action_simulate_transitions(
         action: ModeAction,
-        sim_false_path: &Path,
-        sim_true_path: &Path,
+        simulate_false_path: &Path,
+        simulate_true_path: &Path,
     ) {
         let mut false_context = Context::new();
-        false_context.mode = action.mode();
         false_context.action = action;
         false_context.config.name = String::from("sim_false");
-        false_context.config.path = sim_false_path.to_path_buf();
+        false_context.config.path = simulate_false_path.to_path_buf();
         assert!(false_context.config.simulate);
         assert!(false_context.requires_config());
         false_context.load_config_if_required().unwrap();
@@ -593,10 +565,9 @@ mod tests {
         );
 
         let mut override_context = Context::new();
-        override_context.mode = action.mode();
         override_context.action = action;
         override_context.config.name = String::from("sim_false");
-        override_context.config.path = sim_false_path.to_path_buf();
+        override_context.config.path = simulate_false_path.to_path_buf();
         override_context.flags.simulate = true;
         override_context.load_config_if_required().unwrap();
         assert!(
@@ -605,10 +576,9 @@ mod tests {
         );
 
         let mut true_context = Context::new();
-        true_context.mode = action.mode();
         true_context.action = action;
         true_context.config.name = String::from("sim_true");
-        true_context.config.path = sim_true_path.to_path_buf();
+        true_context.config.path = simulate_true_path.to_path_buf();
         true_context.config.simulate = false;
         true_context.load_config_if_required().unwrap();
         assert!(
@@ -654,23 +624,22 @@ mod tests {
         assert_eq!(context.config.name, "staging");
         assert_eq!(context.config.path, PathBuf::from("./staging.conf"));
         assert_eq!(context.parameters, vec!["example-app"]);
-        assert_eq!(context.parameters(), &["example-app"]);
         assert!(context.requires_config());
 
         context.config.simulate = false;
         assert!(context.load_config_if_required().is_err());
 
-        let mut sim_context = Context::new();
-        parse_args(&mut sim_context, ["--simulate", "up", "example-app"]).unwrap();
-        assert!(sim_context.flags.simulate);
-        assert!(sim_context.config.simulate);
-        sim_context.config.simulate = false;
-        sim_context.load_config_if_required().unwrap();
-        assert_eq!(sim_context.config.editor, "vim");
-        assert_eq!(sim_context.config.name, "pods");
-        assert_eq!(sim_context.config.path, PathBuf::from("./pods.conf"));
-        assert_eq!(sim_context.config.pods.path, PathBuf::from("./pods"));
-        assert!(sim_context.config.simulate);
+        let mut simulate_context = Context::new();
+        parse_args(&mut simulate_context, ["--simulate", "up", "example-app"]).unwrap();
+        assert!(simulate_context.flags.simulate);
+        assert!(simulate_context.config.simulate);
+        simulate_context.config.simulate = false;
+        simulate_context.load_config_if_required().unwrap();
+        assert_eq!(simulate_context.config.editor, "vim");
+        assert_eq!(simulate_context.config.name, "pods");
+        assert_eq!(simulate_context.config.path, PathBuf::from("./pods.conf"));
+        assert_eq!(simulate_context.config.pods.path, PathBuf::from("./pods"));
+        assert!(simulate_context.config.simulate);
 
         let mut init_context = Context::new();
         parse_args(&mut init_context, ["init"]).unwrap();
@@ -741,6 +710,10 @@ mod tests {
         assert_eq!(ModeAction::Command(CommandAction::Exec).to_string(), "exec");
         assert_eq!(ModeAction::Config(ConfigAction::Edit).to_string(), "edit");
         assert_eq!(
+            ModeAction::Config(ConfigAction::Inspect).to_string(),
+            "inspect"
+        );
+        assert_eq!(
             ModeAction::Connect(ConnectAction::Shell).to_string(),
             "shell"
         );
@@ -752,6 +725,10 @@ mod tests {
         assert_eq!(ModeAction::Image(ImageAction::Prune).to_string(), "prune");
         assert_eq!(ModeAction::Init(InitAction::Create).to_string(), "create");
         assert_eq!(ModeAction::Logs(LogsAction::Follow).to_string(), "follow");
+        assert_eq!(
+            ModeAction::Recipe(RecipeAction::Inspect).to_string(),
+            "inspect"
+        );
         assert_eq!(ModeAction::Recipe(RecipeAction::Show).to_string(), "show");
     }
 
@@ -772,7 +749,6 @@ mod tests {
 
         for action in bypass_actions {
             let mut context = Context::new();
-            context.mode = action.mode();
             context.action = action;
             assert!(
                 !context.requires_config(),
@@ -784,6 +760,7 @@ mod tests {
             ModeAction::Command(CommandAction::Exec),
             ModeAction::Command(CommandAction::List),
             ModeAction::Config(ConfigAction::Edit),
+            ModeAction::Config(ConfigAction::Inspect),
             ModeAction::Config(ConfigAction::Show),
             ModeAction::Connect(ConnectAction::Shell),
             ModeAction::Default(DefaultAction::Create),
@@ -801,6 +778,7 @@ mod tests {
             ModeAction::Logs(LogsAction::Follow),
             ModeAction::Logs(LogsAction::Show),
             ModeAction::Recipe(RecipeAction::Edit),
+            ModeAction::Recipe(RecipeAction::Inspect),
             ModeAction::Recipe(RecipeAction::List),
             ModeAction::Recipe(RecipeAction::Show),
         ];
@@ -808,21 +786,21 @@ mod tests {
         let temp_dir = env::temp_dir().join(format!("podoxide_ctx_sim_test_{}", process::id()));
         let _ = fs::remove_dir_all(&temp_dir);
         fs::create_dir_all(&temp_dir).unwrap();
-        let sim_false_path = temp_dir.join("sim_false.conf");
-        let sim_true_path = temp_dir.join("sim_true.conf");
+        let simulate_false_path = temp_dir.join("sim_false.conf");
+        let simulate_true_path = temp_dir.join("sim_true.conf");
         fs::write(
-            &sim_false_path,
+            &simulate_false_path,
             "general {\n    editor vim\n    simulate false\n}\nrecipes {\n    groups {\n        all recipe\n    }\n}\n",
         )
         .unwrap();
         fs::write(
-            &sim_true_path,
+            &simulate_true_path,
             "general {\n    editor vim\n    simulate true\n}\nrecipes {\n    groups {\n        all recipe\n    }\n}\n",
         )
         .unwrap();
 
         for action in config_actions {
-            assert_action_simulate_transitions(action, &sim_false_path, &sim_true_path);
+            assert_action_simulate_transitions(action, &simulate_false_path, &simulate_true_path);
         }
 
         let _ = fs::remove_dir_all(&temp_dir);

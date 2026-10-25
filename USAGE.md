@@ -74,8 +74,8 @@ Argument parsing follows these rules:
 | `logs` (`log`)    | `show`, `follow`, `help`                                                                                    | `<recipe>[/<container>]`          | Display or follow logs for a pod or a specific container.         |
 | `connect` (`con`) | `shell`, `help`                                                                                             | `<recipe>[/<container>]`          | Open an interactive shell inside a running container.             |
 | `command` (`cmd`) | `list`, `exec`, `help`                                                                                      | `<recipe> [<command>\|<idx>]`     | List or execute maintenance commands defined in a recipe.         |
-| `recipe` (`rec`)  | `list`, `show`, `edit`, `help`                                                                              | `[<recipe>]`                      | List configured recipes, or display and edit a recipe file.       |
-| `config` (`cfg`)  | `show`, `edit`, `help`                                                                                      | `-`                               | Validate and display the active configuration tree or edit it.    |
+| `recipe` (`rec`)  | `list`, `inspect`, `show`, `edit`, `help`                                                                   | `[<recipe>]`                      | List, validate, display, or edit `.pod` recipe files.             |
+| `config` (`cfg`)  | `inspect`, `show`, `edit`, `help`                                                                           | `-`                               | Validate, display, or edit the active configuration file.         |
 | `image` (`img`)   | `update`, `prune`, `help`                                                                                   | `[<recipe>[/<container>], @<group>]` | Pull recipe container images or preview and remove unused images. |
 | `init`            | `create`, `help`                                                                                            | `-`                               | Generate initial `pods.conf` and `recipe.pod` template files.     |
 
@@ -274,7 +274,7 @@ pods [OPTIONS] <action> [TARGETS...]
 | `remove <target...>`  | Remove all containers in reverse bottom-to-top order and remove the pod without stopping them first.         |
 | `restart <target...>` | Stop and start an existing pod and its containers (`stop` + `start`) without removing or recreating them.    |
 | `start <target...>`   | Start an existing stopped pod and its containers in top-to-bottom order without recreating them.             |
-| `status`              | Display a formatted status table of managed containers.                                                      |
+| `status [target...]`  | Display a formatted status table of managed containers and report invalid recipes with `Recipe Error`.       |
 | `stop <target...>`    | Stop a running pod and its containers in reverse bottom-to-top order without removing them.                  |
 | `up <target...>`      | Create and start the pod and its containers in deterministic top-to-bottom order (`create` + `start`).       |
 | `update <target...>`  | Pull the latest container images and rebuild the pod (`image update` + `reload`).                            |
@@ -484,7 +484,7 @@ pods --config=staging --debug command exec example-app migrate --simulate
 
 ## Recipe Mode (`rec`)
 
-The `recipe` (`rec`) mode lists configured recipes, inspects `.pod` recipe file contents with line numbers, or opens a recipe file in the configured editor.
+The `recipe` (`rec`) mode lists configured recipes with validation status, validates a single `.pod` recipe file, prints recipe file contents with line numbers, or opens a recipe file in the configured editor.
 
 ```bash
 pods recipe [OPTIONS] [ACTION] [<recipe>]
@@ -492,12 +492,13 @@ pods recipe [OPTIONS] [ACTION] [<recipe>]
 
 ### Actions
 
-| Action | Description                                                                                       |
-| :----- | :------------------------------------------------------------------------------------------------ |
-| `edit` | Open the specified `.pod` recipe file in the external editor configured in `pods.conf`.           |
-| `help` | Display command-line help for `recipe` mode.                                                      |
-| `list` | List all recipes registered in `pods.conf` with descriptions and file status (default action).    |
-| `show` | Print the `.pod` recipe file with line numbers (default when `<recipe>` is given without action). |
+| Action    | Description                                                                                                                   |
+| :-------- | :---------------------------------------------------------------------------------------------------------------------------- |
+| `edit`    | Open the specified `.pod` recipe file in the external editor configured in `pods.conf`.                                       |
+| `help`    | Display command-line help for `recipe` mode.                                                                                  |
+| `inspect` | Validate the specified `.pod` recipe file and display detailed syntax or semantic diagnostics on error.                       |
+| `list`    | List all recipes registered in `pods.conf` with descriptions and validation status (`[OK]`, `[ERROR]`, `[NOT FOUND]`) (default). |
+| `show`    | Print the `.pod` recipe file with 1-based line numbers (default when `<recipe>` is given without action).                     |
 
 ### Options
 
@@ -514,13 +515,17 @@ pods recipe [OPTIONS] [ACTION] [<recipe>]
 # Display recipe mode help
 pods recipe help
 
-# List all configured recipes and their file status (or via the 'rec' alias)
+# List all configured recipes and their validation status (or via the 'rec' alias)
 pods recipe
 pods recipe list
 pods rec list
 
 # List configured recipes plus unreferenced .pod files in the recipes directory
 pods recipe list --all
+
+# Validate a single recipe file and inspect syntax or semantic errors
+pods recipe inspect example-app
+pods rec inspect example-app
 
 # Print a recipe file with line numbers
 pods recipe show example-app
@@ -535,7 +540,7 @@ pods --config=staging --debug recipe edit example-app --simulate
 
 ## Config Mode (`cfg`)
 
-The `config` (`cfg`) mode validates and displays the active `pods.conf` configuration (including directory status, group hierarchy trees, and missing or unreferenced recipe warnings) or opens the configuration file in the configured editor.
+The `config` (`cfg`) mode validates and inspects the active `pods.conf` configuration (including directory status, group hierarchy trees with recipe validation status, and missing, invalid, or unreferenced recipe warnings), prints the raw configuration file with line numbers, or opens the configuration file in the configured editor.
 
 ```bash
 pods config [OPTIONS] [ACTION]
@@ -543,11 +548,12 @@ pods config [OPTIONS] [ACTION]
 
 ### Actions
 
-| Action | Description                                                                                 |
-| :----- | :------------------------------------------------------------------------------------------ |
-| `edit` | Open the active configuration file in the external editor defined by `general.editor`.      |
-| `help` | Display command-line help for `config` mode.                                                |
-| `show` | Display the validated configuration tree and validation summary (default when omitted).     |
+| Action    | Description                                                                                                                |
+| :-------- | :------------------------------------------------------------------------------------------------------------------------- |
+| `edit`    | Open the active configuration file in the external editor defined by `general.editor`.                                     |
+| `help`    | Display command-line help for `config` mode.                                                                               |
+| `inspect` | Display the validated configuration tree, recipe inspection status, and validation summary (default when action is omitted). |
+| `show`    | Print the active `pods.conf` file with 1-based line numbers.                                                               |
 
 ### Options
 
@@ -563,8 +569,12 @@ pods config [OPTIONS] [ACTION]
 # Display config mode help
 pods config help
 
-# Show the active configuration diagnostic tree and validation summary (or via the 'cfg' alias)
+# Inspect the active configuration diagnostic tree and validation summary (or via the 'cfg' alias)
 pods config
+pods config inspect
+pods cfg inspect
+
+# Print the active pods.conf file with 1-based line numbers
 pods config show
 pods cfg show
 
@@ -572,7 +582,7 @@ pods cfg show
 pods config edit
 
 # Inspect or simulate editing an alternative configuration file
-pods --config=staging config show
+pods --config=staging config inspect
 pods --config=staging --debug config edit --simulate
 ```
 

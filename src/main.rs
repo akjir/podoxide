@@ -218,6 +218,7 @@ mod tests {
             &["cmd", "list", "recipe"],
             &["cmd", "exec", "recipe", "migrate"],
             &["cfg"],
+            &["cfg", "inspect"],
             &["cfg", "show"],
             &["cfg", "edit"],
             &["con", "recipe/db"],
@@ -228,6 +229,7 @@ mod tests {
             &["log", "follow", "recipe"],
             &["rec"],
             &["rec", "list"],
+            &["rec", "inspect", "recipe"],
             &["rec", "show", "recipe"],
             &["rec", "edit", "recipe"],
         ];
@@ -277,10 +279,17 @@ mod tests {
                     && prune_all_stdout.ends_with("? Type 'yes' to proceed: Aborted.\n"))
         );
 
-        let (cfg_ok, cfg_stdout, cfg_stderr) = run_cli_in_dir(working_dir, &["cfg", "show"], b"");
+        let (cfg_ok, cfg_stdout, cfg_stderr) =
+            run_cli_in_dir(working_dir, &["cfg", "inspect"], b"");
         assert!(cfg_ok);
         assert!(cfg_stderr.is_empty());
         assert!(cfg_stdout.contains("  Simulate:     false\n"));
+
+        let (show_ok, show_stdout, show_stderr) =
+            run_cli_in_dir(working_dir, &["cfg", "show"], b"");
+        assert!(show_ok);
+        assert!(show_stderr.is_empty());
+        assert!(show_stdout.contains("  1: general {\n"));
 
         let (edit_ok, edit_stdout, edit_stderr) =
             run_cli_in_dir(working_dir, &["cfg", "edit"], b"");
@@ -290,6 +299,7 @@ mod tests {
 
         for (rec_args, expected_stdout) in [
             (&["rec", "list"][..], "Recipes:\n"),
+            (&["rec", "inspect", "recipe"][..], "Recipe 'recipe' is valid.\n"),
             (&["rec", "show", "recipe"][..], "  6: pod example-stack {\n"),
             (&["rec", "edit", "recipe"][..], ""),
             (&["status"][..], "example-stack-app"),
@@ -309,7 +319,8 @@ mod tests {
                 &["--simulate", "image", "prune", "--all"],
                 "Prune images: \npodman image prune -f -a\n",
             ),
-            (&["--simulate", "cfg", "show"], "  Simulate:     true\n"),
+            (&["--simulate", "cfg", "inspect"], "  Simulate:     true\n"),
+            (&["--simulate", "cfg", "show"], "  1: general {\n"),
             (&["--simulate", "cfg", "edit"], "true ./pods.conf\n"),
             (
                 &["--simulate", "rec", "edit", "recipe"],
@@ -399,7 +410,8 @@ mod tests {
                 &["cmd", "exec", "recipe", "migrate"],
                 "podman exec -it -u dbuser example-stack-db db-cli -U dbuser -d app -f /migrations/run.sql\n",
             ),
-            (&["cfg", "show"], "  Simulate:     true\n"),
+            (&["cfg", "inspect"], "  Simulate:     true\n"),
+            (&["cfg", "show"], "  5: general {\n"),
             (&["cfg", "edit"], "vim ./pods.conf\n"),
             (
                 &["con", "recipe/db"],
@@ -427,6 +439,7 @@ mod tests {
             ),
             (&["status"], "example-stack-app"),
             (&["rec", "list"], "Recipes:\n"),
+            (&["rec", "inspect", "recipe"], "Recipe 'recipe' is valid.\n"),
             (&["rec", "show", "recipe"], "  6: pod example-stack {\n"),
             (&["rec", "edit", "recipe"], "vim ./recipe.pod\n"),
         ];
@@ -555,6 +568,7 @@ mod tests {
         assert_eq!(execute(["up", "recipe", "recipe/db"]), ExitCode::FAILURE);
         assert_eq!(execute(["up", "example-app"]), ExitCode::FAILURE);
         assert_eq!(execute(["cmd", "list", "recipe"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["cfg", "inspect"]), ExitCode::SUCCESS);
         assert_eq!(execute(["cfg", "show"]), ExitCode::SUCCESS);
         assert_eq!(execute(["con", "recipe/db"]), ExitCode::SUCCESS);
         assert_eq!(execute(["con", "recipe"]), ExitCode::FAILURE);
@@ -567,6 +581,7 @@ mod tests {
         assert_eq!(execute(["init", "--config=staging"]), ExitCode::FAILURE);
         assert_eq!(execute(["log", "recipe"]), ExitCode::SUCCESS);
         assert_eq!(execute(["rec", "list"]), ExitCode::SUCCESS);
+        assert_eq!(execute(["rec", "inspect", "recipe"]), ExitCode::SUCCESS);
 
         assert_eq!(execute(["--unknown-flag"]), ExitCode::FAILURE);
         assert_eq!(execute(["ini"]), ExitCode::FAILURE);

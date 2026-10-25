@@ -106,9 +106,7 @@ pub(super) fn load_target_recipe(context: &Context, target: &str) -> Result<Reci
             target,
         )));
     }
-    let mut recipe = Recipe::load(&context.config.recipes.path, target)?;
-    recipe.validate(&context.config, target)?;
-    Ok(recipe)
+    Recipe::inspect(&context.config, target)
 }
 
 #[cfg(test)]

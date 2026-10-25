@@ -33,7 +33,7 @@ use super::{build_recipe_path, extract_registered_recipe};
 /// 2. Construct `<recipes.path>/<recipe>.pod` and read only the raw text lines of that single
 ///    file. Do not parse or validate the file into a PSL AST, and do not read any other
 ///    `.pod` files.
-/// 3. Print each line prefixed with its 1-based line number (`format!("{line_number:3}: {line}")`).
+/// 3. Print each line prefixed with its 1-based line number via [`log::write_numbered_lines`].
 ///
 /// # Errors
 ///
@@ -53,10 +53,7 @@ fn show_with<W: Write>(context: &Context, stdout: &mut W) -> Result<(), PodError
     let recipe_name = extract_registered_recipe(context)?;
     let recipe_path = build_recipe_path(&context.config.recipes.path, recipe_name)?;
     let content = Recipe::read_file(&recipe_path)?;
-    for (zero_based, line) in content.lines().enumerate() {
-        let line_number = zero_based + 1;
-        log::write_print(stdout, &format!("{line_number:3}: {line}"));
-    }
+    log::write_numbered_lines(stdout, &content);
     Ok(())
 }
 
