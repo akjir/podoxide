@@ -50,24 +50,32 @@ struct ImageRecord<'a> {
     tag: &'a str,
 }
 
+/// Aggregated count, formatted preview lines, and total reclaimable bytes for prunable images.
+#[derive(Debug, Default, Eq, PartialEq)]
+struct PruneScan {
+    image_count: usize,
+    preview_lines: Vec<String>,
+    total_bytes: u64,
+}
+
 /// Previews reclaimable image disk space (`--preview`) or prunes dangling and unused
 /// container images (`--all`, `--force`).
 ///
 /// # Workflow
 ///
 /// 1. Do not read any `.pod` recipe files.
-/// 2. If `context.flags.preview` is `true`:
-///    - Query existing container IDs via `podman ps -aq` and inspect their attached image IDs
-///      (`podman inspect -f '{{.Image}}' ...`).
-///    - Query candidate images via `podman images [--filter dangling=true] --format ...`
-///      (omitting the dangling filter when `context.flags.all` is `true`).
-///    - Filter out images attached to existing containers, sum reclaimable byte sizes, and
-///      print the formatted preview list and total reclaimable space.
-/// 3. If `context.flags.preview` is `false`:
-///    - Unless `context.flags.force` or `context.config.simulate` is `true`, prompt the user
-///      for interactive `"yes"` confirmation before deleting images.
-///    - Execute (or simulate) `podman image prune -f` (appending `-a` when `context.flags.all`
-///      is `true`).
+/// 2. When `context.flags.preview` is `false` and `context.config.simulate` is `true`,
+///    simulate `podman image prune -f` (appending `-a` when `context.flags.all` is `true`).
+/// 3. Otherwise, query in-use container images (`podman ps -aq` and `podman inspect -f
+///    '{{.Image}}'`) and candidate images (`podman images [--filter dangling=true] --format
+///    ...`), filtering out images attached to existing containers and summing reclaimable
+///    byte sizes in a single pass.
+/// 4. If no prunable images exist, print `"No images found to prune."` and return.
+/// 5. If `context.flags.preview` is `true`, print the formatted preview list and total
+///    reclaimable space and return.
+/// 6. Unless `context.flags.force` is `true`, prompt the user for interactive `"yes"`
+///    confirmation (including the prunable image count and total reclaimable space) before
+///    executing `podman image prune -f` (`-a`).
 ///
 /// # Errors
 ///
@@ -129,11 +137,17 @@ where
 /// Prompts the user on `stdout` and reads `reader` to confirm image pruning, returning `true` only when the user answers `"yes"`.
 fn confirm_prune<R: BufRead, W: Write>(
     is_all: bool,
+    image_count: usize,
+    total_bytes: u64,
     reader: &mut R,
     stdout: &mut W,
 ) -> Result<bool, PodError> {
-    let scope = if is_all { "all unused" } else { "dangling" };
-    let prompt = format!("Are you sure you want to prune {scope} images? Type 'yes' to proceed: ");
+    let scope = if is_all { "unused" } else { "dangling" };
+    let noun = if image_count == 1 { "image" } else { "images" };
+    let reclaimable = format_bytes(total_bytes);
+    let prompt = format!(
+        "Are you sure you want to prune {image_count} {scope} {noun} ({reclaimable})? Type 'yes' to proceed: "
+    );
     stdout.write_all(prompt.as_bytes())?;
     stdout.flush()?;
     let Some(input) = read_confirmation_line(reader)? else {
@@ -142,42 +156,7 @@ fn confirm_prune<R: BufRead, W: Write>(
     Ok(input.trim_end_matches(['\r', '\n']) == "yes")
 }
 
-/// Prompts for confirmation when required and executes or simulates `podman image prune -f [-a]`.
-fn execute_prune<R, W, E>(
-    context: &Context,
-    reader: &mut R,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> Result<(), PodError>
-where
-    R: BufRead,
-    W: Write,
-    E: Write,
-{
-    let simulate = context.config.simulate;
-    if !context.flags.force && !simulate && !confirm_prune(context.flags.all, reader, stdout)? {
-        log::write_print(stdout, "Aborted.");
-        return Ok(());
-    }
-    let arguments: &[&str] = if context.flags.all {
-        &PRUNE_ALL_ARGS
-    } else {
-        &PRUNE_DANGLING_ARGS
-    };
-    command::exec_with(
-        "podman",
-        arguments,
-        &ExecOptions {
-            interactive: false,
-            prefix: PRUNE_PREFIX,
-            simulate,
-        },
-        stdout,
-        stderr,
-    )
-}
-
-/// Routes `pods image prune` to either `--preview` space calculation or `podman image prune` execution.
+/// Orchestrates `pods image prune` across simulate, `--preview`, and interactive or forced prune execution.
 fn execute_with<R, W, E, F>(
     context: &Context,
     capture: &mut F,
@@ -191,10 +170,27 @@ where
     E: Write,
     F: FnMut(&[&str]) -> Option<String>,
 {
-    if context.flags.preview {
-        return preview_images(context.flags.all, capture, stdout);
+    let is_all = context.flags.all;
+    let is_preview = context.flags.preview;
+    if !is_preview && context.config.simulate {
+        return run_prune_command(is_all, true, stdout, stderr);
     }
-    execute_prune(context, reader, stdout, stderr)
+    let scan = scan_prunable_images(is_all, is_preview, capture)?;
+    if scan.image_count == 0 {
+        log::write_print(stdout, "No images found to prune.");
+        return Ok(());
+    }
+    if is_preview {
+        write_preview_results(&scan.preview_lines, scan.total_bytes, stdout);
+        return Ok(());
+    }
+    if !context.flags.force
+        && !confirm_prune(is_all, scan.image_count, scan.total_bytes, reader, stdout)?
+    {
+        log::write_print(stdout, "Aborted.");
+        return Ok(());
+    }
+    run_prune_command(is_all, false, stdout, stderr)
 }
 
 /// Resolves the human-readable image label (`<id>`, `<repo>:<tag>`, or `<repo>`) for `record`.
@@ -215,6 +211,22 @@ fn format_preview_entry(record: &ImageRecord<'_>) -> String {
     let display_name = format_display_name(record);
     let left_side = format!("  - {:<45} ({})", display_name, record.created);
     format_line(&left_side, record.size, PREVIEW_TARGET_COLUMN)
+}
+
+/// Parses `line` and returns the [`ImageRecord`] when it is not in `in_use_images`.
+#[must_use]
+fn parse_candidate_record<'a>(
+    line: &'a str,
+    in_use_images: &BTreeSet<String>,
+) -> Option<ImageRecord<'a>> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    let record = parse_image_record(line)?;
+    if in_use_images.contains(record.long_id) {
+        return None;
+    }
+    Some(record)
 }
 
 /// Parses a `;;;`-delimited `podman images` line into an [`ImageRecord`].
@@ -252,40 +264,6 @@ fn parse_in_use_output(inspect_output: &str) -> BTreeSet<String> {
     in_use
 }
 
-/// Queries in-use and candidate images via `capture` and writes the reclaimable space preview to `stdout`.
-fn preview_images<W, F>(is_all: bool, capture: &mut F, stdout: &mut W) -> Result<(), PodError>
-where
-    W: Write,
-    F: FnMut(&[&str]) -> Option<String>,
-{
-    let in_use_images = collect_in_use_images(capture);
-    let output = query_candidate_images(is_all, capture)?;
-    let line_count = output.lines().count();
-    let mut preview_lines =
-        Vec::with_capacity(bounded_capacity(line_count, MAX_COLLECTION_PREALLOC));
-    let mut total_bytes: u64 = 0;
-
-    for line in output.lines() {
-        if preview_lines.len() >= MAX_PREVIEW_RECORDS {
-            break;
-        }
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Some(record) = parse_image_record(line) else {
-            continue;
-        };
-        if in_use_images.contains(record.long_id) {
-            continue;
-        }
-        total_bytes = total_bytes.saturating_add(parse_size_to_bytes(record.size));
-        preview_lines.push(format_preview_entry(&record));
-    }
-
-    write_preview_results(&preview_lines, total_bytes, stdout);
-    Ok(())
-}
-
 /// Queries `podman images` (with `--filter dangling=true` when `is_all` is `false`) via `capture`.
 fn query_candidate_images<F>(is_all: bool, capture: &mut F) -> Result<String, PodError>
 where
@@ -316,12 +294,75 @@ fn read_confirmation_line<R: BufRead>(reader: &mut R) -> Result<Option<String>, 
     Ok(Some(buffer))
 }
 
-/// Writes the formatted preview list and total reclaimable space (or `"No images found to prune."`) to `stdout`.
-fn write_preview_results<W: Write>(preview_lines: &[String], total_bytes: u64, stdout: &mut W) {
-    if preview_lines.is_empty() {
-        log::write_print(stdout, "No images found to prune.");
-        return;
+/// Executes or simulates `podman image prune -f` (appending `-a` when `is_all` is `true`).
+fn run_prune_command<W: Write, E: Write>(
+    is_all: bool,
+    simulate: bool,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), PodError> {
+    let arguments: &[&str] = if is_all {
+        &PRUNE_ALL_ARGS
+    } else {
+        &PRUNE_DANGLING_ARGS
+    };
+    command::exec_with(
+        "podman",
+        arguments,
+        &ExecOptions {
+            interactive: false,
+            prefix: PRUNE_PREFIX,
+            simulate,
+        },
+        stdout,
+        stderr,
+    )
+}
+
+/// Queries Podman via `capture`, filters out in-use images, and accumulates the prunable image count, reclaimable bytes, and optional preview lines.
+fn scan_prunable_images<F>(
+    is_all: bool,
+    include_lines: bool,
+    capture: &mut F,
+) -> Result<PruneScan, PodError>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    let in_use_images = collect_in_use_images(capture);
+    let output = query_candidate_images(is_all, capture)?;
+    let preview_lines = if include_lines {
+        let capacity = bounded_capacity(output.lines().count(), MAX_COLLECTION_PREALLOC);
+        Vec::with_capacity(capacity)
+    } else {
+        Vec::new()
+    };
+    let mut scan = PruneScan {
+        image_count: 0,
+        preview_lines,
+        total_bytes: 0,
+    };
+
+    for line in output.lines() {
+        if scan.image_count >= MAX_PREVIEW_RECORDS {
+            break;
+        }
+        let Some(record) = parse_candidate_record(line, &in_use_images) else {
+            continue;
+        };
+        scan.image_count += 1;
+        scan.total_bytes = scan
+            .total_bytes
+            .saturating_add(parse_size_to_bytes(record.size));
+        if include_lines {
+            scan.preview_lines.push(format_preview_entry(&record));
+        }
     }
+
+    Ok(scan)
+}
+
+/// Writes the formatted preview list and total reclaimable space to `stdout`.
+fn write_preview_results<W: Write>(preview_lines: &[String], total_bytes: u64, stdout: &mut W) {
     log::write_print(stdout, "Images to be pruned:");
     for line in preview_lines {
         log::write_print(stdout, line);
@@ -346,7 +387,7 @@ mod tests {
     use crate::io::system::env::MAX_CONFIRMATION_BYTES;
     use super::{
         IMAGES_FORMAT, MAX_PREVIEW_RECORDS, PREVIEW_SEPARATOR, execute_with, handle,
-        parse_in_use_output,
+        parse_in_use_output, scan_prunable_images,
     };
 
     struct BrokenPipeWriter;
@@ -406,36 +447,85 @@ mod tests {
 
         assert!(handle(&sim_context).is_ok());
 
-        // Interactive confirmation declined or EOF prints "Aborted." without invoking podman.
+        // When simulate is false and no prunable images exist, prints "No images found to prune." without prompting.
         let mut interactive_context = Context::new();
         interactive_context.config.simulate = false;
         interactive_context.flags.simulate = false;
         interactive_context.flags.force = false;
 
-        for (is_all, expected_prompt, raw_input) in [
+        let mut empty_images_capture = |arguments: &[&str]| -> Option<String> {
+            match arguments.first().copied() {
+                Some("ps") | Some("images") => Some(String::new()),
+                _ => None,
+            }
+        };
+        for force in [false, true] {
+            interactive_context.flags.force = force;
+            let mut empty_out = Vec::new();
+            let mut empty_err = Vec::new();
+            execute_with(
+                &interactive_context,
+                &mut empty_images_capture,
+                &mut reader,
+                &mut empty_out,
+                &mut empty_err,
+            )
+            .unwrap();
+            assert_eq!(
+                String::from_utf8(empty_out).unwrap(),
+                "No images found to prune.\n"
+            );
+            assert!(empty_err.is_empty());
+        }
+        interactive_context.flags.force = false;
+
+        // Interactive confirmation declined or EOF prints "Aborted." with image count and reclaimable space.
+        let single_image_line = "abcd1234efgh;;;long1;;;<none>;;;<none>;;;500 B;;;1 hour ago\n";
+        let three_images_lines = "\
+abcd1234efgh;;;long1;;;my-repo;;;1.0;;;10.5 MB;;;2 weeks ago\n\
+ijkl5678mnop;;;long2;;;<none>;;;<none>;;;500 kB;;;3 weeks ago\n\
+qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
+
+        for (is_all, images_output, expected_prompt, raw_input) in [
             (
                 false,
-                "Are you sure you want to prune dangling images? Type 'yes' to proceed: ",
+                single_image_line,
+                "Are you sure you want to prune 1 dangling image (500 B)? Type 'yes' to proceed: ",
+                &b"no\n"[..],
+            ),
+            (
+                false,
+                three_images_lines,
+                "Are you sure you want to prune 3 dangling images (12.5 MB)? Type 'yes' to proceed: ",
                 &b"no\n"[..],
             ),
             (
                 true,
-                "Are you sure you want to prune all unused images? Type 'yes' to proceed: ",
+                single_image_line,
+                "Are you sure you want to prune 1 unused image (500 B)? Type 'yes' to proceed: ",
                 &b""[..],
             ),
             (
-                false,
-                "Are you sure you want to prune dangling images? Type 'yes' to proceed: ",
+                true,
+                three_images_lines,
+                "Are you sure you want to prune 3 unused images (12.5 MB)? Type 'yes' to proceed: ",
                 &vec![b'y'; MAX_CONFIRMATION_BYTES + 1][..],
             ),
         ] {
             interactive_context.flags.all = is_all;
+            let mut candidate_capture = |arguments: &[&str]| -> Option<String> {
+                match arguments.first().copied() {
+                    Some("ps") => Some(String::new()),
+                    Some("images") => Some(String::from(images_output)),
+                    _ => None,
+                }
+            };
             let mut input_cursor = Cursor::new(raw_input.to_vec());
             let mut out = Vec::new();
             let mut err = Vec::new();
             execute_with(
                 &interactive_context,
-                &mut capture,
+                &mut candidate_capture,
                 &mut input_cursor,
                 &mut out,
                 &mut err,
@@ -449,9 +539,16 @@ mod tests {
         // Broken pipe when writing confirmation prompt propagates PodError::Io.
         let mut broken_out = BrokenPipeWriter;
         let mut yes_cursor = Cursor::new(b"yes\n".to_vec());
+        let mut candidate_capture = |arguments: &[&str]| -> Option<String> {
+            match arguments.first().copied() {
+                Some("ps") => Some(String::new()),
+                Some("images") => Some(String::from(single_image_line)),
+                _ => None,
+            }
+        };
         let prompt_err = execute_with(
             &interactive_context,
-            &mut capture,
+            &mut candidate_capture,
             &mut yes_cursor,
             &mut broken_out,
             &mut stderr,
@@ -590,6 +687,10 @@ mod tests {
         .unwrap();
         let bound_output = String::from_utf8(bound_stdout).unwrap();
         assert_eq!(bound_output.lines().count(), MAX_PREVIEW_RECORDS + 3);
+        let scan = scan_prunable_images(true, false, &mut bound_capture).unwrap();
+        assert_eq!(scan.image_count, MAX_PREVIEW_RECORDS);
+        assert!(scan.preview_lines.is_empty());
+        assert_eq!(scan.total_bytes, MAX_PREVIEW_RECORDS as u64);
     }
 
     #[test]

@@ -30,6 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Changed pod startup (`start`, `up`, `restart`, `reload`, and `update`) to start containers directly in deterministic `1..N` declaration order without executing `podman pod start`.
+- Changed `pods image prune` to check for prunable images before prompting, output `No images found to prune.` when none exist, and display the prunable image count and reclaimable disk space in the confirmation prompt.
 
 ### Fixed
 

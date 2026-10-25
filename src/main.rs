@@ -148,9 +148,10 @@ mod tests {
             false_stderr,
             "DEBUG: Debug mode is enabled.\nDEBUG: Config './custom.conf' is used.\nDEBUG: Image mode is used.\n"
         );
-        assert_eq!(
-            false_stdout,
-            "Are you sure you want to prune dangling images? Type 'yes' to proceed: Aborted.\n"
+        assert!(
+            false_stdout == "No images found to prune.\n"
+                || (false_stdout.starts_with("Are you sure you want to prune ")
+                    && false_stdout.ends_with("? Type 'yes' to proceed: Aborted.\n"))
         );
 
         fs::write(
@@ -260,18 +261,20 @@ mod tests {
             run_cli_in_dir(working_dir, &["image", "prune"], b"no\n");
         assert!(prune_ok);
         assert!(prune_stderr.is_empty());
-        assert_eq!(
-            prune_stdout,
-            "Are you sure you want to prune dangling images? Type 'yes' to proceed: Aborted.\n"
+        assert!(
+            prune_stdout == "No images found to prune.\n"
+                || (prune_stdout.starts_with("Are you sure you want to prune ")
+                    && prune_stdout.ends_with("? Type 'yes' to proceed: Aborted.\n"))
         );
 
         let (prune_all_ok, prune_all_stdout, prune_all_stderr) =
             run_cli_in_dir(working_dir, &["image", "prune", "--all"], b"no\n");
         assert!(prune_all_ok);
         assert!(prune_all_stderr.is_empty());
-        assert_eq!(
-            prune_all_stdout,
-            "Are you sure you want to prune all unused images? Type 'yes' to proceed: Aborted.\n"
+        assert!(
+            prune_all_stdout == "No images found to prune.\n"
+                || (prune_all_stdout.starts_with("Are you sure you want to prune ")
+                    && prune_all_stdout.ends_with("? Type 'yes' to proceed: Aborted.\n"))
         );
 
         let (cfg_ok, cfg_stdout, cfg_stderr) = run_cli_in_dir(working_dir, &["cfg", "show"], b"");
