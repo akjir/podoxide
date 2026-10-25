@@ -32,7 +32,8 @@ use super::execute_lifecycle_action;
 /// 2. For pod/group targets: pull the latest container images and reload the pod and its
 ///    containers (`down` + `up`).
 /// 3. For container targets: pull the latest image for each targeted container and reload only
-///    those containers (`down` + `up`) without tearing down the parent pod.
+///    those containers (`down` + `up`, creating the parent pod if missing) without tearing down
+///    an existing parent pod.
 ///
 /// # Errors
 ///

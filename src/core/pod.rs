@@ -15,6 +15,7 @@
 
 //! Pod domain models (`pod` and `command` blocks in `.pod` recipes) and Podman pod lifecycle orchestration.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -43,6 +44,7 @@ pub struct Pod {
     pub path: PathBuf,
     pub publish: Vec<String>,
     pub registry: String,
+    created: Cell<bool>,
 }
 
 impl Pod {
@@ -94,7 +96,7 @@ impl Pod {
         stdout: &mut W,
         stderr: &mut E,
     ) -> Result<(), PodError> {
-        validate_pod_create(self)?;
+        self.validate_create()?;
         let arguments = self.build_create_args();
         let prefix = format!("Create pod '{}' ('{}'): ", self.name, self.id);
         command::exec_with(
@@ -107,7 +109,37 @@ impl Pod {
             },
             stdout,
             stderr,
-        )
+        )?;
+        self.created.set(true);
+        Ok(())
+    }
+
+    /// Ensures this pod exists in Podman by checking `pod_exists` and calling [`Self::create_with`] when missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PodError`] if pod validation, stream writing, or Podman execution fails.
+    pub fn ensure_created_with<W, E, F>(
+        &self,
+        simulate: bool,
+        pod_exists: F,
+        stdout: &mut W,
+        stderr: &mut E,
+    ) -> Result<(), PodError>
+    where
+        W: Write,
+        E: Write,
+        F: FnOnce(&str) -> bool,
+    {
+        self.validate_create()?;
+        if self.created.get() {
+            return Ok(());
+        }
+        if pod_exists(&self.id) {
+            self.created.set(true);
+            return Ok(());
+        }
+        self.create_with(simulate, stdout, stderr)
     }
 
     /// Removes this pod in Podman (`podman pod rm`), writing command output to `stdout` and `stderr`.
@@ -134,7 +166,9 @@ impl Pod {
             },
             stdout,
             stderr,
-        )
+        )?;
+        self.created.set(false);
+        Ok(())
     }
 
     /// Stops this pod in Podman (`podman pod stop`), writing command output to `stdout` and `stderr`.
@@ -162,6 +196,34 @@ impl Pod {
             stdout,
             stderr,
         )
+    }
+
+    /// Validates `self.id`, `self.publish`, and `self.options` before executing `podman pod create`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecipeError`] when `self.id`, any `publish` entry, or any `option` value is invalid.
+    pub fn validate_create(&self) -> Result<(), RecipeError> {
+        validate_pod_id(self)?;
+        for entry in &self.publish {
+            if !is_valid_token(entry) {
+                return Err(RecipeError::with_token(
+                    RecipeErrorKind::InvalidPublish,
+                    self.line,
+                    entry,
+                ));
+            }
+        }
+        for option in &self.options {
+            if !is_valid_option_value(option) {
+                return Err(RecipeError::with_token(
+                    RecipeErrorKind::InvalidOption,
+                    self.line,
+                    option,
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -474,30 +536,6 @@ fn append_publish_arguments(arguments: &mut Vec<String>, publish_entries: &[Stri
     }
 }
 
-/// Validates `pod.id`, `pod.publish`, and `pod.options` before executing `podman pod create`.
-fn validate_pod_create(pod: &Pod) -> Result<(), RecipeError> {
-    validate_pod_id(pod)?;
-    for entry in &pod.publish {
-        if !is_valid_token(entry) {
-            return Err(RecipeError::with_token(
-                RecipeErrorKind::InvalidPublish,
-                pod.line,
-                entry,
-            ));
-        }
-    }
-    for option in &pod.options {
-        if !is_valid_option_value(option) {
-            return Err(RecipeError::with_token(
-                RecipeErrorKind::InvalidOption,
-                pod.line,
-                option,
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// Validates that `pod.id` is a well-formed non-empty Podman pod name.
 fn validate_pod_id(pod: &Pod) -> Result<(), RecipeError> {
     if !is_valid_pod_or_container_name(&pod.id) {
@@ -527,7 +565,7 @@ fn validate_recipe_containers(recipe: &Recipe) -> Result<(), RecipeError> {
 
 /// Validates `recipe.pod` and all `recipe.containers` before executing pod creation lifecycles.
 fn validate_recipe_create(recipe: &Recipe) -> Result<(), RecipeError> {
-    validate_pod_create(&recipe.pod)?;
+    recipe.pod.validate_create()?;
     for item in &recipe.containers {
         item.validate_create(&recipe.pod)?;
     }
@@ -734,6 +772,42 @@ mod tests {
         assert!(pod.create_with(true, &mut stdout, &mut stderr).is_ok());
         assert!(pod.stop_with(true, &mut stdout, &mut stderr).is_ok());
         assert!(pod.remove_with(true, &mut stdout, &mut stderr).is_ok());
+
+        // After remove_with, ensure_created_with checks pod_exists again; when false, it creates the pod
+        // and caches creation so subsequent calls skip both pod_exists and podman pod create.
+        let mut ensure_out = Vec::new();
+        pod.ensure_created_with(true, |_| false, &mut ensure_out, &mut stderr)
+            .unwrap();
+        assert_eq!(
+            std::str::from_utf8(&ensure_out).unwrap().lines().count(),
+            2
+        );
+        pod.ensure_created_with(
+            true,
+            |_| panic!("pod_exists should not be called once pod is marked created"),
+            &mut ensure_out,
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(
+            std::str::from_utf8(&ensure_out).unwrap().lines().count(),
+            2
+        );
+
+        // When pod_exists returns true on a fresh Pod, ensure_created_with skips pod creation and caches the state.
+        pod.remove_with(true, &mut stdout, &mut stderr).unwrap();
+        ensure_out.clear();
+        pod.ensure_created_with(true, |_| true, &mut ensure_out, &mut stderr)
+            .unwrap();
+        assert!(ensure_out.is_empty());
+        pod.ensure_created_with(
+            true,
+            |_| panic!("pod_exists should not be called after pod_exists returned true"),
+            &mut ensure_out,
+            &mut stderr,
+        )
+        .unwrap();
+        assert!(ensure_out.is_empty());
     }
 
     #[test]

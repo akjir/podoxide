@@ -16,7 +16,7 @@
 //! Podman CLI version verification and runtime inspection queries.
 
 use crate::io::exec::command;
-use crate::utilities::string::{is_valid_token, parse_ascii_u32};
+use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_token, parse_ascii_u32};
 
 /// Maximum number of lines scanned in `podman --version` output.
 const MAX_VERSION_LINES: usize = 32;
@@ -70,6 +70,15 @@ pub fn is_supported_podman_version(output: &str) -> bool {
         return false;
     };
     major > MIN_PODMAN_MAJOR || (major == MIN_PODMAN_MAJOR && minor >= MIN_PODMAN_MINOR)
+}
+
+/// Evaluates whether the Podman pod named `pod_id` exists in local storage.
+#[must_use]
+pub fn pod_exists(pod_id: &str) -> bool {
+    if !is_valid_pod_or_container_name(pod_id) {
+        return false;
+    }
+    command::exec_capture("podman", &["pod", "exists", pod_id]).is_some()
 }
 
 /// Extracts the raw semantic version token from a `"podman version <semver>"` output line.
@@ -147,7 +156,7 @@ fn parse_podman_major_minor(output: &str) -> Option<(u32, u32)> {
 mod tests {
     use super::{
         MAX_VERSION_LINES, MAX_VERSION_OUTPUT_BYTES, check_podman_version, container_exists,
-        is_running_container_status, is_supported_podman_version,
+        is_running_container_status, is_supported_podman_version, pod_exists,
     };
 
     #[test]
@@ -189,6 +198,13 @@ mod tests {
         assert!(!container_exists(
             "podoxide_nonexistent_test_container_999999"
         ));
+
+        assert!(!pod_exists(""));
+        assert!(!pod_exists("--help"));
+        assert!(!pod_exists("bad name"));
+        assert!(!pod_exists("Upper_Case"));
+        assert!(!pod_exists("bad..pod"));
+        assert!(!pod_exists("podoxide_nonexistent_test_pod_999999"));
     }
 
     #[test]

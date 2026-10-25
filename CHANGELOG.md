@@ -47,6 +47,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Fixed `pods init --simulate` writing template files to disk and added `--simulate` to `pods init help`, `USAGE.md`, and `.pods-completion.bash`.
 - Fixed cyclic `@<group>` reference diagnostics in `pods.conf` pointing to the `groups {` block header instead of the offending group directive line.
 - Fixed `option` directive token splitting in `pod` and `container` blocks breaking `--flag='value with spaces'` and `--flag 'value with spaces'` into separate `podman` arguments.
+- Fixed container creation lifecycle actions (`create`, `up`, `reload`, and `update` on `<recipe>/<container>` targets) failing when the parent pod does not exist by checking `podman pod exists` and creating the missing pod first.
 
 ### Removed
 

@@ -269,6 +269,7 @@ The [Default Mode](#default-mode) actions, `pods image update`, `logs`, `connect
 - **Explicit Relative Name:** `example-app/*db` expands directly to `<pod_id>-db` (`example-stack-db`).
 - **Unprefixed Name:** `example-app/example-stack-db` or `example-app/db` checks for an exact resolved container name match first (`example-stack-db`), then falls back to `<pod_id>-<name>` (`example-stack-db`).
 - **Exclusivity in Lifecycle Actions:** Default mode actions and `pods image update` accept either pod/group targets (`<recipe>`, `@<group>`) or one or more `<recipe>/<container>` container targets in a single invocation, deduplicating repeated `(recipe, container_name)` pairs in first-appearance order. Mixing pod/group targets with `<recipe>/<container>` targets is rejected.
+- **Automatic Pod Creation:** When creating a targeted container (`create`, `up`, `reload`, `update`), Podoxide checks whether the parent pod exists in Podman (`podman pod exists`) and creates the pod automatically before creating the container if the pod is missing.
 - **Direct Container Name (`connect` only):** If `<target>` contains no `/` and no matching `<target>.pod` file exists in `recipes.path`, `pods connect <target>` connects directly to a running Podman container with that name.
 
 ## Default Mode

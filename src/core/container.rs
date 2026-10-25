@@ -23,6 +23,7 @@ use crate::core::log;
 use crate::core::pod::Pod;
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::command::{self, ExecOptions};
+use crate::io::exec::podman;
 use crate::utilities::collection::{
     MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity, is_valid_option_value,
 };
@@ -150,16 +151,10 @@ impl Container {
     ///
     /// # Errors
     ///
-    /// Returns [`RecipeError`] when the container name, pod ID, pod registry, container fields, or relative volume base directory are invalid.
+    /// Returns [`RecipeError`] when the container name, pod ID, pod publish/option entries, pod registry, container fields, or relative volume base directory are invalid.
     pub fn validate_create(&self, pod: &Pod) -> Result<(), RecipeError> {
         validate_container_name(self)?;
-        if !is_valid_pod_or_container_name(&pod.id) {
-            return Err(RecipeError::with_token(
-                RecipeErrorKind::InvalidPodId,
-                pod.line,
-                &pod.id,
-            ));
-        }
+        pod.validate_create()?;
         validate_optional_token(&pod.registry, RecipeErrorKind::InvalidRegistry, pod.line)?;
         self.validate()?;
         if has_relative_host_volume(&self.volumes) && !is_valid_directory(&pod.path) {
@@ -189,22 +184,22 @@ impl VolumeMount {
     }
 }
 
-/// Creates `container` in Podman (`podman create`) without starting it.
+/// Creates `container` in Podman (`podman create`), creating `pod` first if it does not exist, without starting it.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if volume resolution or Podman execution fails.
+/// Returns [`PodError`] if validation, volume resolution, or Podman execution fails.
 pub fn create(container: &Container, pod: &Pod, simulate: bool) -> Result<(), PodError> {
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     create_with(container, pod, simulate, &mut stdout, &mut stderr)
 }
 
-/// Creates `container` in Podman (`podman create`), writing command output to `stdout` and `stderr`.
+/// Creates `container` in Podman (`podman create`), creating `pod` first if it does not exist, and writes command output to `stdout` and `stderr`.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if volume resolution, stream writing, or Podman execution fails.
+/// Returns [`PodError`] if validation, volume resolution, stream writing, or Podman execution fails.
 pub fn create_with<W: Write, E: Write>(
     container: &Container,
     pod: &Pod,
@@ -212,19 +207,7 @@ pub fn create_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    let arguments = container.build_create_args(pod)?;
-    let prefix = format!("Create container '{}': ", container.name);
-    command::exec_with(
-        "podman",
-        &arguments,
-        &ExecOptions {
-            interactive: false,
-            prefix: &prefix,
-            simulate,
-        },
-        stdout,
-        stderr,
-    )
+    create_with_pod_check(container, pod, simulate, podman::pod_exists, stdout, stderr)
 }
 
 /// Stops and removes `container` in Podman (`stop` + `remove`).
@@ -661,6 +644,36 @@ const fn container_label(name: &str) -> &str {
     }
 }
 
+/// Validates `container` and `pod`, ensures `pod` exists via `pod_exists` (creating it when missing), and executes `podman create`.
+fn create_with_pod_check<W, E, F>(
+    container: &Container,
+    pod: &Pod,
+    simulate: bool,
+    pod_exists: F,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), PodError>
+where
+    W: Write,
+    E: Write,
+    F: FnOnce(&str) -> bool,
+{
+    let arguments = container.build_create_args(pod)?;
+    pod.ensure_created_with(simulate, pod_exists, stdout, stderr)?;
+    let prefix = format!("Create container '{}': ", container.name);
+    command::exec_with(
+        "podman",
+        &arguments,
+        &ExecOptions {
+            interactive: false,
+            prefix: &prefix,
+            simulate,
+        },
+        stdout,
+        stderr,
+    )
+}
+
 /// Evaluates whether `volumes` contains any mount with a relative host directory or volume name.
 #[must_use]
 fn has_relative_host_volume(volumes: &[VolumeMount]) -> bool {
@@ -828,9 +841,9 @@ mod tests {
     use crate::error::{PodError, RecipeErrorKind};
     use crate::utilities::collection::append_option_tokens;
     use super::{
-        Container, VolumeMount, container_label, create, create_with, down, down_with,
-        format_volume_mount, is_valid_volume_mount, pull, pull_with, reload, reload_with, remove,
-        remove_with, resolve_container_name_value, resolve_host_volume_path,
+        Container, VolumeMount, container_label, create, create_with, create_with_pod_check, down,
+        down_with, format_volume_mount, is_valid_volume_mount, pull, pull_with, reload,
+        reload_with, remove, remove_with, resolve_container_name_value, resolve_host_volume_path,
         resolve_image_reference, restart, restart_with, start, start_with, stop, stop_with, up,
         up_with, update, update_with,
     };
@@ -1051,6 +1064,8 @@ mod tests {
         assert_eq!(
             lines,
             vec![
+                "Create pod 'Commandos' ('commandos'): ",
+                "podman pod create --name commandos",
                 "Create container 'commandos-1': ",
                 "podman create --name commandos-1 --pod commandos --restart on-failure:5 --volume /my_pod_path/relative/path:/container/dir/relative:z --unknown thing --another unknown bel.io/squad:1998 'O'\\''Hara' 'Hancock 2' Woolridge3 Brooklyn:4 Blackwood=5 Duchamp-6",
                 "Start container 'commandos-1': ",
@@ -1064,6 +1079,29 @@ mod tests {
             ]
         );
         assert!(stderr.is_empty());
+
+        // When the pod ALREADY exists in Podman, create_with_pod_check skips pod creation.
+        let mut existing_pod = Pod::new();
+        existing_pod.id = String::from("existing_pod");
+        existing_pod.name = String::from("Existing Pod");
+        existing_pod.path = PathBuf::from("/my_pod_path");
+        existing_pod.registry = String::from("bel.io");
+        let mut existing_out = Vec::new();
+        create_with_pod_check(
+            &container,
+            &existing_pod,
+            true,
+            |_| true,
+            &mut existing_out,
+            &mut stderr,
+        )
+        .unwrap();
+        let existing_lines: Vec<&str> = std::str::from_utf8(&existing_out)
+            .unwrap()
+            .lines()
+            .collect();
+        assert_eq!(existing_lines.len(), 2);
+        assert_eq!(existing_lines[0], "Create container 'commandos-1': ");
 
         let mut composite_out = Vec::new();
         up_with(&container, &pod, true, &mut composite_out, &mut stderr).unwrap();
@@ -1221,6 +1259,20 @@ mod tests {
         assert_eq!(
             base.build_create_args(&bad_pod_id).unwrap_err().kind,
             RecipeErrorKind::InvalidPodId
+        );
+
+        let mut bad_pod_publish = pod.clone();
+        bad_pod_publish.publish = vec![String::from("--privileged")];
+        assert_eq!(
+            base.validate_create(&bad_pod_publish).unwrap_err().kind,
+            RecipeErrorKind::InvalidPublish
+        );
+
+        let mut bad_pod_option = pod.clone();
+        bad_pod_option.options = vec![String::from("--flag\nspoof")];
+        assert_eq!(
+            base.validate_create(&bad_pod_option).unwrap_err().kind,
+            RecipeErrorKind::InvalidOption
         );
 
         let mut bad_pod_registry = pod.clone();

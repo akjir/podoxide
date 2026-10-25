@@ -274,7 +274,7 @@ Executes external commands directly via `std::process::Command` without shell in
 | :----------------------- | :------- |
 | `src/io/exec/mod.rs`     | Declares and re-exports process execution types and helpers. |
 | `src/io/exec/command.rs` | Executes external processes synchronously, interactively, or in simulate mode, and captures `stdout` / `stderr`. |
-| `src/io/exec/podman.rs`  | Provides Podman-specific process queries, including version verification (`5.8.0+`) and container state checks. |
+| `src/io/exec/podman.rs`  | Provides Podman-specific process queries, including version verification (`5.8.0+`) and pod/container state checks. |
 
 ### PodScript Language (`src/io/psl/`)
 

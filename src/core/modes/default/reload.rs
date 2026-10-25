@@ -30,8 +30,8 @@ use super::execute_lifecycle_action;
 ///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
 ///    order and deduplicating repeated targets.
 /// 2. For pod/group targets: execute `pod::down` followed by `pod::up`.
-/// 3. For container targets: execute `container::down` followed by `container::up` without
-///    tearing down or recreating the parent pod.
+/// 3. For container targets: execute `container::down` followed by `container::up` (creating the
+///    parent pod if missing) without tearing down an existing parent pod.
 ///
 /// # Errors
 ///

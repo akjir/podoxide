@@ -31,8 +31,8 @@ use super::execute_lifecycle_action;
 ///    order and deduplicating repeated targets.
 /// 2. For pod/group targets: create the Podman pod and create and start its containers in
 ///    top-to-bottom declaration order (`1..N`).
-/// 3. For container targets: create and start only the targeted containers without creating the
-///    parent pod.
+/// 3. For container targets: ensure the parent pod exists (creating it if missing) and create
+///    and start only the targeted containers.
 ///
 /// # Errors
 ///

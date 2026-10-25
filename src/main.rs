@@ -389,6 +389,10 @@ mod tests {
                 &["create", "recipe"],
                 "podman create --name example-stack-db --pod example-stack",
             ),
+            (
+                &["create", "recipe/db"],
+                "podman pod create --name example-stack --publish 8080:80/TCP --userns=keep-id\nCreate container 'example-stack-db': \npodman create --name example-stack-db --pod example-stack",
+            ),
             (&["remove", "recipe"], "podman rm example-stack-db\n"),
             (&["start", "recipe"], "podman start example-stack-db\n"),
             (&["stop", "recipe"], "podman pod stop example-stack\n"),
