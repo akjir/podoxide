@@ -22,14 +22,11 @@ use crate::core::context::Context;
 use crate::core::pod::PodCommand;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
-use crate::io::exec::command::{self, ExecOptions};
+use crate::io::exec::podman::{self, ExecContainer};
 use crate::io::psl::MAX_ARGS_PER_STMT;
-use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::string::{is_valid_text, is_valid_token, parse_ascii_u32};
 use super::{get_valid_commands, is_valid_command_entry, load_target_recipe};
 
-/// Base argument count (`exec`, `-it`, `-u`, `<user>`, `<container>`) before command tokens.
-const BASE_EXEC_ARG_COUNT: usize = 5;
 /// Initial capacity pre-allocated for parsed `execute` argv tokens.
 const INITIAL_EXEC_TOKENS_CAPACITY: usize = 8;
 
@@ -74,29 +71,6 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
     execute_with(context, &mut stdout, &mut stderr)
 }
 
-/// Builds the `podman exec -it` argument vector for `command` targeting `container_name`.
-#[must_use]
-fn build_exec_args(
-    command: &PodCommand,
-    container_name: &str,
-    execute_tokens: Vec<String>,
-) -> Vec<String> {
-    let capacity = bounded_capacity(
-        BASE_EXEC_ARG_COUNT.saturating_add(execute_tokens.len()),
-        MAX_COLLECTION_PREALLOC,
-    );
-    let mut arguments = Vec::with_capacity(capacity);
-    arguments.push(String::from("exec"));
-    arguments.push(String::from("-it"));
-    if let Some(user) = &command.user {
-        arguments.push(String::from("-u"));
-        arguments.push(user.clone());
-    }
-    arguments.push(String::from(container_name));
-    arguments.extend(execute_tokens);
-    arguments
-}
-
 /// Resolves, validates, and executes `command_spec` against an already loaded `recipe`.
 ///
 /// # Errors
@@ -113,19 +87,19 @@ fn exec_command<W: Write, E: Write>(
     let command = resolve_command(recipe, command_spec, stderr)?;
     let execute_tokens = validate_command(command, recipe.pod.line)?;
     let container_name = recipe.resolve_container_name(&command.container)?;
-    let arguments = build_exec_args(command, &container_name, execute_tokens);
     let prefix = format!(
         "Execute command '{}' in container '{container_name}': ",
         command.execute
     );
-    command::exec_with(
-        "podman",
-        &arguments,
-        &ExecOptions {
+    podman::exec_container(
+        &ExecContainer {
+            command: &execute_tokens,
+            container_name: &container_name,
             interactive: false,
-            prefix: &prefix,
-            simulate,
+            user: command.user.as_deref(),
         },
+        &prefix,
+        simulate,
         stdout,
         stderr,
     )
@@ -353,7 +327,7 @@ mod tests {
     use crate::core::recipe::Recipe;
     use crate::error::{CliErrorKind, PodError, RecipeErrorKind};
     use crate::io::system::fs;
-    use super::{build_exec_args, exec_command, execute_with, handle, split_execute_tokens};
+    use super::{exec_command, execute_with, handle, split_execute_tokens};
 
     const COMMANDS_RECIPE_PSL: &str = "\
 pod cmd_pod {
@@ -415,16 +389,10 @@ container absolute_db {
 ";
 
     #[test]
-    fn build_exec_args_and_split_execute_tokens_preserve_quoted_arguments() {
-        let mut command = PodCommand::new();
-        command.name = String::from("quoted");
-        command.container = String::from("*db");
-        command.execute = String::from("sh -c 'echo hello world'");
-
-        let tokens = split_execute_tokens(&command.execute).unwrap();
+    fn split_execute_tokens_preserves_quoted_arguments() {
         assert_eq!(
-            build_exec_args(&command, "cmd_pod-db", tokens),
-            vec!["exec", "-it", "cmd_pod-db", "sh", "-c", "echo hello world"]
+            split_execute_tokens("sh -c 'echo hello world'").unwrap(),
+            vec!["sh", "-c", "echo hello world"]
         );
 
         assert_eq!(

@@ -24,23 +24,44 @@ use crate::utilities::format::format_command;
 
 /// Execution options controlling simulation, interactive stdio inheritance, and output prefixing.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ExecOptions<'a> {
-    pub interactive: bool,
-    pub prefix: &'a str,
-    pub simulate: bool,
+pub(super) struct ExecOptions<'a> {
+    pub(super) interactive: bool,
+    pub(super) prefix: &'a str,
+    pub(super) simulate: bool,
 }
 
-impl ExecOptions<'_> {
-    /// Creates a new [`ExecOptions`] instance with default settings.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
+/// Executes `editor` with `file_path` interactively (or prints the command when `simulate` is `true`).
+///
+/// # Errors
+///
+/// Returns [`PodError`] if spawning the editor process fails.
+pub fn exec_editor_with<W, E>(
+    editor: &str,
+    file_path: &str,
+    simulate: bool,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), PodError>
+where
+    W: Write,
+    E: Write,
+{
+    exec_with(
+        editor,
+        &[file_path],
+        &ExecOptions {
+            interactive: true,
+            prefix: "",
+            simulate,
+        },
+        stdout,
+        stderr,
+    )
 }
 
 /// Executes `program` with `arguments` directly and returns captured `stdout` when exit status is 0.
 #[must_use]
-pub fn exec_capture(program: &str, arguments: &[&str]) -> Option<String> {
+pub(in crate::io) fn exec_capture(program: &str, arguments: &[&str]) -> Option<String> {
     let output = Command::new(program).args(arguments).output().ok()?;
     if !output.status.success() {
         return None;
@@ -53,7 +74,7 @@ pub fn exec_capture(program: &str, arguments: &[&str]) -> Option<String> {
 /// # Errors
 ///
 /// Returns [`PodError`] if spawning the process fails.
-pub fn exec_with<S, W, E>(
+pub(super) fn exec_with<S, W, E>(
     program: &str,
     arguments: &[S],
     options: &ExecOptions<'_>,
@@ -180,7 +201,7 @@ mod tests {
 
     #[test]
     fn exec_simulate_captured_interactive_and_error_handling() {
-        let default_options = ExecOptions::new();
+        let default_options = ExecOptions::default();
         assert!(!default_options.interactive);
         assert_eq!(default_options.prefix, "");
         assert!(!default_options.simulate);
@@ -334,7 +355,7 @@ mod tests {
         exec_with(
             "false",
             &Vec::<String>::new(),
-            &ExecOptions::new(),
+            &ExecOptions::default(),
             &mut Vec::new(),
             &mut fail_stderr,
         )

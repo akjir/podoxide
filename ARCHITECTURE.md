@@ -207,7 +207,7 @@ Executes primary pod lifecycle operations and displays container runtime status 
 | `src/core/modes/default/remove.rs`  | Removes target containers in reverse startup order and removes the parent pod (or targeted containers) without stopping them first. |
 | `src/core/modes/default/restart.rs` | Stops and starts existing target pods and containers (or targeted containers) without removing or recreating them (`stop` + `start`). |
 | `src/core/modes/default/start.rs`   | Starts existing stopped target pods and their containers (or targeted containers) in top-to-bottom declaration order. |
-| `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes or targeted containers, synthesizes `Not Found` and `Recipe Error` rows, and formats the runtime status table (including `TARGET NAMES` in `--full` mode). |
+| `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes or targeted containers, synthesizes `Not Found` and `Recipe Error` rows, and formats the runtime status table (including `TARGET NAME` in `--full` mode). |
 | `src/core/modes/default/stop.rs`    | Stops running target containers in reverse bottom-to-top order and stops the parent pod (or targeted containers) without removing them. |
 | `src/core/modes/default/up.rs`      | Loads and validates target recipes, then creates and starts pods and containers (or targeted containers) in top-to-bottom order (`create` + `start`). |
 | `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes (or targeted containers) and rebuilds them (`image update` + `reload`). |
@@ -272,9 +272,9 @@ Executes external commands directly via `std::process::Command` without shell in
 
 | File                     | Function |
 | :----------------------- | :------- |
-| `src/io/exec/mod.rs`     | Declares and re-exports process execution types and helpers. |
-| `src/io/exec/command.rs` | Executes external processes synchronously, interactively, or in simulate mode, and captures `stdout` / `stderr`. |
-| `src/io/exec/podman.rs`  | Provides Podman-specific process queries, including version verification (`5.8.0+`) and pod/container state checks. |
+| `src/io/exec/mod.rs`     | Declares and re-exports the central Podman API and editor execution helper. |
+| `src/io/exec/command.rs` | Provides internal (`pub(super)`) OS process runners (`exec_capture`, `exec_with`) and `exec_editor_with` for interactive file editing. |
+| `src/io/exec/podman.rs`  | Provides the central Podman CLI API for all pod, container, log, and image commands (`CreateContainer`, `CreatePod`, `ExecContainer`, `PodLogs`, lifecycle actions, version verification `5.8.0+`, and runtime inspection queries). |
 
 ### PodScript Language (`src/io/psl/`)
 

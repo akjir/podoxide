@@ -304,7 +304,7 @@ pods [OPTIONS] <action> [TARGETS...]
 | `--all`           | Include unmanaged Podman containers in `status` output alongside managed containers.    |
 | `--config=<name>` | Load an alternative configuration file by name or path.                                 |
 | `--debug`         | Enable verbose debug logging.                                                           |
-| `--full`          | Insert `TARGET NAMES` (`<recipe>/<index>` for managed containers, `-` for unmanaged) after `NAMES` and append `COMMAND` and `PORTS` columns to `status`. |
+| `--full`          | Insert `TARGET NAME` (`<recipe>/<index>` for managed containers, `-` for unmanaged) after `NAME` and append `COMMAND` and `PORTS` columns to `status`. |
 | `--simulate`      | Print generated Podman commands without executing them.                                 |
 
 ### Usage
@@ -345,7 +345,7 @@ pods down example-app @backend
 # Show runtime status for all configured recipes
 pods status
 
-# Show extended status (including TARGET NAMES, COMMAND, and PORTS) for a recipe or container
+# Show extended status (including TARGET NAME, COMMAND, and PORTS) for a recipe or container
 pods status --full example-app
 pods status --full example-app/1
 

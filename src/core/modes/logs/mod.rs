@@ -25,13 +25,11 @@ use crate::core::context::{Context, Flags, LogsAction, ModeAction};
 use crate::core::log;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError};
-use crate::io::exec::command::{self, ExecOptions};
+use crate::io::exec::podman::{self, PodLogs};
 use crate::utilities::string::{is_valid_target_segment, is_valid_token};
 
 /// Output prefix printed before simulating or executing the `podman pod logs` command.
 const LOGS_PREFIX: &str = "Execute log command: ";
-/// Upper bound on the number of arguments passed to `podman pod logs`.
-const MAX_LOGS_ARGS: usize = 16;
 
 /// Dispatches `logs` mode execution to the resolved sub-action (`follow`, `help`, or `show`).
 ///
@@ -86,80 +84,22 @@ pub(super) fn execute_logs_with<W: Write, E: Write>(
     let (recipe_name, container_spec) = parse_target(target)?;
     let (pod_id, container_name) =
         load_and_resolve_target(context, recipe_name, container_spec)?;
-    let arguments = build_logs_args(
-        &context.flags,
-        follow,
-        container_name.as_deref(),
-        &pod_id,
-    )?;
-    command::exec_with(
-        "podman",
-        &arguments,
-        &ExecOptions {
-            interactive: true,
-            prefix: LOGS_PREFIX,
-            simulate: context.config.simulate,
+    validate_log_flags(&context.flags)?;
+    podman::logs_pod(
+        &PodLogs {
+            container_name: container_name.as_deref(),
+            follow,
+            pod_name: &pod_id,
+            since: context.flags.since.as_deref(),
+            tail: context.flags.tail.as_deref(),
+            timestamps: context.flags.timestamps,
+            until: context.flags.until.as_deref(),
         },
+        LOGS_PREFIX,
+        context.config.simulate,
         stdout,
         stderr,
     )
-}
-
-/// Validates an optional log flag value and appends `(flag, value)` to `arguments` when present.
-///
-/// # Errors
-///
-/// Returns [`PodError`] with [`CliErrorKind::InvalidFlagValue`] if `value` is not a valid single token.
-fn append_flag_pair<'a>(
-    arguments: &mut Vec<&'a str>,
-    flag: &'a str,
-    value: Option<&'a str>,
-) -> Result<(), PodError> {
-    let Some(raw_value) = value else {
-        return Ok(());
-    };
-    if !is_valid_token(raw_value) {
-        return Err(PodError::from(CliError::with_argument(
-            CliErrorKind::InvalidFlagValue,
-            raw_value,
-        )));
-    }
-    arguments.push(flag);
-    arguments.push(raw_value);
-    Ok(())
-}
-
-/// Builds the `podman pod logs` argument vector for `pod_id` and optional `container_name`.
-///
-/// # Errors
-///
-/// Returns [`PodError`] if any optional flag in `flags` (`--since`, `--until`, `--tail`) contains an invalid value.
-fn build_logs_args<'a>(
-    flags: &'a Flags,
-    follow: bool,
-    container_name: Option<&'a str>,
-    pod_id: &'a str,
-) -> Result<Vec<&'a str>, PodError> {
-    let mut arguments = Vec::with_capacity(MAX_LOGS_ARGS);
-    arguments.push("pod");
-    arguments.push("logs");
-    arguments.push("-n");
-    arguments.push("--color");
-    if follow {
-        arguments.push("-f");
-    }
-    append_flag_pair(&mut arguments, "--since", flags.since.as_deref())?;
-    append_flag_pair(&mut arguments, "--until", flags.until.as_deref())?;
-    append_flag_pair(&mut arguments, "--tail", flags.tail.as_deref())?;
-    if flags.timestamps {
-        arguments.push("--timestamps");
-    }
-    if let Some(container) = container_name {
-        arguments.push("-c");
-        arguments.push(container);
-    }
-    arguments.push(pod_id);
-    Ok(arguments)
 }
 
 /// Extracts the single positional `<recipe>[/<container>]` parameter from `context.parameters`.
@@ -223,6 +163,27 @@ fn parse_target(target: &str) -> Result<(&str, Option<&str>), PodError> {
         )));
     }
     Ok((target, None))
+}
+
+/// Validates `--since`, `--until`, and `--tail` flag values in `flags`.
+fn validate_log_flags(flags: &Flags) -> Result<(), PodError> {
+    validate_optional_flag(flags.since.as_deref())?;
+    validate_optional_flag(flags.until.as_deref())?;
+    validate_optional_flag(flags.tail.as_deref())
+}
+
+/// Validates that an optional flag `value` (when `Some`) is a valid single token.
+fn validate_optional_flag(value: Option<&str>) -> Result<(), PodError> {
+    let Some(raw_value) = value else {
+        return Ok(());
+    };
+    if !is_valid_token(raw_value) {
+        return Err(PodError::from(CliError::with_argument(
+            CliErrorKind::InvalidFlagValue,
+            raw_value,
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

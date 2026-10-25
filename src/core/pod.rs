@@ -24,13 +24,9 @@ use crate::core::container;
 use crate::core::log;
 use crate::core::recipe::Recipe;
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
-use crate::io::exec::command::{self, ExecOptions};
-use crate::utilities::collection::{
-    MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity, is_valid_option_value,
-};
+use crate::io::exec::podman::{self, CreatePod};
+use crate::utilities::collection::is_valid_option_value;
 use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_token};
-
-const BASE_POD_CREATE_ARG_COUNT: usize = 4;
 
 /// Pod configuration and custom command definitions from the `pod` block of a `.pod` recipe.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -54,37 +50,6 @@ impl Pod {
         Self::default()
     }
 
-    /// Builds the `podman pod create` argument vector for this pod.
-    #[must_use]
-    pub fn build_create_args(&self) -> Vec<String> {
-        let capacity = bounded_capacity(
-            BASE_POD_CREATE_ARG_COUNT
-                .saturating_add(self.publish.len().saturating_mul(2))
-                .saturating_add(self.options.len().saturating_mul(2)),
-            MAX_COLLECTION_PREALLOC,
-        );
-        let mut arguments = Vec::with_capacity(capacity);
-        arguments.push(String::from("pod"));
-        arguments.push(String::from("create"));
-        arguments.push(String::from("--name"));
-        arguments.push(self.id.clone());
-        append_publish_arguments(&mut arguments, &self.publish);
-        append_option_tokens(&mut arguments, &self.options);
-        arguments
-    }
-
-    /// Builds the `podman pod rm` argument vector for this pod.
-    #[must_use]
-    pub fn build_remove_args(&self) -> Vec<String> {
-        vec![String::from("pod"), String::from("rm"), self.id.clone()]
-    }
-
-    /// Builds the `podman pod stop` argument vector for this pod.
-    #[must_use]
-    pub fn build_stop_args(&self) -> Vec<String> {
-        vec![String::from("pod"), String::from("stop"), self.id.clone()]
-    }
-
     /// Creates this pod in Podman (`podman pod create`), writing command output to `stdout` and `stderr`.
     ///
     /// # Errors
@@ -97,16 +62,15 @@ impl Pod {
         stderr: &mut E,
     ) -> Result<(), PodError> {
         self.validate_create()?;
-        let arguments = self.build_create_args();
         let prefix = format!("Create pod '{}' ('{}'): ", self.name, self.id);
-        command::exec_with(
-            "podman",
-            &arguments,
-            &ExecOptions {
-                interactive: false,
-                prefix: &prefix,
-                simulate,
+        podman::create_pod(
+            &CreatePod {
+                options: &self.options,
+                pod_name: &self.id,
+                publish: &self.publish,
             },
+            &prefix,
+            simulate,
             stdout,
             stderr,
         )?;
@@ -154,19 +118,8 @@ impl Pod {
         stderr: &mut E,
     ) -> Result<(), PodError> {
         validate_pod_id(self)?;
-        let arguments = self.build_remove_args();
         let prefix = format!("Remove pod '{}' ('{}'): ", self.name, self.id);
-        command::exec_with(
-            "podman",
-            &arguments,
-            &ExecOptions {
-                interactive: false,
-                prefix: &prefix,
-                simulate,
-            },
-            stdout,
-            stderr,
-        )?;
+        podman::remove_pod(&self.id, &prefix, simulate, stdout, stderr)?;
         self.created.set(false);
         Ok(())
     }
@@ -183,19 +136,8 @@ impl Pod {
         stderr: &mut E,
     ) -> Result<(), PodError> {
         validate_pod_id(self)?;
-        let arguments = self.build_stop_args();
         let prefix = format!("Stop pod '{}' ('{}'): ", self.name, self.id);
-        command::exec_with(
-            "podman",
-            &arguments,
-            &ExecOptions {
-                interactive: false,
-                prefix: &prefix,
-                simulate,
-            },
-            stdout,
-            stderr,
-        )
+        podman::stop_pod(&self.id, &prefix, simulate, stdout, stderr)
     }
 
     /// Validates `self.id`, `self.publish`, and `self.options` before executing `podman pod create`.
@@ -528,14 +470,6 @@ pub fn update_with<W: Write, E: Write>(
     reload_with(recipe, simulate, stdout, stderr)
 }
 
-/// Appends `--publish <entry>` pairs from `publish_entries` into `arguments`.
-fn append_publish_arguments(arguments: &mut Vec<String>, publish_entries: &[String]) {
-    for entry in publish_entries {
-        arguments.push(String::from("--publish"));
-        arguments.push(entry.clone());
-    }
-}
-
 /// Validates that `pod.id` is a well-formed non-empty Podman pod name.
 fn validate_pod_id(pod: &Pod) -> Result<(), RecipeError> {
     if !is_valid_pod_or_container_name(&pod.id) {
@@ -747,31 +681,17 @@ mod tests {
             String::from("unknown"),
         ];
 
-        assert_eq!(
-            pod.build_create_args(),
-            vec![
-                "pod",
-                "create",
-                "--name",
-                "si_po",
-                "--publish",
-                "127.0.0.1:42:21/TCP",
-                "--publish",
-                "127.0.0.1::42",
-                "--unknown",
-                "thing",
-                "--another",
-                "unknown",
-            ]
-        );
-        assert_eq!(pod.build_stop_args(), vec!["pod", "stop", "si_po"]);
-        assert_eq!(pod.build_remove_args(), vec!["pod", "rm", "si_po"]);
-
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         assert!(pod.create_with(true, &mut stdout, &mut stderr).is_ok());
         assert!(pod.stop_with(true, &mut stdout, &mut stderr).is_ok());
         assert!(pod.remove_with(true, &mut stdout, &mut stderr).is_ok());
+        let simulated = String::from_utf8(stdout.clone()).unwrap();
+        assert!(simulated.contains(
+            "podman pod create --name si_po --publish 127.0.0.1:42:21/TCP --publish 127.0.0.1::42 --unknown thing --another unknown"
+        ));
+        assert!(simulated.contains("podman pod stop si_po"));
+        assert!(simulated.contains("podman pod rm si_po"));
 
         // After remove_with, ensure_created_with checks pod_exists again; when false, it creates the pod
         // and caches creation so subsequent calls skip both pod_exists and podman pod create.

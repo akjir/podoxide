@@ -24,7 +24,7 @@ use crate::core::context::Context;
 use crate::core::log::{self, MAX_LOG_MESSAGE_BYTES};
 use crate::core::recipe::Recipe;
 use crate::error::PodError;
-use crate::io::exec::command;
+use crate::io::exec::podman;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::format::format_recipe_error_hint;
 use crate::utilities::string::clamp_utf8_prefix;
@@ -32,14 +32,14 @@ use crate::utilities::string::clamp_utf8_prefix;
 const COLUMN_SEPARATOR: &str = "   ";
 const DEFAULT_COLUMN_COUNT: usize = 7;
 const DEFAULT_COLUMN_HEADERS: [&str; DEFAULT_COLUMN_COUNT] = [
-    "ID", "POD", "NAMES", "STATUS", "RESTARTS", "CREATED", "IMAGE",
+    "ID", "POD", "NAME", "STATUS", "RESTARTS", "CREATED", "IMAGE",
 ];
 const FULL_COLUMN_COUNT: usize = 10;
 const FULL_COLUMN_HEADERS: [&str; FULL_COLUMN_COUNT] = [
     "ID",
     "POD",
-    "NAMES",
-    "TARGET NAMES",
+    "NAME",
+    "TARGET NAME",
     "STATUS",
     "RESTARTS",
     "CREATED",
@@ -51,7 +51,6 @@ const INITIAL_STATUS_CAPACITY: usize = 16;
 const MAX_STATUS_RECORDS: usize = 1024;
 const MISSING_STATUS: &str = "Not Found";
 const MISSING_VALUE: &str = "-";
-const PS_FORMAT: &str = "{{.ID}};;;{{.Image}};;;{{.Command}};;;{{.CreatedAt}};;;{{.Status}};;;{{.Ports}};;;{{.Names}};;;{{.PodName}};;;{{.Restarts}}";
 const RECIPE_ERROR_STATUS: &str = "Recipe Error";
 
 /// Expected metadata for a managed container declared in a configured `.pod` recipe.
@@ -71,12 +70,12 @@ struct StatusRow<'a> {
     created: &'a str,
     id: &'a str,
     image: &'a str,
-    names: &'a str,
+    name: &'a str,
     pod: &'a str,
     ports: &'a str,
     restarts: &'a str,
     status: &'a str,
-    target_names: &'a str,
+    target_name: &'a str,
 }
 
 impl<'a> StatusRow<'a> {
@@ -86,7 +85,7 @@ impl<'a> StatusRow<'a> {
         [
             self.id,
             self.pod,
-            self.names,
+            self.name,
             self.status,
             self.restarts,
             self.created,
@@ -100,8 +99,8 @@ impl<'a> StatusRow<'a> {
         [
             self.id,
             self.pod,
-            self.names,
-            self.target_names,
+            self.name,
+            self.target_name,
             self.status,
             self.restarts,
             self.created,
@@ -113,35 +112,35 @@ impl<'a> StatusRow<'a> {
 
     /// Creates a synthesized `"Not Found"` [`StatusRow`] for a missing managed container.
     #[must_use]
-    const fn missing(names: &'a str, pod: &'a str, target_names: &'a str) -> Self {
+    const fn missing(name: &'a str, pod: &'a str, target_name: &'a str) -> Self {
         Self {
             command: MISSING_VALUE,
             created: MISSING_VALUE,
             id: MISSING_VALUE,
             image: MISSING_VALUE,
-            names,
+            name,
             pod,
             ports: MISSING_VALUE,
             restarts: MISSING_VALUE,
             status: MISSING_STATUS,
-            target_names,
+            target_name,
         }
     }
 
     /// Creates a synthesized `"Recipe Error"` [`StatusRow`] for a missing or invalid `.pod` recipe.
     #[must_use]
-    const fn recipe_error(names: &'a str) -> Self {
+    const fn recipe_error(name: &'a str) -> Self {
         Self {
             command: MISSING_VALUE,
             created: MISSING_VALUE,
             id: MISSING_VALUE,
             image: MISSING_VALUE,
-            names,
+            name,
             pod: MISSING_VALUE,
             ports: MISSING_VALUE,
             restarts: MISSING_VALUE,
             status: RECIPE_ERROR_STATUS,
-            target_names: names,
+            target_name: name,
         }
     }
 }
@@ -163,8 +162,8 @@ impl<'a> StatusRow<'a> {
 /// 3. Filter or merge container records (`--all` includes unmanaged host containers; missing
 ///    managed containers are synthesized with status `"Not Found"`; missing or invalid recipes
 ///    are synthesized with status `"Recipe Error"`).
-/// 4. Sort rows by `(pod, names)` and print the aligned status table (`--full` inserts
-///    `TARGET NAMES` after `NAMES` and appends `COMMAND` and `PORTS` columns), followed by a
+/// 4. Sort rows by `(pod, name)` and print the aligned status table (`--full` inserts
+///    `TARGET NAME` after `NAME` and appends `COMMAND` and `PORTS` columns), followed by a
 ///    `pods recipe inspect` hint when any targeted recipe failed inspection.
 ///
 /// # Errors
@@ -172,8 +171,8 @@ impl<'a> StatusRow<'a> {
 /// Returns [`PodError`] if target expansion or container resolution fails or `podman ps` fails.
 pub fn handle(context: &Context) -> Result<(), PodError> {
     let mut stdout = io::stdout().lock();
-    let mut capture = |arguments: &[&str]| command::exec_capture("podman", arguments);
-    execute_with(context, &mut capture, &mut stdout)
+    let mut query_status = podman::query_ps_status;
+    execute_with(context, &mut query_status, &mut stdout)
 }
 
 /// Appends synthesized `"Not Found"` rows for expected containers absent from `found_names`.
@@ -209,7 +208,7 @@ fn append_recipe_error_rows<'a>(
     }
 }
 
-/// Filters or merges `podman ps` output with `expected` managed containers and `invalid_recipes`, sorting the result by `(pod, names)`.
+/// Filters or merges `podman ps` output with `expected` managed containers and `invalid_recipes`, sorting the result by `(pod, name)`.
 #[must_use]
 fn build_display_rows<'a>(
     ps_output: &'a str,
@@ -234,9 +233,9 @@ fn build_display_rows<'a>(
         let Some(mut row) = parse_status_record(line) else {
             continue;
         };
-        if let Some(expected_container) = expected.get(row.names) {
-            row.target_names = expected_container.target_name.as_str();
-            found_names.insert(row.names);
+        if let Some(expected_container) = expected.get(row.name) {
+            row.target_name = expected_container.target_name.as_str();
+            found_names.insert(row.name);
             display_rows.push(row);
         } else if include_all {
             display_rows.push(row);
@@ -248,7 +247,7 @@ fn build_display_rows<'a>(
     display_rows.sort_unstable_by(|left, right| {
         left.pod
             .cmp(right.pod)
-            .then_with(|| left.names.cmp(right.names))
+            .then_with(|| left.name.cmp(right.name))
     });
     display_rows
 }
@@ -302,13 +301,17 @@ fn compute_column_widths(rows: &[StatusRow<'_>], is_full: bool) -> [usize; FULL_
 }
 
 /// Orchestrates `pods status` target resolution, Podman querying, recipe cross-referencing, and table rendering.
-fn execute_with<W, F>(context: &Context, capture: &mut F, stdout: &mut W) -> Result<(), PodError>
+fn execute_with<W, F>(
+    context: &Context,
+    query_status: &mut F,
+    stdout: &mut W,
+) -> Result<(), PodError>
 where
     W: Write,
-    F: FnMut(&[&str]) -> Option<String>,
+    F: FnMut() -> Option<String>,
 {
     let (expected, invalid_recipes) = resolve_expected_containers(context)?;
-    let ps_output = query_podman_status(capture)?;
+    let ps_output = query_podman_status(query_status)?;
     let display_rows = build_display_rows(
         &ps_output,
         &expected,
@@ -409,7 +412,7 @@ fn parse_status_record(line: &str) -> Option<StatusRow<'_>> {
     let (image, rest) = rest.split_once(";;;")?;
     let (rest, restarts) = rest.rsplit_once(";;;")?;
     let (rest, pod) = rest.rsplit_once(";;;")?;
-    let (rest, names) = rest.rsplit_once(";;;")?;
+    let (rest, name) = rest.rsplit_once(";;;")?;
     let (rest, ports) = rest.rsplit_once(";;;")?;
     let (rest, status) = rest.rsplit_once(";;;")?;
     let (command, created) = rest.rsplit_once(";;;")?;
@@ -418,12 +421,12 @@ fn parse_status_record(line: &str) -> Option<StatusRow<'_>> {
         created,
         id,
         image,
-        names,
+        name,
         pod,
         ports,
         restarts,
         status,
-        target_names: MISSING_VALUE,
+        target_name: MISSING_VALUE,
     })
 }
 
@@ -439,13 +442,12 @@ fn push_padded_cell(buffer: &mut String, value: &str, width: usize) {
     }
 }
 
-/// Queries `podman ps -a --format` via `capture` and returns the raw output.
-fn query_podman_status<F>(capture: &mut F) -> Result<String, PodError>
+/// Queries `podman ps -a` status output via `query_status` and returns the raw output.
+fn query_podman_status<F>(query_status: &mut F) -> Result<String, PodError>
 where
-    F: FnMut(&[&str]) -> Option<String>,
+    F: FnMut() -> Option<String>,
 {
-    capture(&["ps", "-a", "--format", PS_FORMAT])
-        .ok_or_else(|| PodError::from(io::Error::other("Failed to query podman status.")))
+    query_status().ok_or_else(|| PodError::from(io::Error::other("Failed to query podman status.")))
 }
 
 /// Resolves expected managed containers and invalid recipes from `<recipe>/<container>` targets, `@<group>`/`<recipe>` targets, or all configured recipes.
@@ -542,9 +544,8 @@ mod tests {
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
     use crate::io::system::fs;
     use super::{
-        ExpectedContainer, MAX_STATUS_RECORDS, PS_FORMAT, build_display_rows,
-        collect_expected_containers, execute_with, format_table_row, handle, parse_status_record,
-        update_column_widths,
+        ExpectedContainer, MAX_STATUS_RECORDS, build_display_rows, collect_expected_containers,
+        execute_with, format_table_row, handle, parse_status_record, update_column_widths,
     };
 
     const MOCK_PS_OUTPUT: &str = "\
@@ -627,13 +628,13 @@ container \"*app-1\" {
             String::from("recipe_011_simple_container/app-1"),
         ];
 
-        let mut capture = |_: &[&str]| Some(String::from(MOCK_PS_OUTPUT));
+        let mut capture = || Some(String::from(MOCK_PS_OUTPUT));
         let mut stdout = Vec::new();
         execute_with(&context, &mut capture, &mut stdout).unwrap();
         let output = String::from_utf8(stdout).unwrap();
 
-        // Only targeted containers are rendered, with their 1-based `<recipe>/<index>` TARGET NAMES.
-        assert!(output.contains("TARGET NAMES"));
+        // Only targeted containers are rendered, with their 1-based `<recipe>/<index>` TARGET NAME.
+        assert!(output.contains("TARGET NAME"));
         assert!(output.contains("recipe_017_container_naming/1"));
         assert!(output.contains("recipe_017_container_naming/2"));
         assert!(output.contains("recipe_011_simple_container/1"));
@@ -643,7 +644,7 @@ container \"*app-1\" {
         // Unknown container in a configured recipe fails before querying podman.
         context.parameters = vec![String::from("recipe_017_container_naming/nonexistent")];
         let mut never_capture =
-            |_: &[&str]| -> Option<String> { panic!("podman ps should not be called") };
+            || -> Option<String> { panic!("podman ps should not be called") };
         let error = execute_with(&context, &mut never_capture, &mut Vec::new()).unwrap_err();
         match error {
             PodError::Recipe(recipe_error) => {
@@ -687,7 +688,7 @@ container \"*app-1\" {
         context.parameters = vec![String::from("unknown_recipe")];
         assert!(handle(&context).is_err());
         let mut called = false;
-        let mut never_capture = |_: &[&str]| -> Option<String> {
+        let mut never_capture = || -> Option<String> {
             called = true;
             None
         };
@@ -703,7 +704,7 @@ container \"*app-1\" {
         // 2. Group target (@all) resolves and renders expected containers and Recipe Error rows.
         context.parameters = vec![String::from("@all")];
         let mut group_stdout = Vec::new();
-        let mut mock_capture = |_: &[&str]| Some(String::from(MOCK_PS_OUTPUT));
+        let mut mock_capture = || Some(String::from(MOCK_PS_OUTPUT));
         execute_with(&context, &mut mock_capture, &mut group_stdout).unwrap();
         let group_output = String::from_utf8(group_stdout).unwrap();
         assert!(group_output.contains("test_simple_cnt_pod-app-1"));
@@ -722,7 +723,7 @@ container \"*app-1\" {
         ));
 
         // 3. Failed `podman ps` returns PodError::Io containing "Failed to query podman status."
-        let mut fail_capture = |_: &[&str]| -> Option<String> { None };
+        let mut fail_capture = || -> Option<String> { None };
         let ps_error = execute_with(&context, &mut fail_capture, &mut Vec::new()).unwrap_err();
         assert!(
             ps_error
@@ -734,7 +735,7 @@ container \"*app-1\" {
         let mut empty_context = Context::new();
         empty_context.config.pods.path = temp_dir.join("pods");
         empty_context.config.recipes.path = temp_dir.join("recipes");
-        let mut unmanaged_only_capture = |_: &[&str]| {
+        let mut unmanaged_only_capture = || {
             Some(String::from(
                 "c3d4e5f6a1b2;;;busybox;;;sh;;;1 day ago;;;Exited (0) 1 day ago;;;;;;unmanaged;;;;;;0\n",
             ))
@@ -818,9 +819,9 @@ container \"*app-1\" {
         context.config = config;
         context.parameters = vec![String::from("recipe_011_simple_container")];
 
-        let mut captured_args = Vec::new();
-        let mut capture = |arguments: &[&str]| -> Option<String> {
-            captured_args = arguments.iter().map(|item| (*item).to_owned()).collect();
+        let mut query_count = 0usize;
+        let mut capture = || -> Option<String> {
+            query_count += 1;
             Some(String::from(MOCK_PS_OUTPUT))
         };
 
@@ -828,17 +829,17 @@ container \"*app-1\" {
         execute_with(&context, &mut capture, &mut stdout).unwrap();
 
         let output = String::from_utf8(stdout).unwrap();
-        let expected_header = "ID             POD                   NAMES                       STATUS                 RESTARTS   CREATED       IMAGE       \n";
+        let expected_header = "ID             POD                   NAME                        STATUS                 RESTARTS   CREATED       IMAGE       \n";
         let expected_row = "a1b2c3d4e5f6   test_simple_cnt_pod   test_simple_cnt_pod-app-1   Up 2 hours (healthy)   0          2 hours ago   nginx:alpine\n";
         assert_eq!(output, format!("{expected_header}{expected_row}"));
 
-        // With --full, TARGET NAMES is inserted after NAMES, and COMMAND and PORTS columns are appended.
+        // With --full, TARGET NAME is inserted after NAME, and COMMAND and PORTS columns are appended.
         context.flags.full = true;
         let mut full_stdout = Vec::new();
         execute_with(&context, &mut capture, &mut full_stdout).unwrap();
-        assert_eq!(captured_args, vec!["ps", "-a", "--format", PS_FORMAT]);
+        assert_eq!(query_count, 2);
         let full_output = String::from_utf8(full_stdout).unwrap();
-        let expected_full_header = "ID             POD                   NAMES                       TARGET NAMES                    STATUS                 RESTARTS   CREATED       IMAGE          COMMAND                  PORTS               \n";
+        let expected_full_header = "ID             POD                   NAME                        TARGET NAME                     STATUS                 RESTARTS   CREATED       IMAGE          COMMAND                  PORTS               \n";
         let expected_full_row = "a1b2c3d4e5f6   test_simple_cnt_pod   test_simple_cnt_pod-app-1   recipe_011_simple_container/1   Up 2 hours (healthy)   0          2 hours ago   nginx:alpine   nginx -g 'daemon off;'   0.0.0.0:8080->80/tcp\n";
         assert_eq!(
             full_output,
@@ -849,19 +850,19 @@ container \"*app-1\" {
     }
 
     #[test]
-    fn execute_with_synthesizes_not_found_rows_sorts_by_pod_and_names_and_supports_all_flag() {
+    fn execute_with_synthesizes_not_found_rows_sorts_by_pod_and_name_and_supports_all_flag() {
         let (temp_dir, config) = create_status_workspace("missing_and_all");
         let mut context = Context::new();
         context.config = config;
         context.parameters = vec![String::from("recipe_017_container_naming")];
 
-        let mut capture = |_: &[&str]| Some(String::from(MOCK_PS_OUTPUT));
+        let mut capture = || Some(String::from(MOCK_PS_OUTPUT));
         let mut stdout = Vec::new();
         execute_with(&context, &mut capture, &mut stdout).unwrap();
         let output = String::from_utf8(stdout).unwrap();
 
         let expected_table = "\
-ID             POD        NAMES            STATUS      RESTARTS   CREATED      IMAGE        \n\
+ID             POD        NAME             STATUS      RESTARTS   CREATED      IMAGE        \n\
 b2c3d4e5f6a1   test_pod   test_pod-1       Up 5 mins   1          5 mins ago   alpine:latest\n\
 -              test_pod   test_pod-my-db   Not Found   -          -            -            \n\
 -              test_pod   totally_custom   Not Found   -          -            -            \n";
@@ -875,7 +876,7 @@ b2c3d4e5f6a1   test_pod   test_pod-1       Up 5 mins   1          5 mins ago   a
         let all_output = String::from_utf8(all_stdout).unwrap();
 
         let expected_all_table = "\
-ID             POD                   NAMES                       STATUS                 RESTARTS   CREATED       IMAGE        \n\
+ID             POD                   NAME                        STATUS                 RESTARTS   CREATED       IMAGE        \n\
 c3d4e5f6a1b2                         unmanaged_container         Exited (0) 1 day ago   0          1 day ago     busybox      \n\
 -              -                     invalid_recipe              Recipe Error           -          -             -            \n\
 -              -                     missing_recipe              Recipe Error           -          -             -            \n\
@@ -887,7 +888,7 @@ a1b2c3d4e5f6   test_simple_cnt_pod   test_simple_cnt_pod-app-1   Up 2 hours (hea
 Recipes 'invalid_recipe' and 'missing_recipe' have errors! Run 'pods recipe inspect <recipe>' for details.\n";
         assert_eq!(all_output, expected_all_table);
 
-        // With --all --full, unmanaged containers display `-` in TARGET NAMES, Recipe Error rows display `<recipe>`, and managed containers display `<recipe>/<index>`.
+        // With --all --full, unmanaged containers display `-` in TARGET NAME, Recipe Error rows display `<recipe>`, and managed containers display `<recipe>/<index>`.
         context.flags.full = true;
         let mut all_full_stdout = Vec::new();
         execute_with(&context, &mut capture, &mut all_full_stdout).unwrap();

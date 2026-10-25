@@ -19,7 +19,7 @@ use std::io::{self, Write};
 
 use crate::core::context::Context;
 use crate::error::PodError;
-use crate::io::exec::command::{self, ExecOptions};
+use crate::io::exec::command;
 use crate::utilities::path::validate_editor;
 use super::{build_recipe_path, extract_registered_recipe};
 
@@ -63,14 +63,10 @@ fn edit_with<W: Write, E: Write>(
     let editor = validate_editor(&context.config.editor)?;
     let recipe_path = build_recipe_path(&context.config.recipes.path, recipe_name)?;
     let recipe_argument = recipe_path.to_string_lossy();
-    command::exec_with(
+    command::exec_editor_with(
         editor,
-        &[recipe_argument.as_ref()],
-        &ExecOptions {
-            interactive: true,
-            prefix: "",
-            simulate: context.config.simulate,
-        },
+        recipe_argument.as_ref(),
+        context.config.simulate,
         stdout,
         stderr,
     )

@@ -22,18 +22,15 @@ use std::path::Path;
 use crate::core::log;
 use crate::core::pod::Pod;
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
-use crate::io::exec::command::{self, ExecOptions};
-use crate::io::exec::podman;
+use crate::io::exec::podman::{self, CreateContainer};
 use crate::utilities::collection::{
-    MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity, is_valid_option_value,
+    MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value,
 };
 use crate::utilities::path::{is_valid_directory, is_valid_directory_path};
 use crate::utilities::string::{
     contains_control_or_bidi, contains_control_or_whitespace, is_valid_pod_or_container_name,
     is_valid_text, is_valid_token, normalize_name,
 };
-
-const BASE_CREATE_ARG_COUNT: usize = 7;
 
 /// Container specification and runtime arguments from a `container` block in a `.pod` recipe.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -53,62 +50,6 @@ impl Container {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Builds the `podman create` argument vector for this container inside `pod`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`RecipeError`] when pod/container fields are invalid or a volume mount cannot be resolved.
-    pub fn build_create_args(&self, pod: &Pod) -> Result<Vec<String>, RecipeError> {
-        self.validate_create(pod)?;
-        let label = container_label(&self.name);
-        let capacity = bounded_capacity(
-            BASE_CREATE_ARG_COUNT
-                .saturating_add(self.volumes.len().saturating_mul(2))
-                .saturating_add(self.options.len().saturating_mul(2))
-                .saturating_add(self.commands.len()),
-            MAX_COLLECTION_PREALLOC,
-        );
-        let mut arguments = Vec::with_capacity(capacity);
-        arguments.push(String::from("create"));
-        arguments.push(String::from("--name"));
-        arguments.push(self.name.clone());
-        arguments.push(String::from("--pod"));
-        arguments.push(pod.id.clone());
-        if !self.restart.is_empty() {
-            arguments.push(String::from("--restart"));
-            arguments.push(self.restart.clone());
-        }
-        append_volume_arguments(&mut arguments, &self.volumes, &pod.path, self.line, label)?;
-        append_option_tokens(&mut arguments, &self.options);
-        arguments.push(resolve_image_reference(self, pod));
-        arguments.extend(self.commands.iter().cloned());
-        Ok(arguments)
-    }
-
-    /// Builds the `podman pull` argument vector for this container's image inside `pod`.
-    #[must_use]
-    pub fn build_pull_args(&self, pod: &Pod) -> Vec<String> {
-        vec![String::from("pull"), resolve_image_reference(self, pod)]
-    }
-
-    /// Builds the `podman rm` argument vector for this container.
-    #[must_use]
-    pub fn build_remove_args(&self) -> Vec<String> {
-        vec![String::from("rm"), self.name.clone()]
-    }
-
-    /// Builds the `podman start` argument vector for this container.
-    #[must_use]
-    pub fn build_start_args(&self) -> Vec<String> {
-        vec![String::from("start"), self.name.clone()]
-    }
-
-    /// Builds the `podman stop` argument vector for this container.
-    #[must_use]
-    pub fn build_stop_args(&self) -> Vec<String> {
-        vec![String::from("stop"), self.name.clone()]
     }
 
     /// Resolves and normalizes the container name using `pod_id` and its 1-based `index`.
@@ -317,18 +258,8 @@ pub fn pull_with<W: Write, E: Write>(
     container.validate()?;
     validate_optional_token(&pod.registry, RecipeErrorKind::InvalidRegistry, pod.line)?;
     log::write_print(stdout, &format!("Update container '{}' ...", container.name));
-    let arguments = container.build_pull_args(pod);
-    command::exec_with(
-        "podman",
-        &arguments,
-        &ExecOptions {
-            interactive: false,
-            prefix: "",
-            simulate,
-        },
-        stdout,
-        stderr,
-    )
+    let image_reference = resolve_image_reference(container, pod);
+    podman::pull_image(&image_reference, "", simulate, stdout, stderr)
 }
 
 /// Stops, removes, recreates, and starts `container` inside `pod` (`down` + `up`).
@@ -382,19 +313,8 @@ pub fn remove_with<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<(), PodError> {
     validate_container_name(container)?;
-    let arguments = container.build_remove_args();
     let prefix = format!("Remove container '{}': ", container.name);
-    command::exec_with(
-        "podman",
-        &arguments,
-        &ExecOptions {
-            interactive: false,
-            prefix: &prefix,
-            simulate,
-        },
-        stdout,
-        stderr,
-    )
+    podman::remove_container(&container.name, &prefix, simulate, stdout, stderr)
 }
 
 /// Resolves a raw container name (`""`, `"*suffix"`, or `"name"`) against `pod_id` and 1-based `index`.
@@ -510,19 +430,8 @@ pub fn start_with<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<(), PodError> {
     validate_container_name(container)?;
-    let arguments = container.build_start_args();
     let prefix = format!("Start container '{}': ", container.name);
-    command::exec_with(
-        "podman",
-        &arguments,
-        &ExecOptions {
-            interactive: false,
-            prefix: &prefix,
-            simulate,
-        },
-        stdout,
-        stderr,
-    )
+    podman::start_container(&container.name, &prefix, simulate, stdout, stderr)
 }
 
 /// Stops `container` in Podman (`podman stop`).
@@ -548,19 +457,8 @@ pub fn stop_with<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<(), PodError> {
     validate_container_name(container)?;
-    let arguments = container.build_stop_args();
     let prefix = format!("Stop container '{}': ", container.name);
-    command::exec_with(
-        "podman",
-        &arguments,
-        &ExecOptions {
-            interactive: false,
-            prefix: &prefix,
-            simulate,
-        },
-        stdout,
-        stderr,
-    )
+    podman::stop_container(&container.name, &prefix, simulate, stdout, stderr)
 }
 
 /// Creates and starts `container` inside `pod` (`create` + `start`).
@@ -618,22 +516,6 @@ pub fn update_with<W: Write, E: Write>(
     reload_with(container, pod, simulate, stdout, stderr)
 }
 
-/// Appends `--volume <mount>` pairs for `volumes` into `arguments`.
-fn append_volume_arguments(
-    arguments: &mut Vec<String>,
-    volumes: &[VolumeMount],
-    pod_path: &Path,
-    line: usize,
-    label: &str,
-) -> Result<(), RecipeError> {
-    for volume in volumes {
-        let mount = format_volume_mount(volume, pod_path, line, label)?;
-        arguments.push(String::from("--volume"));
-        arguments.push(mount);
-    }
-    Ok(())
-}
-
 /// Returns `name` when non-empty, or `"container"` as a fallback error token.
 #[must_use]
 const fn container_label(name: &str) -> &str {
@@ -658,20 +540,42 @@ where
     E: Write,
     F: FnOnce(&str) -> bool,
 {
-    let arguments = container.build_create_args(pod)?;
+    container.validate_create(pod)?;
+    let label = container_label(&container.name);
+    let volumes = format_volume_mounts(&container.volumes, &pod.path, container.line, label)?;
+    let image = resolve_image_reference(container, pod);
     pod.ensure_created_with(simulate, pod_exists, stdout, stderr)?;
     let prefix = format!("Create container '{}': ", container.name);
-    command::exec_with(
-        "podman",
-        &arguments,
-        &ExecOptions {
-            interactive: false,
-            prefix: &prefix,
-            simulate,
+    podman::create_container(
+        &CreateContainer {
+            commands: &container.commands,
+            container_name: &container.name,
+            image: &image,
+            options: &container.options,
+            pod_name: &pod.id,
+            restart: &container.restart,
+            volumes: &volumes,
         },
+        &prefix,
+        simulate,
         stdout,
         stderr,
     )
+}
+
+/// Formats all `volumes` against `pod_path` into Podman `--volume` specification strings.
+fn format_volume_mounts(
+    volumes: &[VolumeMount],
+    pod_path: &Path,
+    line: usize,
+    label: &str,
+) -> Result<Vec<String>, RecipeError> {
+    let capacity = bounded_capacity(volumes.len(), MAX_COLLECTION_PREALLOC);
+    let mut mounts = Vec::with_capacity(capacity);
+    for volume in volumes {
+        mounts.push(format_volume_mount(volume, pod_path, line, label)?);
+    }
+    Ok(mounts)
 }
 
 /// Evaluates whether `volumes` contains any mount with a relative host directory or volume name.
@@ -1171,11 +1075,12 @@ mod tests {
         base.line = 15;
 
         assert!(base.validate_create(&pod).is_ok());
-        let arguments_without_restart = base.build_create_args(&pod).unwrap();
+        let mut no_restart_out = Vec::new();
+        create_with(&base, &pod, true, &mut no_restart_out, &mut Vec::new()).unwrap();
         assert!(
-            !arguments_without_restart
-                .iter()
-                .any(|argument| argument == "--restart")
+            !String::from_utf8(no_restart_out)
+                .unwrap()
+                .contains("--restart")
         );
 
         let mut bad_name = base.clone();
@@ -1224,10 +1129,6 @@ mod tests {
                 target.validate_create(&pod).unwrap_err().kind,
                 RecipeErrorKind::InvalidContainerName
             );
-            assert_eq!(
-                target.build_create_args(&pod).unwrap_err().kind,
-                RecipeErrorKind::InvalidContainerName
-            );
             assert!(matches!(
                 create_with(&target, &pod, true, &mut Vec::new(), &mut Vec::new()),
                 Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::InvalidContainerName
@@ -1256,10 +1157,10 @@ mod tests {
             base.validate_create(&bad_pod_id).unwrap_err().kind,
             RecipeErrorKind::InvalidPodId
         );
-        assert_eq!(
-            base.build_create_args(&bad_pod_id).unwrap_err().kind,
-            RecipeErrorKind::InvalidPodId
-        );
+        assert!(matches!(
+            create_with(&base, &bad_pod_id, true, &mut Vec::new(), &mut Vec::new()),
+            Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::InvalidPodId
+        ));
 
         let mut bad_pod_publish = pod.clone();
         bad_pod_publish.publish = vec![String::from("--privileged")];
@@ -1281,10 +1182,16 @@ mod tests {
             base.validate_create(&bad_pod_registry).unwrap_err().kind,
             RecipeErrorKind::InvalidRegistry
         );
-        assert_eq!(
-            base.build_create_args(&bad_pod_registry).unwrap_err().kind,
-            RecipeErrorKind::InvalidRegistry
-        );
+        assert!(matches!(
+            create_with(
+                &base,
+                &bad_pod_registry,
+                true,
+                &mut Vec::new(),
+                &mut Vec::new()
+            ),
+            Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::InvalidRegistry
+        ));
         assert!(matches!(
             pull_with(&base, &bad_pod_registry, true, &mut Vec::new(), &mut Vec::new()),
             Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::InvalidRegistry

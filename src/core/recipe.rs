@@ -1200,9 +1200,9 @@ mod tests {
     use std::str::FromStr;
 
     use crate::core::config::Config;
-    use crate::core::container::VolumeMount;
+    use crate::core::container::{self, Container, VolumeMount};
     use crate::core::log;
-    use crate::core::pod::PodCommand;
+    use crate::core::pod::{Pod, PodCommand};
     use crate::error::{PodError, PslErrorKind, RecipeErrorKind};
     use crate::io::system::fs as system_fs;
     use super::{Recipe, load, validate_recipe_inner};
@@ -1227,6 +1227,34 @@ mod tests {
     ) {
         let error = validate_recipe_inner(recipe, config, file_name).unwrap_err();
         assert_eq!(error.kind, expected_kind);
+    }
+
+    fn simulate_container_create(container: &Container, pod: &Pod) -> String {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        pod.ensure_created_with(true, |_| true, &mut stdout, &mut stderr)
+            .unwrap();
+        container::create_with(container, pod, true, &mut stdout, &mut stderr).unwrap();
+        assert!(stderr.is_empty());
+        String::from_utf8(stdout)
+            .unwrap()
+            .lines()
+            .nth(1)
+            .unwrap()
+            .to_owned()
+    }
+
+    fn simulate_pod_create(pod: &Pod) -> String {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        pod.create_with(true, &mut stdout, &mut stderr).unwrap();
+        assert!(stderr.is_empty());
+        String::from_utf8(stdout)
+            .unwrap()
+            .lines()
+            .nth(1)
+            .unwrap()
+            .to_owned()
     }
 
     #[test]
@@ -1534,18 +1562,8 @@ container *cache {{
             let mut recipe = Recipe::from_str(&input).unwrap();
             validate_recipe_inner(&mut recipe, &config, "buci").unwrap();
             assert_eq!(
-                recipe.containers[0].build_create_args(&recipe.pod).unwrap(),
-                vec![
-                    "create",
-                    "--name",
-                    "buci-cache",
-                    "--pod",
-                    "buci",
-                    "--restart",
-                    "never",
-                    "--health-cmd=redis-cli ping | grep -q PONG || exit 1",
-                    "docker.io/valkey/valkey:9",
-                ]
+                simulate_container_create(&recipe.containers[0], &recipe.pod),
+                "podman create --name buci-cache --pod buci --restart never '--health-cmd=redis-cli ping | grep -q PONG || exit 1' docker.io/valkey/valkey:9"
             );
         }
 
@@ -1570,19 +1588,8 @@ container *cache {{
             let mut recipe = Recipe::from_str(&input).unwrap();
             validate_recipe_inner(&mut recipe, &config, "buci").unwrap();
             assert_eq!(
-                recipe.containers[0].build_create_args(&recipe.pod).unwrap(),
-                vec![
-                    "create",
-                    "--name",
-                    "buci-cache",
-                    "--pod",
-                    "buci",
-                    "--restart",
-                    "never",
-                    "--health-cmd",
-                    "redis-cli ping | grep -q PONG || exit 1",
-                    "docker.io/valkey/valkey:9",
-                ]
+                simulate_container_create(&recipe.containers[0], &recipe.pod),
+                "podman create --name buci-cache --pod buci --restart never --health-cmd 'redis-cli ping | grep -q PONG || exit 1' docker.io/valkey/valkey:9"
             );
         }
 
@@ -1685,20 +1692,8 @@ container *web {
             ]
         );
         assert_eq!(
-            recipe.pod.build_create_args(),
-            vec![
-                "pod",
-                "create",
-                "--name",
-                "stack",
-                "--publish",
-                "18080:80/TCP",
-                "--network",
-                "slirp4netns:port_handler=slirp4netns",
-                "--sysctl",
-                "net.ipv4.ip_unprivileged_port_start=80",
-                "--userns=keep-id:uid=1000,gid=1000",
-            ]
+            simulate_pod_create(&recipe.pod),
+            "podman pod create --name stack --publish 18080:80/TCP --network slirp4netns:port_handler=slirp4netns --sysctl net.ipv4.ip_unprivileged_port_start=80 '--userns=keep-id:uid=1000,gid=1000'"
         );
 
         assert_eq!(recipe.pod.commands.len(), 3);
@@ -1713,42 +1708,12 @@ container *web {
 
         assert_eq!(recipe.containers.len(), 2);
         assert_eq!(
-            recipe.containers[0].build_create_args(&recipe.pod).unwrap(),
-            vec![
-                "create",
-                "--name",
-                "stack-store",
-                "--pod",
-                "stack",
-                "--restart",
-                "never",
-                "--volume",
-                "/srv/storage/stack/store:/data:Z",
-                "registry.io/kv-store:7-alpine",
-            ]
+            simulate_container_create(&recipe.containers[0], &recipe.pod),
+            "podman create --name stack-store --pod stack --restart never --volume /srv/storage/stack/store:/data:Z registry.io/kv-store:7-alpine"
         );
         assert_eq!(
-            recipe.containers[1].build_create_args(&recipe.pod).unwrap(),
-            vec![
-                "create",
-                "--name",
-                "stack-web",
-                "--pod",
-                "stack",
-                "--restart",
-                "never",
-                "--volume",
-                "/srv/storage/stack/web:/srv/www:Z",
-                "--volume",
-                "/srv/storage/stack/config:/srv/www/config:Z",
-                "--volume",
-                "/srv/storage/stack/files:/srv/www/files:Z",
-                "--volume",
-                "/srv/storage/shared:/shared:z",
-                "--user",
-                "1000:1000",
-                "registry.io/web-service:20",
-            ]
+            simulate_container_create(&recipe.containers[1], &recipe.pod),
+            "podman create --name stack-web --pod stack --restart never --volume /srv/storage/stack/web:/srv/www:Z --volume /srv/storage/stack/config:/srv/www/config:Z --volume /srv/storage/stack/files:/srv/www/files:Z --volume /srv/storage/shared:/shared:z --user 1000:1000 registry.io/web-service:20"
         );
 
         let nginx_input = "\
@@ -1775,44 +1740,12 @@ container *app {
         let mut nginx_recipe = Recipe::from_str(nginx_input).unwrap();
         validate_recipe_inner(&mut nginx_recipe, &config, "nginx").unwrap();
         assert_eq!(
-            nginx_recipe.pod.build_create_args(),
-            vec![
-                "pod",
-                "create",
-                "--name",
-                "nginx",
-                "--publish",
-                "443:443/TCP",
-                "--publish",
-                "443:443/UDP",
-                "--network",
-                "slirp4netns:port_handler=slirp4netns",
-            ]
+            simulate_pod_create(&nginx_recipe.pod),
+            "podman pod create --name nginx --publish 443:443/TCP --publish 443:443/UDP --network slirp4netns:port_handler=slirp4netns"
         );
         assert_eq!(
-            nginx_recipe.containers[0]
-                .build_create_args(&nginx_recipe.pod)
-                .unwrap(),
-            vec![
-                "create",
-                "--name",
-                "nginx-app",
-                "--pod",
-                "nginx",
-                "--restart",
-                "never",
-                "--volume",
-                "/pods/nginx/nginx.conf:/etc/nginx/nginx.conf:ro,Z",
-                "--volume",
-                "/pods/nginx/certs:/etc/nginx/certs:ro,Z",
-                "--volume",
-                "/pods/nginx/bots:/etc/nginx/bots.d:ro,Z",
-                "--volume",
-                "/pods/nginx/config:/etc/nginx/conf.d:ro,Z",
-                "--volume",
-                "/pods/nginx/log:/var/log/nginx:Z",
-                "docker.io/nginx:stable-alpine",
-            ]
+            simulate_container_create(&nginx_recipe.containers[0], &nginx_recipe.pod),
+            "podman create --name nginx-app --pod nginx --restart never --volume '/pods/nginx/nginx.conf:/etc/nginx/nginx.conf:ro,Z' --volume '/pods/nginx/certs:/etc/nginx/certs:ro,Z' --volume '/pods/nginx/bots:/etc/nginx/bots.d:ro,Z' --volume '/pods/nginx/config:/etc/nginx/conf.d:ro,Z' --volume /pods/nginx/log:/var/log/nginx:Z docker.io/nginx:stable-alpine"
         );
     }
 

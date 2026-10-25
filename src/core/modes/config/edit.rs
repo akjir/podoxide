@@ -20,7 +20,7 @@ use std::path::Path;
 
 use crate::core::context::Context;
 use crate::error::{ConfigError, ConfigErrorKind, PodError};
-use crate::io::exec::command::{self, ExecOptions};
+use crate::io::exec::command;
 use crate::utilities::path::{
     extract_config_stem, has_parent_dir, sanitize_path_token, validate_editor,
 };
@@ -59,17 +59,7 @@ fn edit_with<W: Write, E: Write>(
 ) -> Result<(), PodError> {
     let editor = validate_editor(&context.config.editor)?;
     let config_path = validate_config_path(&context.config.path)?;
-    command::exec_with(
-        editor,
-        &[config_path],
-        &ExecOptions {
-            interactive: true,
-            prefix: "",
-            simulate: context.config.simulate,
-        },
-        stdout,
-        stderr,
-    )
+    command::exec_editor_with(editor, config_path, context.config.simulate, stdout, stderr)
 }
 
 /// Verifies that `path` is a safe UTF-8 configuration file path without `..` traversal or leading dashes.

@@ -20,8 +20,7 @@ use std::io::{self, Write};
 use crate::core::context::Context;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
-use crate::io::exec::command::{self, ExecOptions};
-use crate::io::exec::podman;
+use crate::io::exec::podman::{self, ExecContainer, SHELL_FALLBACK_COMMAND};
 use crate::utilities::string::{
     is_valid_pod_or_container_name, is_valid_target_segment, is_valid_text,
 };
@@ -30,8 +29,6 @@ use crate::utilities::string::{
 const CONNECT_PREFIX: &str = "Execute connect command: ";
 /// Default 1-based container index used when a recipe defines a single container.
 const DEFAULT_CONTAINER_INDEX: &str = "1";
-/// In-container shell detection script preferring `bash` with fallback to `sh`.
-const SHELL_FALLBACK_SCRIPT: &str = "command -v bash >/dev/null 2>&1 && exec bash || exec sh";
 
 /// Resolves the target container and opens an interactive shell session via `podman exec -it`.
 ///
@@ -61,7 +58,12 @@ const SHELL_FALLBACK_SCRIPT: &str = "command -v bash >/dev/null 2>&1 && exec bas
 pub fn handle(context: &Context) -> Result<(), PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
-    execute_with(context, podman::container_exists, &mut stdout, &mut stderr)
+    execute_with(
+        context,
+        podman::container_running,
+        &mut stdout,
+        &mut stderr,
+    )
 }
 
 /// Resolves the target container from `context`, checks runtime status via `is_running`, and runs `podman exec -it`.
@@ -93,22 +95,15 @@ where
         context.config.simulate,
         is_running,
     )?;
-    let arguments = [
-        "exec",
-        "-it",
-        container_name.as_str(),
-        "sh",
-        "-c",
-        SHELL_FALLBACK_SCRIPT,
-    ];
-    command::exec_with(
-        "podman",
-        &arguments,
-        &ExecOptions {
+    podman::exec_container(
+        &ExecContainer {
+            command: &SHELL_FALLBACK_COMMAND,
+            container_name: &container_name,
             interactive: true,
-            prefix: CONNECT_PREFIX,
-            simulate: context.config.simulate,
+            user: None,
         },
+        CONNECT_PREFIX,
+        context.config.simulate,
         stdout,
         stderr,
     )

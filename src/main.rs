@@ -83,7 +83,7 @@ fn verify_environment() -> Result<(), PodError> {
     let mut stderr = io::stderr().lock();
     verify_environment_with(
         system_env::check_os(),
-        podman::check_podman_version(),
+        podman::check_version(),
         system_env::runs_elevated(),
         &mut stdin,
         &mut stdout,

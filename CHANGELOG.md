@@ -28,7 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added `logs` mode (`pods logs` / `pods log`) with `show`, `follow`, and `help` actions and `--since`, `--until`, `--tail`, and `--timestamps` flags for fetching or streaming pod and container logs.
 - Added `recipe` mode (`pods recipe` / `pods rec`) with `list` (`--all`), `show`, `edit`, and `help` actions for listing configured and unlinked `.pod` recipes, viewing numbered recipe source lines, and opening recipes in the configured editor.
 - Added the `pods status` default mode action (`--all`, `--full`) for querying `podman ps -a`, cross-referencing managed recipes, synthesizing `Not Found` container rows, and rendering aligned runtime status tables.
-- Added `<recipe>/<container>` container targeting (`<recipe>/<index>`, `<recipe>/*<suffix>`, `<recipe>/<short_name>`, and `<recipe>/<full_name>`) to all default mode actions (`create`, `down`, `reload`, `remove`, `restart`, `start`, `status`, `stop`, `up`, and `update`) and `pods image update`, plus the `TARGET NAMES` column (`<recipe>/<index>`) after `NAMES` in `pods status --full`.
+- Added `<recipe>/<container>` container targeting (`<recipe>/<index>`, `<recipe>/*<suffix>`, `<recipe>/<short_name>`, and `<recipe>/<full_name>`) to all default mode actions (`create`, `down`, `reload`, `remove`, `restart`, `start`, `status`, `stop`, `up`, and `update`) and `pods image update`, plus the `TARGET NAME` column (`<recipe>/<index>`) after `NAME` in `pods status --full`.
 - Added `pods config inspect` (default `config` action) and `pods recipe inspect <recipe>` for validating `.pod` recipes via `Recipe::inspect`, reporting `[ERROR]` badges in `pods config inspect` and `pods recipe list`, and synthesizing `Recipe Error` rows in `pods status`.
 - Added support for bare-word `=` assigned quotes (`--flag='...'` and `--flag="..."`) in PSL directives and inner-quote validation (`is_valid_option_value`) for `option` directives in `pod` and `container` blocks.
 
@@ -38,6 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Changed `pods image prune` to check for prunable images before prompting, output `No images found to prune.` when none exist, and display the prunable image count and reclaimable disk space in the confirmation prompt.
 - Changed `pods config inspect` to report known and unreferenced recipe counts in `Directories:`, list unreferenced `.pod` recipe stems under `Unreferenced Recipes:`, and summarize missing, invalid, and unreferenced recipes in `Validation Summary:`.
 - Changed `pods config show` to print the raw `pods.conf` file with 1-based line numbers matching `pods recipe show <recipe>`.
+- Changed `src/io/exec/podman.rs` to provide the single central Podman execution and query API (`P-PODMAN-API`) and restricted direct process execution helpers in `src/io/exec/command.rs` to `src/io/`.
 
 ### Fixed
 

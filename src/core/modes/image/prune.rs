@@ -22,21 +22,16 @@ use std::io::{self, BufRead, Read, Write};
 use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
-use crate::io::exec::command::{self, ExecOptions};
+use crate::io::exec::podman;
 use crate::io::system::env::MAX_CONFIRMATION_BYTES;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::format::{format_bytes, format_line, parse_size_to_bytes};
-use crate::utilities::string::is_valid_token;
 
-const IMAGES_FORMAT: &str =
-    "{{.ID}};;;{{.Id}};;;{{.Repository}};;;{{.Tag}};;;{{.Size}};;;{{.Created}}";
 const MAX_PREVIEW_RECORDS: usize = 1024;
 const NONE_MARKER: &str = "<none>";
 const PREVIEW_SEPARATOR: &str =
     "---------------------------------------------------------------------------";
 const PREVIEW_TARGET_COLUMN: usize = 75;
-const PRUNE_ALL_ARGS: [&str; 4] = ["image", "prune", "-f", "-a"];
-const PRUNE_DANGLING_ARGS: [&str; 3] = ["image", "prune", "-f"];
 const PRUNE_PREFIX: &str = "Prune images: ";
 
 /// Parsed metadata fields from a single `podman images --format` output line.
@@ -66,10 +61,9 @@ struct PruneScan {
 /// 1. Do not read any `.pod` recipe files.
 /// 2. When `context.flags.preview` is `false` and `context.config.simulate` is `true`,
 ///    simulate `podman image prune -f` (appending `-a` when `context.flags.all` is `true`).
-/// 3. Otherwise, query in-use container images (`podman ps -aq` and `podman inspect -f
-///    '{{.Image}}'`) and candidate images (`podman images [--filter dangling=true] --format
-///    ...`), filtering out images attached to existing containers and summing reclaimable
-///    byte sizes in a single pass.
+/// 3. Otherwise, query in-use container images and candidate images via the Podman API,
+///    filtering out images attached to existing containers and summing reclaimable byte sizes
+///    in a single pass.
 /// 4. If no prunable images exist, print `"No images found to prune."` and return.
 /// 5. If `context.flags.preview` is `true`, print the formatted preview list and total
 ///    reclaimable space and return.
@@ -85,53 +79,16 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
-    let mut capture = |arguments: &[&str]| command::exec_capture("podman", arguments);
-    execute_with(context, &mut capture, &mut stdin, &mut stdout, &mut stderr)
-}
-
-/// Extracts valid container ID tokens from `podman ps -aq` output up to `MAX_PREVIEW_RECORDS`.
-#[must_use]
-fn collect_container_ids(ps_output: &str) -> Vec<&str> {
-    let line_count = ps_output.lines().count();
-    if line_count == 0 {
-        return Vec::new();
-    }
-    let capacity = bounded_capacity(line_count, MAX_COLLECTION_PREALLOC);
-    let mut container_ids = Vec::with_capacity(capacity);
-    for line in ps_output.lines() {
-        if container_ids.len() >= MAX_PREVIEW_RECORDS {
-            break;
-        }
-        let trimmed = line.trim();
-        if is_valid_token(trimmed) {
-            container_ids.push(trimmed);
-        }
-    }
-    container_ids
-}
-
-/// Queries `podman ps -aq` and `podman inspect` via `capture` to collect image IDs attached to existing containers.
-#[must_use]
-fn collect_in_use_images<F>(capture: &mut F) -> BTreeSet<String>
-where
-    F: FnMut(&[&str]) -> Option<String>,
-{
-    let Some(ps_output) = capture(&["ps", "-aq"]) else {
-        return BTreeSet::new();
-    };
-    let container_ids = collect_container_ids(&ps_output);
-    if container_ids.is_empty() {
-        return BTreeSet::new();
-    }
-    let mut inspect_args = Vec::with_capacity(container_ids.len().saturating_add(3));
-    inspect_args.push("inspect");
-    inspect_args.push("-f");
-    inspect_args.push("{{.Image}}");
-    inspect_args.extend(container_ids);
-    let Some(inspect_output) = capture(&inspect_args) else {
-        return BTreeSet::new();
-    };
-    parse_in_use_output(&inspect_output)
+    let mut query_in_use = podman::query_in_use_images;
+    let mut query_images = podman::query_images;
+    execute_with(
+        context,
+        &mut query_in_use,
+        &mut query_images,
+        &mut stdin,
+        &mut stdout,
+        &mut stderr,
+    )
 }
 
 /// Prompts the user on `stdout` and reads `reader` to confirm image pruning, returning `true` only when the user answers `"yes"`.
@@ -157,9 +114,10 @@ fn confirm_prune<R: BufRead, W: Write>(
 }
 
 /// Orchestrates `pods image prune` across simulate, `--preview`, and interactive or forced prune execution.
-fn execute_with<R, W, E, F>(
+fn execute_with<R, W, E, F, G>(
     context: &Context,
-    capture: &mut F,
+    query_in_use: &mut F,
+    query_images: &mut G,
     reader: &mut R,
     stdout: &mut W,
     stderr: &mut E,
@@ -168,14 +126,15 @@ where
     R: BufRead,
     W: Write,
     E: Write,
-    F: FnMut(&[&str]) -> Option<String>,
+    F: FnMut() -> BTreeSet<String>,
+    G: FnMut(bool) -> Option<String>,
 {
     let is_all = context.flags.all;
     let is_preview = context.flags.preview;
     if !is_preview && context.config.simulate {
-        return run_prune_command(is_all, true, stdout, stderr);
+        return podman::prune_images(is_all, PRUNE_PREFIX, true, stdout, stderr);
     }
-    let scan = scan_prunable_images(is_all, is_preview, capture)?;
+    let scan = scan_prunable_images(is_all, is_preview, query_in_use, query_images)?;
     if scan.image_count == 0 {
         log::write_print(stdout, "No images found to prune.");
         return Ok(());
@@ -190,7 +149,7 @@ where
         log::write_print(stdout, "Aborted.");
         return Ok(());
     }
-    run_prune_command(is_all, false, stdout, stderr)
+    podman::prune_images(is_all, PRUNE_PREFIX, false, stdout, stderr)
 }
 
 /// Resolves the human-readable image label (`<id>`, `<repo>:<tag>`, or `<repo>`) for `record`.
@@ -248,41 +207,6 @@ fn parse_image_record(line: &str) -> Option<ImageRecord<'_>> {
     })
 }
 
-/// Collects non-empty trimmed image IDs from `podman inspect -f '{{.Image}}'` output up to `MAX_PREVIEW_RECORDS`.
-#[must_use]
-fn parse_in_use_output(inspect_output: &str) -> BTreeSet<String> {
-    let mut in_use = BTreeSet::new();
-    for line in inspect_output.lines() {
-        if in_use.len() >= MAX_PREVIEW_RECORDS {
-            break;
-        }
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            in_use.insert(String::from(trimmed));
-        }
-    }
-    in_use
-}
-
-/// Queries `podman images` (with `--filter dangling=true` when `is_all` is `false`) via `capture`.
-fn query_candidate_images<F>(is_all: bool, capture: &mut F) -> Result<String, PodError>
-where
-    F: FnMut(&[&str]) -> Option<String>,
-{
-    let output = if is_all {
-        capture(&["images", "--format", IMAGES_FORMAT])
-    } else {
-        capture(&[
-            "images",
-            "--filter",
-            "dangling=true",
-            "--format",
-            IMAGES_FORMAT,
-        ])
-    };
-    output.ok_or_else(|| PodError::from(io::Error::other("Failed to query podman images.")))
-}
-
 /// Reads at most [`MAX_CONFIRMATION_BYTES`] bytes of a single confirmation line from `reader`.
 fn read_confirmation_line<R: BufRead>(reader: &mut R) -> Result<Option<String>, PodError> {
     let mut buffer = String::with_capacity(MAX_CONFIRMATION_BYTES);
@@ -294,42 +218,20 @@ fn read_confirmation_line<R: BufRead>(reader: &mut R) -> Result<Option<String>, 
     Ok(Some(buffer))
 }
 
-/// Executes or simulates `podman image prune -f` (appending `-a` when `is_all` is `true`).
-fn run_prune_command<W: Write, E: Write>(
-    is_all: bool,
-    simulate: bool,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> Result<(), PodError> {
-    let arguments: &[&str] = if is_all {
-        &PRUNE_ALL_ARGS
-    } else {
-        &PRUNE_DANGLING_ARGS
-    };
-    command::exec_with(
-        "podman",
-        arguments,
-        &ExecOptions {
-            interactive: false,
-            prefix: PRUNE_PREFIX,
-            simulate,
-        },
-        stdout,
-        stderr,
-    )
-}
-
-/// Queries Podman via `capture`, filters out in-use images, and accumulates the prunable image count, reclaimable bytes, and optional preview lines.
-fn scan_prunable_images<F>(
+/// Queries Podman via `query_in_use` and `query_images`, filters out in-use images, and accumulates the prunable image count, reclaimable bytes, and optional preview lines.
+fn scan_prunable_images<F, G>(
     is_all: bool,
     include_lines: bool,
-    capture: &mut F,
+    query_in_use: &mut F,
+    query_images: &mut G,
 ) -> Result<PruneScan, PodError>
 where
-    F: FnMut(&[&str]) -> Option<String>,
+    F: FnMut() -> BTreeSet<String>,
+    G: FnMut(bool) -> Option<String>,
 {
-    let in_use_images = collect_in_use_images(capture);
-    let output = query_candidate_images(is_all, capture)?;
+    let in_use_images = query_in_use();
+    let output = query_images(is_all)
+        .ok_or_else(|| PodError::from(io::Error::other("Failed to query podman images.")))?;
     let preview_lines = if include_lines {
         let capacity = bounded_capacity(output.lines().count(), MAX_COLLECTION_PREALLOC);
         Vec::with_capacity(capacity)
@@ -380,14 +282,14 @@ fn write_preview_results<W: Write>(preview_lines: &[String], total_bytes: u64, s
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::io::{self, Cursor, Write};
 
     use crate::core::context::Context;
     use crate::error::PodError;
     use crate::io::system::env::MAX_CONFIRMATION_BYTES;
     use super::{
-        IMAGES_FORMAT, MAX_PREVIEW_RECORDS, PREVIEW_SEPARATOR, execute_with, handle,
-        parse_in_use_output, scan_prunable_images,
+        MAX_PREVIEW_RECORDS, PREVIEW_SEPARATOR, execute_with, handle, scan_prunable_images,
     };
 
     struct BrokenPipeWriter;
@@ -411,10 +313,12 @@ mod tests {
         let mut reader = Cursor::new(Vec::<u8>::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let mut capture = |_: &[&str]| None;
+        let mut no_in_use = BTreeSet::new;
+        let mut no_images = |_: bool| None;
         execute_with(
             &sim_context,
-            &mut capture,
+            &mut no_in_use,
+            &mut no_images,
             &mut reader,
             &mut stdout,
             &mut stderr,
@@ -434,7 +338,8 @@ mod tests {
         let mut all_stdout = Vec::new();
         execute_with(
             &flag_sim_context,
-            &mut capture,
+            &mut no_in_use,
+            &mut no_images,
             &mut reader,
             &mut all_stdout,
             &mut stderr,
@@ -453,19 +358,15 @@ mod tests {
         interactive_context.flags.simulate = false;
         interactive_context.flags.force = false;
 
-        let mut empty_images_capture = |arguments: &[&str]| -> Option<String> {
-            match arguments.first().copied() {
-                Some("ps") | Some("images") => Some(String::new()),
-                _ => None,
-            }
-        };
+        let mut empty_images = |_: bool| Some(String::new());
         for force in [false, true] {
             interactive_context.flags.force = force;
             let mut empty_out = Vec::new();
             let mut empty_err = Vec::new();
             execute_with(
                 &interactive_context,
-                &mut empty_images_capture,
+                &mut no_in_use,
+                &mut empty_images,
                 &mut reader,
                 &mut empty_out,
                 &mut empty_err,
@@ -513,19 +414,14 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
             ),
         ] {
             interactive_context.flags.all = is_all;
-            let mut candidate_capture = |arguments: &[&str]| -> Option<String> {
-                match arguments.first().copied() {
-                    Some("ps") => Some(String::new()),
-                    Some("images") => Some(String::from(images_output)),
-                    _ => None,
-                }
-            };
+            let mut candidate_images = |_: bool| Some(String::from(images_output));
             let mut input_cursor = Cursor::new(raw_input.to_vec());
             let mut out = Vec::new();
             let mut err = Vec::new();
             execute_with(
                 &interactive_context,
-                &mut candidate_capture,
+                &mut no_in_use,
+                &mut candidate_images,
                 &mut input_cursor,
                 &mut out,
                 &mut err,
@@ -539,16 +435,11 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
         // Broken pipe when writing confirmation prompt propagates PodError::Io.
         let mut broken_out = BrokenPipeWriter;
         let mut yes_cursor = Cursor::new(b"yes\n".to_vec());
-        let mut candidate_capture = |arguments: &[&str]| -> Option<String> {
-            match arguments.first().copied() {
-                Some("ps") => Some(String::new()),
-                Some("images") => Some(String::from(single_image_line)),
-                _ => None,
-            }
-        };
+        let mut single_images = |_: bool| Some(String::from(single_image_line));
         let prompt_err = execute_with(
             &interactive_context,
-            &mut candidate_capture,
+            &mut no_in_use,
+            &mut single_images,
             &mut yes_cursor,
             &mut broken_out,
             &mut stderr,
@@ -563,50 +454,43 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
         context.flags.preview = true;
         context.flags.all = true;
 
-        // 1. --all omits --filter dangling=true and prints "No images found to prune." when empty
-        let mut captured_images_args = Vec::new();
-        let mut empty_capture = |arguments: &[&str]| -> Option<String> {
-            if arguments.first() == Some(&"images") {
-                captured_images_args = arguments.iter().map(|item| (*item).to_owned()).collect();
-                return Some(String::new());
-            }
-            None
+        // 1. --all passes true to query_images and prints "No images found to prune." when empty
+        let mut captured_is_all = false;
+        let mut no_in_use = BTreeSet::new;
+        let mut empty_images = |is_all: bool| -> Option<String> {
+            captured_is_all = is_all;
+            Some(String::new())
         };
         let mut reader = Cursor::new(Vec::<u8>::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         execute_with(
             &context,
-            &mut empty_capture,
+            &mut no_in_use,
+            &mut empty_images,
             &mut reader,
             &mut stdout,
             &mut stderr,
         )
         .unwrap();
-        assert_eq!(
-            captured_images_args,
-            vec!["images", "--format", IMAGES_FORMAT]
-        );
+        assert!(captured_is_all);
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
             "No images found to prune.\n"
         );
 
         // 2. All candidate images in use -> prints "No images found to prune."
-        let mut all_in_use_capture = |arguments: &[&str]| -> Option<String> {
-            match arguments.first().copied() {
-                Some("ps") => Some(String::from("c1\n")),
-                Some("inspect") => Some(String::from("long1\n")),
-                Some("images") => Some(String::from(
-                    "abcd1234efgh;;;long1;;;my-repo;;;1.0;;;10.5 MB;;;2 weeks ago\n",
-                )),
-                _ => None,
-            }
+        let mut in_use_long1 = || BTreeSet::from([String::from("long1")]);
+        let mut one_image = |_: bool| {
+            Some(String::from(
+                "abcd1234efgh;;;long1;;;my-repo;;;1.0;;;10.5 MB;;;2 weeks ago\n",
+            ))
         };
         let mut in_use_stdout = Vec::new();
         execute_with(
             &context,
-            &mut all_in_use_capture,
+            &mut in_use_long1,
+            &mut one_image,
             &mut reader,
             &mut in_use_stdout,
             &mut stderr,
@@ -617,21 +501,17 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
             "No images found to prune.\n"
         );
 
-        // 3. Failed `podman inspect` falls back cleanly and still previews candidate images
-        let mut inspect_fail_capture = |arguments: &[&str]| -> Option<String> {
-            match arguments.first().copied() {
-                Some("ps") => Some(String::from("c1\n")),
-                Some("inspect") => None,
-                Some("images") => Some(String::from(
-                    "abcd1234efgh;;;long1;;;my-repo;;;1.0;;;500 B;;;1 hour ago\n",
-                )),
-                _ => None,
-            }
+        // 3. Empty in-use set previews candidate images cleanly
+        let mut fallback_images = |_: bool| {
+            Some(String::from(
+                "abcd1234efgh;;;long1;;;my-repo;;;1.0;;;500 B;;;1 hour ago\n",
+            ))
         };
         let mut fallback_stdout = Vec::new();
         execute_with(
             &context,
-            &mut inspect_fail_capture,
+            &mut no_in_use,
+            &mut fallback_images,
             &mut reader,
             &mut fallback_stdout,
             &mut stderr,
@@ -644,10 +524,11 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
         );
 
         // 4. Failed `podman images` returns PodError::Io containing "Failed to query podman images."
-        let mut fail_capture = |_: &[&str]| -> Option<String> { None };
+        let mut fail_images = |_: bool| -> Option<String> { None };
         let error = execute_with(
             &context,
-            &mut fail_capture,
+            &mut no_in_use,
+            &mut fail_images,
             &mut reader,
             &mut Vec::new(),
             &mut stderr,
@@ -656,30 +537,19 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
         assert!(error.to_string().contains("Failed to query podman images."));
 
         // 5. Extreme capacity bounds (MAX_PREVIEW_RECORDS)
-        let mut oversized_ps = String::new();
-        let mut oversized_inspect = String::new();
         let mut oversized_images = String::new();
         for index in 0..(MAX_PREVIEW_RECORDS + 10) {
-            oversized_ps.push_str(&format!("container_{index}\n"));
-            oversized_inspect.push_str(&format!("used_{index}\n"));
             oversized_images.push_str(&format!(
                 "id_{index};;;unused_{index};;;repo;;;tag;;;1 B;;;now\n"
             ));
         }
-        assert_eq!(parse_in_use_output(&oversized_inspect).len(), MAX_PREVIEW_RECORDS);
 
-        let mut bound_capture = |arguments: &[&str]| -> Option<String> {
-            match arguments.first().copied() {
-                Some("ps") => Some(oversized_ps.clone()),
-                Some("inspect") => Some(String::new()),
-                Some("images") => Some(oversized_images.clone()),
-                _ => None,
-            }
-        };
+        let mut bound_images = |_: bool| Some(oversized_images.clone());
         let mut bound_stdout = Vec::new();
         execute_with(
             &context,
-            &mut bound_capture,
+            &mut no_in_use,
+            &mut bound_images,
             &mut reader,
             &mut bound_stdout,
             &mut stderr,
@@ -687,7 +557,7 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
         .unwrap();
         let bound_output = String::from_utf8(bound_stdout).unwrap();
         assert_eq!(bound_output.lines().count(), MAX_PREVIEW_RECORDS + 3);
-        let scan = scan_prunable_images(true, false, &mut bound_capture).unwrap();
+        let scan = scan_prunable_images(true, false, &mut no_in_use, &mut bound_images).unwrap();
         assert_eq!(scan.image_count, MAX_PREVIEW_RECORDS);
         assert!(scan.preview_lines.is_empty());
         assert_eq!(scan.total_bytes, MAX_PREVIEW_RECORDS as u64);
@@ -699,44 +569,30 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
         context.flags.preview = true;
         context.flags.all = false;
 
-        let mut captured_calls: Vec<Vec<String>> = Vec::new();
-        let mut capture = |arguments: &[&str]| -> Option<String> {
-            captured_calls.push(arguments.iter().map(|item| (*item).to_owned()).collect());
-            match arguments.first().copied() {
-                Some("ps") => Some(String::from("c1\n--bad-flag\n\nc2\n")),
-                Some("inspect") => Some(String::from("  long2  \n\n")),
-                Some("images") => Some(String::from(
-                    "abcd1234efgh;;;long1;;;my-repo;;;1.0;;;10.5 MB;;;2 weeks ago\n\
-                     ijkl5678mnop;;;long2;;;<none>;;;<none>;;;500 kB;;;3 weeks ago\n\
-                     qrst9012uvwx;;;long3;;;<none>;;;<none>;;;500 kB;;;4 weeks ago\n\
-                     yzab3456cdef;;;long4;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago;;;extra\n\
-                     malformed;;;line\n\n",
-                )),
-                _ => None,
-            }
+        let mut in_use = || BTreeSet::from([String::from("long2")]);
+        let mut query_images = |is_all: bool| -> Option<String> {
+            assert!(!is_all);
+            Some(String::from(
+                "abcd1234efgh;;;long1;;;my-repo;;;1.0;;;10.5 MB;;;2 weeks ago\n\
+                 ijkl5678mnop;;;long2;;;<none>;;;<none>;;;500 kB;;;3 weeks ago\n\
+                 qrst9012uvwx;;;long3;;;<none>;;;<none>;;;500 kB;;;4 weeks ago\n\
+                 yzab3456cdef;;;long4;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago;;;extra\n\
+                 malformed;;;line\n\n",
+            ))
         };
 
         let mut reader = Cursor::new(Vec::<u8>::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        execute_with(&context, &mut capture, &mut reader, &mut stdout, &mut stderr).unwrap();
-
-        assert_eq!(captured_calls.len(), 3);
-        assert_eq!(captured_calls[0], vec!["ps", "-aq"]);
-        assert_eq!(
-            captured_calls[1],
-            vec!["inspect", "-f", "{{.Image}}", "c1", "c2"]
-        );
-        assert_eq!(
-            captured_calls[2],
-            vec![
-                "images",
-                "--filter",
-                "dangling=true",
-                "--format",
-                IMAGES_FORMAT,
-            ]
-        );
+        execute_with(
+            &context,
+            &mut in_use,
+            &mut query_images,
+            &mut reader,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
 
         let output = String::from_utf8(stdout).unwrap();
         assert!(output.contains("Images to be pruned:\n"));
