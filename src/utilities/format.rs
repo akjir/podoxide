@@ -61,6 +61,16 @@ pub fn format_command<S: AsRef<str>>(program: &str, arguments: &[S]) -> String {
     formatted
 }
 
+/// Formats a 1-based list index (`"1)"` or `" 1)"` when `total_count > 9`).
+#[must_use]
+pub fn format_index_prefix(index: usize, total_count: usize) -> String {
+    if total_count > 9 && index < 10 {
+        format!(" {index})")
+    } else {
+        format!("{index})")
+    }
+}
+
 /// Formats `line` by padding it with ASCII spaces up to `target_column` (minimum 1 space) and appending `status`.
 #[must_use]
 pub fn format_line(line: &str, status: &str, target_column: usize) -> String {
@@ -132,8 +142,8 @@ mod tests {
     use crate::core::constants::{APP_NAME, APP_VERSION};
     use crate::core::log::MAX_LOG_MESSAGE_BYTES;
     use super::{
-        DEFAULT_TARGET_COLUMN, MAX_SIZE_STRING_BYTES, format_bytes, format_command, format_line,
-        format_version_header, parse_size_to_bytes,
+        DEFAULT_TARGET_COLUMN, MAX_SIZE_STRING_BYTES, format_bytes, format_command,
+        format_index_prefix, format_line, format_version_header, parse_size_to_bytes,
     };
 
     #[test]
@@ -180,6 +190,9 @@ mod tests {
             "podman run --name app 'O'\\''Hara' 'Hancock 2'"
         );
         assert_eq!(format_command("", &["--version"]), "'' --version");
+        assert_eq!(format_index_prefix(1, 5), "1)");
+        assert_eq!(format_index_prefix(1, 10), " 1)");
+        assert_eq!(format_index_prefix(10, 10), "10)");
     }
 
     #[test]

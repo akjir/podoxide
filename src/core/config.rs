@@ -77,6 +77,12 @@ impl Config {
         expand_targets(self, targets)
     }
 
+    /// Collects the sorted set of unique recipe names referenced across all groups in `self.recipes.groups`.
+    #[must_use]
+    pub fn get_recipes(&self) -> BTreeSet<&str> {
+        get_recipes(self)
+    }
+
     /// Evaluates whether `recipe_name` is referenced in any group of `self.recipes.groups`.
     #[must_use]
     pub fn has_recipe(&self, recipe_name: &str) -> bool {
@@ -184,6 +190,16 @@ pub fn expand_targets(config: &Config, targets: &[String]) -> Result<Vec<String>
         log::debug(&format!("Untangled - {}", deduplicated.join(" ")));
     }
     Ok(deduplicated)
+}
+
+/// Collects the sorted set of unique recipe names referenced across all groups in `config.recipes.groups`.
+#[must_use]
+pub fn get_recipes(config: &Config) -> BTreeSet<&str> {
+    let mut recipes = BTreeSet::new();
+    for group_targets in config.recipes.groups.values() {
+        collect_group_recipes(group_targets, &mut recipes);
+    }
+    recipes
 }
 
 /// Evaluates whether `recipe_name` is referenced in any group of `config.recipes.groups`.
@@ -432,6 +448,15 @@ fn build_config(document: &PslDocument<'_>) -> Result<Config, ConfigError> {
     }
 
     Ok(config)
+}
+
+/// Inserts all valid non-group recipe names from `group_targets` into `recipes`.
+fn collect_group_recipes<'a>(group_targets: &'a [String], recipes: &mut BTreeSet<&'a str>) {
+    for target in group_targets {
+        if !target.starts_with('@') && is_valid_recipe_identifier(target) {
+            recipes.insert(target.as_str());
+        }
+    }
 }
 
 /// Validates and collects all `<recipe>` and `@<group>` target arguments for a group directive.
@@ -784,6 +809,7 @@ fn verify_group_targets<'a>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::env;
     use std::ffi::OsString;
     use std::fs;
@@ -797,7 +823,7 @@ mod tests {
     use crate::io::system::fs as system_fs;
     use super::{
         Config, DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH, DEFAULT_RECIPES_PATH, PodsConfig,
-        RecipesConfig, expand_targets, has_recipe, load,
+        RecipesConfig, expand_targets, get_recipes, has_recipe, load,
     };
 
     fn assert_config_error(input: &str, expected_kind: ConfigErrorKind) {
@@ -962,6 +988,38 @@ recipes {
             PodError::Config(error) => assert_eq!(error.kind, ConfigErrorKind::InvalidGroupTarget),
             other => panic!("expected InvalidGroupTarget, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn get_recipes_collects_unique_valid_recipes_and_rejects_invalid_entries() {
+        let config_input = "\
+recipes {
+    groups {
+        backend db-server cache-server
+        frontend web-frontend @backend db-server
+    }
+}
+";
+        let config = Config::from_str(config_input).unwrap();
+        let expected = BTreeSet::from(["cache-server", "db-server", "web-frontend"]);
+        assert_eq!(config.get_recipes(), expected);
+        assert_eq!(get_recipes(&config), expected);
+
+        let mut manual_config = Config::new();
+        manual_config.recipes.groups.insert(
+            String::from("mixed"),
+            vec![
+                String::from("valid_recipe"),
+                String::from("@subgroup"),
+                String::from("../escape"),
+                String::from(" app "),
+                String::from("bad\nname"),
+                String::new(),
+            ],
+        );
+        let manual_expected = BTreeSet::from(["valid_recipe"]);
+        assert_eq!(manual_config.get_recipes(), manual_expected);
+        assert_eq!(get_recipes(&manual_config), manual_expected);
     }
 
     #[test]

@@ -66,6 +66,12 @@ impl Recipe {
         Self::default()
     }
 
+    /// Evaluates whether `<recipes_dir>/<recipe_name>.pod` is a valid path that exists on disk.
+    #[must_use]
+    pub fn file_exists(recipes_dir: &Path, recipe_name: &str) -> bool {
+        file_exists(recipes_dir, recipe_name)
+    }
+
     /// Loads and parses a `.pod` recipe file from `recipes_dir` and `recipe_name`.
     ///
     /// # Errors
@@ -73,6 +79,16 @@ impl Recipe {
     /// Returns [`PodError`] when the recipe path is invalid, the file is missing, or PSL parsing fails.
     pub fn load(recipes_dir: &Path, recipe_name: &str) -> Result<Self, PodError> {
         load(recipes_dir, recipe_name)
+    }
+
+    /// Reads the raw `.pod` file at `path`, mapping a missing file to [`RecipeErrorKind::NotFound`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PodError`] with [`RecipeErrorKind::NotFound`] if `path` does not exist, or
+    /// [`PodError::Io`] if reading the file fails.
+    pub fn read_file(path: &Path) -> Result<String, PodError> {
+        read_file(path)
     }
 
     /// Resolves a container reference (`1..=N`, `*suffix`, or name) against this recipe's containers.
@@ -102,6 +118,14 @@ impl FromStr for Recipe {
     }
 }
 
+/// Evaluates whether `<recipes_dir>/<recipe_name>.pod` is a valid path that exists on disk.
+#[must_use]
+pub fn file_exists(recipes_dir: &Path, recipe_name: &str) -> bool {
+    is_valid_directory(recipes_dir)
+        && is_valid_recipe_identifier(recipe_name)
+        && fs::file_exists(&build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION))
+}
+
 /// Loads and parses a `.pod` recipe file from `recipes_dir` and `recipe_name`.
 ///
 /// # Errors
@@ -110,9 +134,25 @@ impl FromStr for Recipe {
 pub fn load(recipes_dir: &Path, recipe_name: &str) -> Result<Recipe, PodError> {
     validate_load_target(recipes_dir, recipe_name)?;
     let path = build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION);
-    let content = read_recipe_file(&path)?;
+    let content = read_file(&path)?;
     let display_path = sanitize_path_token(&path);
     parse_recipe_with_path(&content, &display_path)
+}
+
+/// Reads the raw `.pod` file at `path`, mapping a missing file to [`RecipeErrorKind::NotFound`].
+///
+/// # Errors
+///
+/// Returns [`PodError`] with [`RecipeErrorKind::NotFound`] if `path` does not exist, or
+/// [`PodError::Io`] if reading the file fails.
+pub fn read_file(path: &Path) -> Result<String, PodError> {
+    match fs::read_file(path) {
+        Ok(content) => Ok(content),
+        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Err(PodError::from(
+            RecipeError::without_line(RecipeErrorKind::NotFound, sanitize_path_token(path)),
+        )),
+        Err(error) => Err(error),
+    }
 }
 
 /// Resolves a container reference (`1..=N`, `*suffix`, or name) against `recipe.containers`.
@@ -410,7 +450,9 @@ fn find_container_by_exact_or_prefixed(
 ) -> Option<String> {
     let mut fallback = None;
     for (index, container) in containers.iter().enumerate() {
-        let Ok(resolved) = resolved_container_name(container, pod_id, index + 1) else {
+        let Ok(resolved) =
+            resolve_container_name_value(&container.name, pod_id, index + 1, container.line)
+        else {
             continue;
         };
         if resolved == exact {
@@ -431,7 +473,9 @@ fn find_container_by_name(
     target: &str,
 ) -> Option<String> {
     for (index, container) in containers.iter().enumerate() {
-        let Ok(resolved) = resolved_container_name(container, pod_id, index + 1) else {
+        let Ok(resolved) =
+            resolve_container_name_value(&container.name, pod_id, index + 1, container.line)
+        else {
             continue;
         };
         if resolved == target {
@@ -594,10 +638,10 @@ fn parse_container_name_arg(block: &PslBlock<'_>) -> Result<String, RecipeError>
             block.name,
         ));
     }
-    let Some(raw_arg) = block.arguments.first() else {
+    let Some(raw_argument) = block.arguments.first() else {
         return Ok(String::new());
     };
-    let raw_name = raw_arg.as_ref();
+    let raw_name = raw_argument.as_ref();
     if raw_name.trim().is_empty() || contains_control_or_bidi(raw_name) {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidContainerName,
@@ -614,7 +658,7 @@ fn parse_container_name_arg(block: &PslBlock<'_>) -> Result<String, RecipeError>
             raw_name,
         ));
     }
-    Ok(raw_name.to_owned())
+    Ok(normalized)
 }
 
 /// Appends `1..N` validated text arguments from `directive` into `target`.
@@ -858,17 +902,6 @@ fn pod_error_at_line(line: usize, kind: RecipeErrorKind, token: impl AsRef<str>)
     }
 }
 
-/// Reads the `.pod` file at `path`, mapping a missing file to [`RecipeErrorKind::NotFound`].
-fn read_recipe_file(path: &Path) -> Result<String, PodError> {
-    match fs::read_file(path) {
-        Ok(content) => Ok(content),
-        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Err(PodError::from(
-            RecipeError::without_line(RecipeErrorKind::NotFound, sanitize_path_token(path)),
-        )),
-        Err(error) => Err(error),
-    }
-}
-
 /// Resolves a 1-based numeric container index (`1..=N`) against `recipe.containers`.
 fn resolve_by_index(
     recipe: &Recipe,
@@ -885,7 +918,7 @@ fn resolve_by_index(
             raw_spec,
         ));
     };
-    resolved_container_name(container, &recipe.pod.id, index)
+    resolve_container_name_value(&container.name, &recipe.pod.id, index, container.line)
 }
 
 /// Validates `pod.path` or populates it from `<config.pods.path>/<pod.id>` when omitted.
@@ -917,23 +950,6 @@ fn resolve_pod_path(pod: &mut Pod, config: &Config, file_name: &str) -> Result<(
     Ok(())
 }
 
-/// Computes the resolved name for `container` at 1-based `index` without mutating it.
-fn resolved_container_name(
-    container: &Container,
-    pod_id: &str,
-    index: usize,
-) -> Result<String, RecipeError> {
-    let resolved = resolve_container_name_value(&container.name, pod_id, index, container.line)?;
-    if !is_valid_pod_or_container_name(&resolved) {
-        return Err(RecipeError::with_token(
-            RecipeErrorKind::InvalidContainerName,
-            container.line,
-            &resolved,
-        ));
-    }
-    Ok(resolved)
-}
-
 /// Resolves container names, validates each container, and rejects duplicate container names.
 fn validate_and_resolve_containers(
     containers: &mut [Container],
@@ -943,7 +959,7 @@ fn validate_and_resolve_containers(
     for (index, container) in containers.iter_mut().enumerate() {
         container.ensure_name(pod_id, index + 1)?;
         container.validate()?;
-        if !seen_names.insert(container.name.clone()) {
+        if !seen_names.insert(container.name.as_str()) {
             return Err(RecipeError::with_token(
                 RecipeErrorKind::InvalidContainerName,
                 container.line,
@@ -1638,6 +1654,16 @@ container {
             "container {\n    nested {\n    }\n}\n",
             RecipeErrorKind::UnexpectedBlock,
         );
+
+        let empty_container_dir_error =
+            Recipe::from_str("container {\n    volume data \"\"\n}\n").unwrap_err();
+        match empty_container_dir_error {
+            PodError::Recipe(recipe_error) => {
+                assert_eq!(recipe_error.kind, RecipeErrorKind::InvalidVolume);
+                assert_eq!(recipe_error.token.as_deref(), Some("volume"));
+            }
+            other => panic!("expected InvalidVolume, got {other:?}"),
+        }
 
         let volume_diag_error = Recipe::from_str(
             "container {\n    volume   data /var/lib/db/data:Z # Mounts 'data' with SELinux label 'Z'\n}\n",

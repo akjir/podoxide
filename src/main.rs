@@ -188,7 +188,7 @@ mod tests {
             (&["init", "help"], "Usage: pods init [OPTIONS] [ACTION]"),
             (&["log"], "Logs Mode"),
             (&["log", "help"], "Logs Mode"),
-            (&["rec", "help"], ""),
+            (&["rec", "help"], "Usage: pods recipe [OPTIONS] ACTION NAME"),
         ];
 
         for (arguments, expected_stdout) in bypass_cases {
@@ -288,15 +288,16 @@ mod tests {
         assert!(edit_stderr.is_empty());
         assert!(edit_stdout.is_empty());
 
-        for rec_args in [
-            &["rec", "list"][..],
-            &["rec", "show", "recipe"][..],
-            &["rec", "edit", "recipe"][..],
-            &["status"][..],
+        for (rec_args, expected_stdout) in [
+            (&["rec", "list"][..], "Recipes:\n"),
+            (&["rec", "show", "recipe"][..], "  6: pod example-stack {\n"),
+            (&["rec", "edit", "recipe"][..], ""),
+            (&["status"][..], ""),
         ] {
-            let (rec_ok, _, rec_stderr) = run_cli_in_dir(working_dir, rec_args, b"");
+            let (rec_ok, rec_stdout, rec_stderr) = run_cli_in_dir(working_dir, rec_args, b"");
             assert!(rec_ok);
             assert!(rec_stderr.is_empty());
+            assert!(rec_stdout.contains(expected_stdout));
         }
 
         let flag_override_cases: &[(&[&str], &str)] = &[
@@ -310,6 +311,10 @@ mod tests {
             ),
             (&["--simulate", "cfg", "show"], "  Simulate:     true\n"),
             (&["--simulate", "cfg", "edit"], "true ./pods.conf\n"),
+            (
+                &["--simulate", "rec", "edit", "recipe"],
+                "true ./recipe.pod\n",
+            ),
             (
                 &["--simulate", "up", "recipe"],
                 "podman pod create --name example-stack --publish 8080:80/TCP --userns=keep-id\n",
@@ -404,9 +409,9 @@ mod tests {
                 "Execute log command: \npodman pod logs -n --color -f -c example-stack-db example-stack\n",
             ),
             (&["status"], ""),
-            (&["rec", "list"], ""),
-            (&["rec", "show", "recipe"], ""),
-            (&["rec", "edit", "recipe"], ""),
+            (&["rec", "list"], "Recipes:\n"),
+            (&["rec", "show", "recipe"], "  6: pod example-stack {\n"),
+            (&["rec", "edit", "recipe"], "vim ./recipe.pod\n"),
         ];
 
         for (arguments, expected_stdout) in simulate_true_cases {

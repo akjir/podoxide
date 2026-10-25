@@ -16,18 +16,14 @@
 //! Handler for `pods connect [shell] <target>`.
 
 use std::io::{self, Write};
-use std::path::Path;
 
 use crate::core::context::Context;
-use crate::core::recipe::{RECIPE_EXTENSION, Recipe};
+use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::command::{self, ExecOptions};
 use crate::io::exec::podman;
-use crate::io::system::fs;
-use crate::utilities::path::{build_full_path, is_valid_directory};
 use crate::utilities::string::{
-    is_valid_pod_or_container_name, is_valid_recipe_identifier, is_valid_target_segment,
-    is_valid_text,
+    is_valid_pod_or_container_name, is_valid_target_segment, is_valid_text,
 };
 
 /// Output prefix printed before simulating or executing the interactive shell command.
@@ -87,7 +83,7 @@ where
 {
     let target = extract_target_parameter(context)?;
     let (recipe_name, container_spec) = parse_target(target)?;
-    let recipe_exists = recipe_file_exists(&context.config.recipes.path, recipe_name);
+    let recipe_exists = Recipe::file_exists(&context.config.recipes.path, recipe_name);
     let container_name =
         resolve_target_container(context, recipe_name, container_spec, recipe_exists)?;
     verify_running_container(
@@ -161,16 +157,6 @@ fn parse_target(target: &str) -> Result<(&str, Option<&str>), PodError> {
         return Ok((recipe_name, Some(container_spec)));
     }
     Ok((target, None))
-}
-
-/// Evaluates whether `<recipes_dir>/<recipe_name>.pod` is a valid path that exists on disk.
-#[must_use]
-fn recipe_file_exists(recipes_dir: &Path, recipe_name: &str) -> bool {
-    if !is_valid_directory(recipes_dir) || !is_valid_recipe_identifier(recipe_name) {
-        return false;
-    }
-    let recipe_path = build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION);
-    fs::file_exists(&recipe_path)
 }
 
 /// Loads and validates `<recipe_name>.pod` and resolves the target container name.

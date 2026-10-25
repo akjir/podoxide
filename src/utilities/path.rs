@@ -19,7 +19,7 @@ use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 
 use crate::core::config::{DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH};
-use crate::error::MAX_ERROR_TOKEN_BYTES;
+use crate::error::{ConfigError, ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError};
 use crate::utilities::string::{
     contains_control_or_bidi, contains_control_or_whitespace, sanitize_text,
 };
@@ -263,6 +263,29 @@ pub fn sanitize_path_token(path: &Path) -> String {
     sanitize_text(&lossy, MAX_ERROR_TOKEN_BYTES)
 }
 
+/// Verifies that `editor` is non-empty and structurally valid for direct process execution.
+///
+/// # Errors
+///
+/// Returns [`PodError`] with [`ConfigErrorKind::MissingEditor`] when `editor` is empty or
+/// whitespace-only, or [`ConfigErrorKind::InvalidPath`] when `editor` is not a valid executable
+/// name or path.
+pub fn validate_editor(editor: &str) -> Result<&str, PodError> {
+    if editor.trim().is_empty() {
+        return Err(PodError::from(ConfigError::new(
+            ConfigErrorKind::MissingEditor,
+            None,
+        )));
+    }
+    if !is_valid_editor_value(editor) {
+        return Err(PodError::from(ConfigError::without_line(
+            ConfigErrorKind::InvalidPath,
+            editor,
+        )));
+    }
+    Ok(editor)
+}
+
 /// Applies a single `component` to `normalized` during lexical path normalization.
 fn apply_lexical_component(normalized: &mut PathBuf, component: Component<'_>) {
     match component {
@@ -304,12 +327,13 @@ mod tests {
     use std::os::unix::ffi::OsStringExt;
     use std::path::{Path, PathBuf};
 
-    use crate::error::MAX_ERROR_TOKEN_BYTES;
+    use crate::error::{ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError};
     use super::{
         build_full_path, extract_config_stem, has_parent_dir, has_regular_target_name,
         is_valid_directory, is_valid_directory_path, is_valid_editor_value, is_valid_target_path,
         matches_extension, normalize_lexical_path, parent_or_cur_dir, pop_relative_or_absolute,
         relative_display_path, resolve_config_name, resolve_config_path, sanitize_path_token,
+        validate_editor,
     };
 
     #[test]
@@ -367,6 +391,15 @@ mod tests {
         assert!(!is_valid_editor_value("../vim"));
         assert!(!is_valid_editor_value("/usr/bin/"));
         assert!(!is_valid_editor_value("vim -u NONE"));
+        assert_eq!(validate_editor("vim").unwrap(), "vim");
+        assert!(matches!(
+            validate_editor("   "),
+            Err(PodError::Config(error)) if error.kind == ConfigErrorKind::MissingEditor
+        ));
+        assert!(matches!(
+            validate_editor("-vim"),
+            Err(PodError::Config(error)) if error.kind == ConfigErrorKind::InvalidPath
+        ));
 
         assert!(has_regular_target_name(Path::new("./pods.conf")));
         assert!(!has_regular_target_name(Path::new("")));

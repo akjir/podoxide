@@ -22,6 +22,7 @@ use crate::core::log;
 use crate::core::pod::PodCommand;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError};
+use crate::utilities::format::format_index_prefix;
 use super::{get_valid_commands, load_target_recipe};
 
 /// Collects, sorts, and displays all valid maintenance commands defined in a target recipe.
@@ -51,11 +52,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 /// Formats a single 1-based indexed command entry for `pods command list`.
 #[must_use]
 fn format_command_entry(command: &PodCommand, index: usize, total: usize) -> String {
-    let prefix = if total > 9 && index < 10 {
-        format!(" {index})")
-    } else {
-        format!("{index})")
-    };
+    let prefix = format_index_prefix(index, total);
     let description = command.description.trim();
     if description.is_empty() {
         format!("  {prefix} {}", command.name)

@@ -26,6 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added compile-time SemVer 2.0.0 Git build metadata (`v<version>+<count>.<hash>[.dev]`), the `pods version` default mode action, and unified version headers across CLI help outputs.
 - Added `image` mode (`pods image` / `pods img`) with `prune` (`--preview`, `--all`, `--force`), `update`, and `help` actions and human-readable byte size formatting and parsing helpers.
 - Added `logs` mode (`pods logs` / `pods log`) with `show`, `follow`, and `help` actions and `--since`, `--until`, `--tail`, and `--timestamps` flags for fetching or streaming pod and container logs.
+- Added `recipe` mode (`pods recipe` / `pods rec`) with `list` (`--all`), `show`, `edit`, and `help` actions for listing configured and unlinked `.pod` recipes, viewing numbered recipe source lines, and opening recipes in the configured editor.
 
 ### Changed
 

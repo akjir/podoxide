@@ -22,7 +22,7 @@ use crate::core::context::Context;
 use crate::error::{ConfigError, ConfigErrorKind, PodError};
 use crate::io::exec::command::{self, ExecOptions};
 use crate::utilities::path::{
-    extract_config_stem, has_parent_dir, is_valid_editor_value, sanitize_path_token,
+    extract_config_stem, has_parent_dir, sanitize_path_token, validate_editor,
 };
 
 /// Opens the active `pods.conf` configuration file in the configured external editor.
@@ -82,23 +82,6 @@ fn validate_config_path(path: &Path) -> Result<&str, PodError> {
                 sanitize_path_token(path),
             ))
         })
-}
-
-/// Verifies that `editor` is non-empty and structurally valid for direct process execution.
-fn validate_editor(editor: &str) -> Result<&str, PodError> {
-    if editor.trim().is_empty() {
-        return Err(PodError::from(ConfigError::new(
-            ConfigErrorKind::MissingEditor,
-            None,
-        )));
-    }
-    if !is_valid_editor_value(editor) {
-        return Err(PodError::from(ConfigError::without_line(
-            ConfigErrorKind::InvalidPath,
-            editor,
-        )));
-    }
-    Ok(editor)
 }
 
 #[cfg(test)]

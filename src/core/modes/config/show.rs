@@ -23,13 +23,13 @@ use std::path::Path;
 use crate::core::config::Config;
 use crate::core::context::Context;
 use crate::core::log;
+use crate::core::recipe::{RECIPE_EXTENSION, Recipe};
 use crate::error::PodError;
 use crate::io::system::fs;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::format::{DEFAULT_TARGET_COLUMN, format_line};
-use crate::utilities::path::build_full_path;
-use crate::utilities::string::is_valid_recipe_identifier;
 
+const MAX_GROUP_OUTPUT_LINES: usize = 4096;
 const QUOTED_ITEM_BYTES_ESTIMATE: usize = 16;
 
 /// Entry in the rendered group hierarchy output queue.
@@ -94,6 +94,9 @@ fn append_group_element<'a>(
     is_last: bool,
     visiting: &mut BTreeSet<&'a str>,
 ) {
+    if state.output_lines.len() >= MAX_GROUP_OUTPUT_LINES {
+        return;
+    }
     let branch = if is_last { "└── " } else { "├── " };
     if let Some(subgroup_name) = element.strip_prefix('@') {
         state
@@ -116,6 +119,9 @@ fn append_group_elements<'a>(
 ) {
     let element_count = elements.len();
     for (j, element) in elements.iter().enumerate() {
+        if state.output_lines.len() >= MAX_GROUP_OUTPUT_LINES {
+            return;
+        }
         let is_last = j + 1 == element_count;
         append_group_element(state, config, element.as_str(), prefix, is_last, visiting);
     }
@@ -128,20 +134,8 @@ fn append_recipe_status_line<'a>(
     recipe_name: &'a str,
     line: String,
 ) {
-    state.referenced_recipes.insert(recipe_name);
-    let exists = *state
-        .validation_cache
-        .entry(recipe_name)
-        .or_insert_with(|| {
-            is_valid_recipe_identifier(recipe_name)
-                && fs::file_exists(&build_full_path(recipes_path, recipe_name, ".pod"))
-        });
-    let status = if exists {
-        "[OK]"
-    } else {
-        state.missing_recipes.insert(recipe_name);
-        "[NOT FOUND]"
-    };
+    let exists = record_referenced_recipe(state, recipes_path, recipe_name);
+    let status = if exists { "[OK]" } else { "[NOT FOUND]" };
     let visible_length = line.chars().count();
     if visible_length > state.max_line_length {
         state.max_line_length = visible_length;
@@ -160,6 +154,9 @@ fn append_subgroup<'a>(
     parent_is_last: bool,
     visiting: &mut BTreeSet<&'a str>,
 ) {
+    if state.output_lines.len() >= MAX_GROUP_OUTPUT_LINES {
+        return;
+    }
     let indent = if parent_is_last { "    " } else { "│   " };
     let child_prefix = format!("{parent_prefix}{indent}");
     let Some(sub_elements) = config
@@ -187,17 +184,23 @@ fn build_groups_state(config: &Config) -> GroupValidationState<'_> {
     let mut visiting = BTreeSet::new();
 
     for (i, (group_name, elements)) in config.recipes.groups.iter().enumerate() {
+        if state.output_lines.len() >= MAX_GROUP_OUTPUT_LINES {
+            break;
+        }
         state
             .output_lines
             .push(GroupOutputLine::Text(format!("  • {group_name}")));
         visiting.insert(group_name.as_str());
         append_group_elements(&mut state, config, elements, "    ", &mut visiting);
         visiting.remove(group_name.as_str());
-        if i + 1 < group_count {
+        if i + 1 < group_count && state.output_lines.len() < MAX_GROUP_OUTPUT_LINES {
             state
                 .output_lines
                 .push(GroupOutputLine::Text(String::from("    ")));
         }
+    }
+    for recipe_name in config.get_recipes() {
+        record_referenced_recipe(&mut state, &config.recipes.path, recipe_name);
     }
     state
 }
@@ -214,7 +217,7 @@ fn collect_unreferenced_files<'a>(
     let capacity = bounded_capacity(files.len(), MAX_COLLECTION_PREALLOC);
     let mut unreferenced = Vec::with_capacity(capacity);
     for file in files {
-        let stem = file.strip_suffix(".pod").unwrap_or(file.as_str());
+        let stem = file.strip_suffix(RECIPE_EXTENSION).unwrap_or(file.as_str());
         if !referenced_recipes.contains(stem) {
             unreferenced.push(file.as_str());
         }
@@ -250,6 +253,23 @@ fn format_quoted_conjunction(items: &[&str]) -> String {
     output
 }
 
+/// Records `recipe_name` in `state.referenced_recipes`, checks `<recipe>.pod` existence via `state.validation_cache`, and updates `state.missing_recipes`.
+fn record_referenced_recipe<'a>(
+    state: &mut GroupValidationState<'a>,
+    recipes_path: &Path,
+    recipe_name: &'a str,
+) -> bool {
+    state.referenced_recipes.insert(recipe_name);
+    let exists = *state
+        .validation_cache
+        .entry(recipe_name)
+        .or_insert_with(|| Recipe::file_exists(recipes_path, recipe_name));
+    if !exists {
+        state.missing_recipes.insert(recipe_name);
+    }
+    exists
+}
+
 /// Renders the full configuration report for `config` to `stdout`.
 fn show_with<W: Write>(config: &Config, stdout: &mut W) -> Result<(), PodError> {
     write_header_and_settings(config, stdout);
@@ -278,7 +298,7 @@ fn write_directories_section<W: Write>(
     let pods_line = format!("  {:<14}{}", "Pods:", absolute_pods_path.display());
 
     let recipes_files = if fs::directory_exists(&config.recipes.path) {
-        Some(fs::list_directory(&config.recipes.path, Some(".pod"))?)
+        Some(fs::list_directory(&config.recipes.path, Some(RECIPE_EXTENSION))?)
     } else {
         None
     };
@@ -400,7 +420,9 @@ mod tests {
     use crate::core::config::Config;
     use crate::core::context::Context;
     use crate::io::system::fs;
-    use super::{format_quoted_conjunction, handle, show_with};
+    use super::{
+        MAX_GROUP_OUTPUT_LINES, build_groups_state, format_quoted_conjunction, handle, show_with,
+    };
 
     fn create_temp_test_dir(suffix: &str) -> PathBuf {
         let dir = env::temp_dir().join(format!(
@@ -424,6 +446,41 @@ mod tests {
             format_quoted_conjunction(&["first", "second", "third"]),
             "'first', 'second' and 'third'"
         );
+    }
+
+    #[test]
+    fn show_with_clamps_diamond_group_dag_output_and_preserves_recipe_validation() {
+        let temp_dir = create_temp_test_dir("diamond_dag");
+        let recipes_dir = temp_dir.join("recipes");
+        std_fs::create_dir_all(&recipes_dir).unwrap();
+
+        let mut config = Config::new();
+        config.recipes.path = recipes_dir;
+        for i in 0..30 {
+            let group_name = format!("g{i:02}");
+            let next_target = format!("@g{:02}", i + 1);
+            config
+                .recipes
+                .groups
+                .insert(group_name, vec![next_target.clone(), next_target]);
+        }
+        config
+            .recipes
+            .groups
+            .insert(String::from("g30"), vec![String::from("leaf_recipe")]);
+
+        let state = build_groups_state(&config);
+        assert_eq!(state.output_lines.len(), MAX_GROUP_OUTPUT_LINES);
+        assert!(state.referenced_recipes.contains("leaf_recipe"));
+        assert!(state.missing_recipes.contains("leaf_recipe"));
+
+        let mut stdout = Vec::new();
+        show_with(&config, &mut stdout).unwrap();
+        let output = String::from_utf8(stdout).unwrap();
+        assert!(output.contains("Validation Summary:\n"));
+        assert!(output.contains("- Recipe file for 'leaf_recipe' not found!\n"));
+
+        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
