@@ -42,3 +42,39 @@ use crate::error::PodError;
 pub fn handle(context: &Context) -> Result<(), PodError> {
     execute_lifecycle_action(context, pod::pull)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
+    use crate::core::context::{Context, ImageAction, Mode, ModeAction};
+    use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
+    use super::handle;
+
+    #[test]
+    fn handle_pulls_recipe_and_group_targets_and_rejects_invalid_targets() {
+        let mut context = Context::new();
+        context.config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
+        context.mode = Mode::Image;
+        context.action = ModeAction::Image(ImageAction::Update);
+
+        let missing_error = handle(&context).unwrap_err();
+        match missing_error {
+            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::MissingTarget),
+            other => panic!("expected PodError::Cli(MissingTarget), got {other:?}"),
+        }
+
+        context.parameters = vec![String::from("unknown_recipe")];
+        let unknown_error = handle(&context).unwrap_err();
+        match unknown_error {
+            PodError::Config(config_error) => {
+                assert_eq!(config_error.kind, ConfigErrorKind::RecipeNotFound);
+            }
+            other => panic!("expected PodError::Config(RecipeNotFound), got {other:?}"),
+        }
+
+        context.parameters = vec![String::from("@all")];
+        assert!(handle(&context).is_ok());
+    }
+}

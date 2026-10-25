@@ -19,9 +19,29 @@ use crate::core::constants::{APP_NAME, APP_VERSION};
 use crate::core::log::MAX_LOG_MESSAGE_BYTES;
 use crate::utilities::string::escape_shell;
 
+const BYTES_PER_GB: u64 = 1_000_000_000;
+const BYTES_PER_KB: u64 = 1_000;
+const BYTES_PER_MB: u64 = 1_000_000;
+const BYTES_PER_TB: u64 = 1_000_000_000_000;
 /// Default target column for status alignment in formatted output lines.
 pub const DEFAULT_TARGET_COLUMN: usize = 44;
 const ESTIMATED_ARG_BYTES: usize = 12;
+const MAX_SIZE_STRING_BYTES: usize = 64;
+
+/// Formats a byte count into a human-readable decimal size string (`B`, `kB`, `MB`, or `GB`).
+#[must_use]
+pub fn format_bytes(bytes: u64) -> String {
+    if bytes < BYTES_PER_KB {
+        return format!("{bytes} B");
+    }
+    if bytes < BYTES_PER_MB {
+        return format!("{:.1} kB", bytes as f64 / BYTES_PER_KB as f64);
+    }
+    if bytes < BYTES_PER_GB {
+        return format!("{:.1} MB", bytes as f64 / BYTES_PER_MB as f64);
+    }
+    format!("{:.1} GB", bytes as f64 / BYTES_PER_GB as f64)
+}
 
 /// Formats `program` and `arguments` into a single shell-escaped command string.
 #[must_use]
@@ -68,11 +88,90 @@ pub fn format_version_header(mode_title: Option<&str>) -> String {
     }
 }
 
+/// Parses a human-readable decimal size string (for example, `"1.5 MB"`) into a byte count.
+#[must_use]
+pub fn parse_size_to_bytes(size_str: &str) -> u64 {
+    let trimmed = size_str.trim();
+    if trimmed.is_empty() || trimmed.len() > MAX_SIZE_STRING_BYTES {
+        return 0;
+    }
+    let numeric_end = trimmed
+        .find(|character: char| !character.is_ascii_digit() && character != '.')
+        .unwrap_or(trimmed.len());
+    let (number_part, remainder) = trimmed.split_at(numeric_end);
+    if number_part.is_empty() {
+        return 0;
+    }
+    let Ok(number) = number_part.parse::<f64>() else {
+        return 0;
+    };
+    let Some(multiplier) = unit_multiplier(remainder.trim_start()) else {
+        return 0;
+    };
+    (number * multiplier).floor() as u64
+}
+
+/// Resolves the decimal byte multiplier for an optional unit suffix (`B`, `kB`, `MB`, `GB`, `TB`).
+#[must_use]
+fn unit_multiplier(unit: &str) -> Option<f64> {
+    if !unit.bytes().all(|byte| byte.is_ascii_alphabetic()) {
+        return None;
+    }
+    let multiplier = match unit.as_bytes().first().map(u8::to_ascii_uppercase) {
+        Some(b'K') => BYTES_PER_KB as f64,
+        Some(b'M') => BYTES_PER_MB as f64,
+        Some(b'G') => BYTES_PER_GB as f64,
+        Some(b'T') => BYTES_PER_TB as f64,
+        _ => 1.0,
+    };
+    Some(multiplier)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::core::constants::{APP_NAME, APP_VERSION};
     use crate::core::log::MAX_LOG_MESSAGE_BYTES;
-    use super::{DEFAULT_TARGET_COLUMN, format_command, format_line, format_version_header};
+    use super::{
+        DEFAULT_TARGET_COLUMN, MAX_SIZE_STRING_BYTES, format_bytes, format_command, format_line,
+        format_version_header, parse_size_to_bytes,
+    };
+
+    #[test]
+    fn format_bytes_and_parse_size_to_bytes_handle_units_and_invalid_inputs() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(500), "500 B");
+        assert_eq!(format_bytes(999), "999 B");
+        assert_eq!(format_bytes(1_500), "1.5 kB");
+        assert_eq!(format_bytes(1_500_000), "1.5 MB");
+        assert_eq!(format_bytes(1_500_000_000), "1.5 GB");
+
+        assert_eq!(parse_size_to_bytes("500 B"), 500);
+        assert_eq!(parse_size_to_bytes("1.5 kB"), 1_500);
+        assert_eq!(parse_size_to_bytes("2 MB"), 2_000_000);
+        assert_eq!(parse_size_to_bytes("1.25 GB"), 1_250_000_000);
+        assert_eq!(parse_size_to_bytes("1.5 TB"), 1_500_000_000_000);
+        assert_eq!(parse_size_to_bytes("1024"), 1_024);
+        assert_eq!(parse_size_to_bytes("  10.5MB  "), 10_500_000);
+        assert_eq!(parse_size_to_bytes("100 bytes"), 100);
+
+        for invalid in [
+            "",
+            "   ",
+            "MB",
+            ".",
+            "1.2.3 MB",
+            "-5 MB",
+            "10 MB extra",
+            "10 M2",
+            &"9".repeat(MAX_SIZE_STRING_BYTES + 1),
+        ] {
+            assert_eq!(
+                parse_size_to_bytes(invalid),
+                0,
+                "expected 0 for {invalid:?}"
+            );
+        }
+    }
 
     #[test]
     fn format_command_escapes_shell_arguments() {

@@ -47,3 +47,38 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
+    use crate::core::context::{Context, DefaultAction, ImageAction, Mode, ModeAction};
+    use crate::error::{CliErrorKind, PodError};
+    use super::handle;
+
+    #[test]
+    fn handle_routes_image_actions_and_rejects_mismatched_action() {
+        let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
+
+        for action in [ImageAction::Help, ImageAction::Prune, ImageAction::Update] {
+            let mut context = Context::new();
+            context.config = root_config.clone();
+            context.mode = Mode::Image;
+            context.action = ModeAction::Image(action);
+            if action == ImageAction::Update {
+                context.parameters = vec![String::from("recipe")];
+            }
+            assert!(handle(&context).is_ok());
+        }
+
+        let mut invalid_context = Context::new();
+        invalid_context.mode = Mode::Image;
+        invalid_context.action = ModeAction::Default(DefaultAction::Help);
+        let error = handle(&invalid_context).unwrap_err();
+        match error {
+            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::UnknownAction),
+            other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
+        }
+    }
+}
