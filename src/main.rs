@@ -292,7 +292,7 @@ mod tests {
             (&["rec", "list"][..], "Recipes:\n"),
             (&["rec", "show", "recipe"][..], "  6: pod example-stack {\n"),
             (&["rec", "edit", "recipe"][..], ""),
-            (&["status"][..], ""),
+            (&["status"][..], "example-stack-app"),
         ] {
             let (rec_ok, rec_stdout, rec_stderr) = run_cli_in_dir(working_dir, rec_args, b"");
             assert!(rec_ok);
@@ -408,7 +408,7 @@ mod tests {
                 &["log", "follow", "recipe/db"],
                 "Execute log command: \npodman pod logs -n --color -f -c example-stack-db example-stack\n",
             ),
-            (&["status"], ""),
+            (&["status"], "example-stack-app"),
             (&["rec", "list"], "Recipes:\n"),
             (&["rec", "show", "recipe"], "  6: pod example-stack {\n"),
             (&["rec", "edit", "recipe"], "vim ./recipe.pod\n"),
