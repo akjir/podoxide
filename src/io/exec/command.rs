@@ -15,11 +15,11 @@
 
 //! Direct operating system process execution helpers.
 
-use std::io::{self, Write};
+use std::io::Write;
 use std::process::{Command, ExitStatus};
 
 use crate::core::log;
-use crate::error::{PodError, SystemError};
+use crate::error::PodError;
 use crate::utilities::format::format_command;
 
 /// Execution options controlling simulation, interactive stdio inheritance, and output prefixing.
@@ -38,25 +38,6 @@ impl ExecOptions<'_> {
     }
 }
 
-/// Executes `program` with `arguments` using `options`, or prints the command when `options.simulate` is `true`.
-///
-/// # Errors
-///
-/// Returns [`PodError`] if spawning the process fails or if the process exits with a non-zero status.
-pub fn exec<S: AsRef<str>>(
-    program: &str,
-    arguments: &[S],
-    options: &ExecOptions<'_>,
-) -> Result<(), PodError> {
-    exec_with(
-        program,
-        arguments,
-        options,
-        &mut io::stdout().lock(),
-        &mut io::stderr().lock(),
-    )
-}
-
 /// Executes `program` with `arguments` directly and returns captured `stdout` when exit status is 0.
 #[must_use]
 pub fn exec_capture(program: &str, arguments: &[&str]) -> Option<String> {
@@ -71,7 +52,7 @@ pub fn exec_capture(program: &str, arguments: &[&str]) -> Option<String> {
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if spawning the process fails or if the process exits with a non-zero status.
+/// Returns [`PodError`] if spawning the process fails.
 pub fn exec_with<S, W, E>(
     program: &str,
     arguments: &[S],
@@ -97,9 +78,9 @@ where
         log::write_debug(stderr, &format!("Execute: {formatted}"));
     }
     if options.interactive {
-        return run_interactive(program, arguments);
+        return run_interactive(program, arguments, stderr);
     }
-    run_captured(program, arguments, options.prefix, stdout)
+    run_captured(program, arguments, options.prefix, stdout, stderr)
 }
 
 /// Constructs a [`Command`] for `program` populated with `arguments`.
@@ -128,24 +109,18 @@ fn emit_captured_lines<W: Write>(
     }
 }
 
-/// Verifies that `status` succeeded or returns [`SystemError::CommandFailed`].
-fn ensure_exit_success(status: ExitStatus) -> Result<(), PodError> {
-    if status.success() {
-        return Ok(());
-    }
-    Err(PodError::from(SystemError::CommandFailed(status.code())))
-}
-
-/// Executes `program` with `arguments`, writing captured output lines with `prefix` to `stdout`.
-fn run_captured<S, W>(
+/// Executes `program` with `arguments`, writing captured output lines with `prefix` to `stdout` and logging exit warnings to `stderr`.
+fn run_captured<S, W, E>(
     program: &str,
     arguments: &[S],
     prefix: &str,
     stdout: &mut W,
+    stderr: &mut E,
 ) -> Result<(), PodError>
 where
     S: AsRef<str>,
     W: Write,
+    E: Write,
 {
     let output = build_command(program, arguments).output()?;
     let stdout_text = String::from_utf8_lossy(&output.stdout);
@@ -156,20 +131,42 @@ where
     if !output_captured {
         log::write_print(stdout, &format!("{prefix}..."));
     }
-    ensure_exit_success(output.status)
+    warn_on_exit_failure(output.status, stderr);
+    Ok(())
 }
 
-/// Executes `program` with `arguments` interactively, inheriting standard input, output, and error streams.
-fn run_interactive<S: AsRef<str>>(program: &str, arguments: &[S]) -> Result<(), PodError> {
+/// Executes `program` with `arguments` interactively, inheriting standard streams and logging exit warnings to `stderr`.
+fn run_interactive<S, E>(program: &str, arguments: &[S], stderr: &mut E) -> Result<(), PodError>
+where
+    S: AsRef<str>,
+    E: Write,
+{
     let status = build_command(program, arguments).status()?;
-    ensure_exit_success(status)
+    warn_on_exit_failure(status, stderr);
+    Ok(())
+}
+
+/// Writes a warning to `stderr` when `status` exited with a non-zero code or was terminated by a signal.
+fn warn_on_exit_failure<E: Write>(status: ExitStatus, stderr: &mut E) {
+    if status.success() {
+        return;
+    }
+    if let Some(code) = status.code() {
+        log::write_warning(stderr, &format!("Command exited with code '{code}'!"));
+    } else {
+        log::write_warning(stderr, "Command terminated by signal!");
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::error::{PodError, SystemError};
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    use crate::core::log;
+    use crate::error::PodError;
     use crate::utilities::format::format_command;
-    use super::{ExecOptions, exec, exec_capture, exec_with};
+    use super::{ExecOptions, exec_capture, exec_with, warn_on_exit_failure};
 
     #[test]
     fn exec_capture_handles_success_failure_and_missing_binary() {
@@ -195,7 +192,7 @@ mod tests {
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let sim_options = ExecOptions {
+        let simulate_options = ExecOptions {
             interactive: false,
             prefix: "Create container 'app': ",
             simulate: true,
@@ -203,20 +200,20 @@ mod tests {
         exec_with(
             "podman",
             &["create", "--name", "app"],
-            &sim_options,
+            &simulate_options,
             &mut stdout,
             &mut stderr,
         )
         .unwrap();
-        let sim_output = String::from_utf8(stdout).unwrap();
+        let simulate_output = String::from_utf8(stdout).unwrap();
         assert_eq!(
-            sim_output,
+            simulate_output,
             "Create container 'app': \npodman create --name app\n"
         );
         assert!(stderr.is_empty());
 
         let mut no_prefix_stdout = Vec::new();
-        let sim_no_prefix = ExecOptions {
+        let simulate_without_prefix = ExecOptions {
             interactive: true,
             prefix: "",
             simulate: true,
@@ -224,7 +221,7 @@ mod tests {
         exec_with(
             "podman",
             &["pull", "docker.io/alpine:latest"],
-            &sim_no_prefix,
+            &simulate_without_prefix,
             &mut no_prefix_stdout,
             &mut stderr,
         )
@@ -234,9 +231,9 @@ mod tests {
             "podman pull docker.io/alpine:latest\n"
         );
 
-        let mut cap_stdout = Vec::new();
-        let mut cap_stderr = Vec::new();
-        let cap_options = ExecOptions {
+        let mut captured_stdout = Vec::new();
+        let mut captured_stderr = Vec::new();
+        let capture_options = ExecOptions {
             interactive: false,
             prefix: "Echo: ",
             simulate: false,
@@ -244,18 +241,20 @@ mod tests {
         exec_with(
             "printf",
             &["line1\\nline2\\n"],
-            &cap_options,
-            &mut cap_stdout,
-            &mut cap_stderr,
+            &capture_options,
+            &mut captured_stdout,
+            &mut captured_stderr,
         )
         .unwrap();
         assert_eq!(
-            String::from_utf8(cap_stdout).unwrap(),
+            String::from_utf8(captured_stdout).unwrap(),
             "Echo: line1\nline2\n"
         );
+        assert!(captured_stderr.is_empty());
 
-        let mut stderr_capture_out = Vec::new();
-        let stderr_capture_err = exec_with(
+        let mut stderr_capture_stdout = Vec::new();
+        let mut stderr_capture_stderr = Vec::new();
+        exec_with(
             "ls",
             &["-d", "/", "/nonexistent/podoxide_missing_path"],
             &ExecOptions {
@@ -263,17 +262,35 @@ mod tests {
                 prefix: "List: ",
                 simulate: false,
             },
-            &mut stderr_capture_out,
-            &mut Vec::new(),
+            &mut stderr_capture_stdout,
+            &mut stderr_capture_stderr,
         )
-        .unwrap_err();
-        assert!(matches!(
-            stderr_capture_err,
-            PodError::System(SystemError::CommandFailed(Some(_)))
-        ));
-        let stderr_capture_text = String::from_utf8(stderr_capture_out).unwrap();
+        .unwrap();
+        let stderr_capture_text = String::from_utf8(stderr_capture_stdout).unwrap();
         assert!(stderr_capture_text.starts_with("List: /\n"));
         assert!(stderr_capture_text.lines().count() >= 2);
+        let stderr_warning_text = String::from_utf8(stderr_capture_stderr).unwrap();
+        assert!(stderr_warning_text.starts_with("WARNING: Command exited with code '"));
+
+        let mut stderr_only_stdout = Vec::new();
+        let mut stderr_only_stderr = Vec::new();
+        exec_with(
+            "ls",
+            &["-d", "/nonexistent/podoxide_exec_missing_path"],
+            &ExecOptions {
+                interactive: false,
+                prefix: "Missing: ",
+                simulate: false,
+            },
+            &mut stderr_only_stdout,
+            &mut stderr_only_stderr,
+        )
+        .unwrap();
+        let stderr_only_text = String::from_utf8(stderr_only_stdout).unwrap();
+        assert!(stderr_only_text.starts_with("Missing: "));
+        assert!(!stderr_only_text.starts_with("Missing: ..."));
+        let stderr_only_warning = String::from_utf8(stderr_only_stderr).unwrap();
+        assert!(stderr_only_warning.starts_with("WARNING: Command exited with code '"));
 
         let mut empty_stdout = Vec::new();
         let mut empty_stderr = Vec::new();
@@ -290,32 +307,45 @@ mod tests {
         )
         .unwrap();
         assert_eq!(String::from_utf8(empty_stdout).unwrap(), "Quiet: ...\n");
+        assert!(empty_stderr.is_empty());
 
-        exec(
+        let mut debug_stdout = Vec::new();
+        let mut debug_stderr = Vec::new();
+        log::set_debug_enabled(true);
+        let debug_result = exec_with(
             "true",
-            &Vec::<String>::new(),
+            &["--version"],
             &ExecOptions {
-                interactive: true,
-                prefix: "",
+                interactive: false,
+                prefix: "Debug: ",
                 simulate: false,
             },
-        )
-        .unwrap();
+            &mut debug_stdout,
+            &mut debug_stderr,
+        );
+        log::set_debug_enabled(false);
+        debug_result.unwrap();
+        assert_eq!(
+            String::from_utf8(debug_stderr).unwrap(),
+            "DEBUG: Execute: true --version\n"
+        );
 
-        let fail_err = exec_with(
+        let mut fail_stderr = Vec::new();
+        exec_with(
             "false",
             &Vec::<String>::new(),
             &ExecOptions::new(),
             &mut Vec::new(),
-            &mut Vec::new(),
+            &mut fail_stderr,
         )
-        .unwrap_err();
-        match fail_err {
-            PodError::System(SystemError::CommandFailed(Some(code))) => assert_ne!(code, 0),
-            other => panic!("expected CommandFailed, got {other:?}"),
-        }
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(fail_stderr).unwrap(),
+            "WARNING: Command exited with code '1'!\n"
+        );
 
-        let interactive_fail_err = exec_with(
+        let mut interactive_fail_stderr = Vec::new();
+        exec_with(
             "false",
             &Vec::<String>::new(),
             &ExecOptions {
@@ -324,13 +354,20 @@ mod tests {
                 simulate: false,
             },
             &mut Vec::new(),
-            &mut Vec::new(),
+            &mut interactive_fail_stderr,
         )
-        .unwrap_err();
-        assert!(matches!(
-            interactive_fail_err,
-            PodError::System(SystemError::CommandFailed(Some(_)))
-        ));
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(interactive_fail_stderr).unwrap(),
+            "WARNING: Command exited with code '1'!\n"
+        );
+
+        let mut signal_stderr = Vec::new();
+        warn_on_exit_failure(ExitStatus::from_raw(9), &mut signal_stderr);
+        assert_eq!(
+            String::from_utf8(signal_stderr).unwrap(),
+            "WARNING: Command terminated by signal!\n"
+        );
 
         for interactive in [false, true] {
             let io_error = exec_with(

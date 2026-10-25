@@ -82,7 +82,7 @@ mod tests {
 
     use crate::core::context::Context;
     use crate::core::log;
-    use crate::error::{CliErrorKind, ConfigErrorKind, PodError, SystemError};
+    use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
     use super::{edit_with, handle};
 
     fn build_edit_context() -> Context {
@@ -107,18 +107,14 @@ mod tests {
         log::set_debug_enabled(true);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let error = edit_with(&context, &mut stdout, &mut stderr).unwrap_err();
+        edit_with(&context, &mut stdout, &mut stderr).unwrap();
         log::set_debug_enabled(false);
 
         assert!(stdout.is_empty());
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
-            "DEBUG: Execute: false ./tests/pods/recipes/recipe_002_no_pod.pod\n"
+            "DEBUG: Execute: false ./tests/pods/recipes/recipe_002_no_pod.pod\nWARNING: Command exited with code '1'!\n"
         );
-        match error {
-            PodError::System(SystemError::CommandFailed(Some(1))) => {}
-            other => panic!("expected CommandFailed(Some(1)), got {other:?}"),
-        }
 
         context.config.editor = String::from("true");
         let mut ok_stdout = Vec::new();

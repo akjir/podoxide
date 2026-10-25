@@ -610,17 +610,6 @@ pub struct RecipeError {
 }
 
 impl RecipeError {
-    /// Creates a new recipe error with an optional 1-based line number and no token.
-    #[must_use]
-    pub const fn new(kind: RecipeErrorKind, line: Option<usize>) -> Self {
-        Self {
-            diagnostic: None,
-            kind,
-            line,
-            token: None,
-        }
-    }
-
     /// Attaches a compiler-style [`DiagnosticError`] resolved from `source` and `file_path`.
     #[must_use]
     pub fn with_diagnostic(mut self, source: &str, file_path: &str) -> Self {
@@ -901,7 +890,6 @@ impl Display for RecipeErrorKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SystemError {
     AbortedExecution,
-    CommandFailed(Option<i32>),
     UnsupportedOs,
     UnsupportedPodmanVersion,
 }
@@ -910,10 +898,6 @@ impl Display for SystemError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::AbortedExecution => formatter.write_str("Aborting execution."),
-            Self::CommandFailed(Some(code)) => {
-                write!(formatter, "Command exited with code '{code}'!")
-            }
-            Self::CommandFailed(None) => formatter.write_str("Command terminated by signal!"),
             Self::UnsupportedOs => formatter.write_str("Only Linux is supported."),
             Self::UnsupportedPodmanVersion => {
                 formatter.write_str("Podman 5.8.0 or higher is required.")
@@ -1640,14 +1624,6 @@ mod tests {
     fn pod_error_system_display_and_source() {
         let variants = [
             (SystemError::AbortedExecution, "Aborting execution."),
-            (
-                SystemError::CommandFailed(Some(125)),
-                "Command exited with code '125'!",
-            ),
-            (
-                SystemError::CommandFailed(None),
-                "Command terminated by signal!",
-            ),
             (SystemError::UnsupportedOs, "Only Linux is supported."),
             (
                 SystemError::UnsupportedPodmanVersion,
@@ -1842,14 +1818,15 @@ mod tests {
         ];
 
         for (index, (kind, expected_substring)) in variants.iter().enumerate() {
-            let plain = RecipeError::new(*kind, None);
-            assert!(plain.to_string().contains(expected_substring));
+            let without_line = RecipeError::without_line(*kind, "bad_token");
+            assert!(without_line.to_string().contains(expected_substring));
+            assert!(without_line.to_string().contains("bad_token"));
             assert!(!kind.annotation_text().is_empty());
             assert!(!kind.help_text().is_empty());
 
-            let line_only = RecipeError::new(*kind, Some(index + 1));
-            assert!(line_only.to_string().contains(expected_substring));
-            assert!(line_only.to_string().contains("line "));
+            let with_line = RecipeError::with_token(*kind, index + 1, "bad_token");
+            assert!(with_line.to_string().contains(expected_substring));
+            assert!(with_line.to_string().contains("line "));
 
             let with_token = RecipeError::with_token(*kind, 1, "/var/lib/db/data:Z")
                 .with_diagnostic(
@@ -1865,11 +1842,15 @@ mod tests {
             assert!(rendered.contains("--> ./recipe.pod:1:19"));
             assert!(rendered.contains("                  ^^^^^^^^^^^^^^^^^^"));
             assert!(rendered.contains("= help: "));
-
-            let token_no_line = RecipeError::without_line(*kind, "bad_token");
-            assert!(token_no_line.to_string().contains(expected_substring));
-            assert!(token_no_line.to_string().contains("bad_token"));
         }
+
+        let tokenless = RecipeError {
+            diagnostic: None,
+            kind: RecipeErrorKind::NotFound,
+            line: None,
+            token: None,
+        };
+        assert_eq!(tokenless.to_string(), "recipe file not found");
     }
 
     #[test]

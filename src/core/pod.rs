@@ -24,7 +24,9 @@ use crate::core::log;
 use crate::core::recipe::Recipe;
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::command::{self, ExecOptions};
-use crate::utilities::collection::append_option_tokens;
+use crate::utilities::collection::{
+    MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity,
+};
 use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_text, is_valid_token};
 
 const BASE_POD_CREATE_ARG_COUNT: usize = 4;
@@ -53,9 +55,12 @@ impl Pod {
     /// Builds the `podman pod create` argument vector for this pod.
     #[must_use]
     pub fn build_create_args(&self) -> Vec<String> {
-        let capacity = BASE_POD_CREATE_ARG_COUNT
-            .saturating_add(self.publish.len().saturating_mul(2))
-            .saturating_add(self.options.len().saturating_mul(2));
+        let capacity = bounded_capacity(
+            BASE_POD_CREATE_ARG_COUNT
+                .saturating_add(self.publish.len().saturating_mul(2))
+                .saturating_add(self.options.len().saturating_mul(2)),
+            MAX_COLLECTION_PREALLOC,
+        );
         let mut arguments = Vec::with_capacity(capacity);
         arguments.push(String::from("pod"));
         arguments.push(String::from("create"));
@@ -76,17 +81,6 @@ impl Pod {
     #[must_use]
     pub fn build_stop_args(&self) -> Vec<String> {
         vec![String::from("pod"), String::from("stop"), self.id.clone()]
-    }
-
-    /// Creates this pod in Podman (`podman pod create`) without creating or starting its containers.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PodError`] if Podman execution fails.
-    pub fn create(&self, simulate: bool) -> Result<(), PodError> {
-        let mut stdout = io::stdout();
-        let mut stderr = io::stderr();
-        self.create_with(simulate, &mut stdout, &mut stderr)
     }
 
     /// Creates this pod in Podman (`podman pod create`), writing command output to `stdout` and `stderr`.
@@ -116,17 +110,6 @@ impl Pod {
         )
     }
 
-    /// Removes this pod in Podman (`podman pod rm`).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PodError`] if Podman execution fails.
-    pub fn remove(&self, simulate: bool) -> Result<(), PodError> {
-        let mut stdout = io::stdout();
-        let mut stderr = io::stderr();
-        self.remove_with(simulate, &mut stdout, &mut stderr)
-    }
-
     /// Removes this pod in Podman (`podman pod rm`), writing command output to `stdout` and `stderr`.
     ///
     /// # Errors
@@ -152,17 +135,6 @@ impl Pod {
             stdout,
             stderr,
         )
-    }
-
-    /// Stops this pod in Podman (`podman pod stop`).
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PodError`] if Podman execution fails.
-    pub fn stop(&self, simulate: bool) -> Result<(), PodError> {
-        let mut stdout = io::stdout();
-        let mut stderr = io::stderr();
-        self.stop_with(simulate, &mut stdout, &mut stderr)
     }
 
     /// Stops this pod in Podman (`podman pod stop`), writing command output to `stdout` and `stderr`.
@@ -233,6 +205,7 @@ pub fn create_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
+    validate_recipe_create(recipe)?;
     recipe.pod.create_with(simulate, stdout, stderr)?;
     for item in &recipe.containers {
         container::create_with(item, &recipe.pod, simulate, stdout, stderr)?;
@@ -262,6 +235,7 @@ pub fn down_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
+    validate_recipe_containers(recipe)?;
     stop_with(recipe, simulate, stdout, stderr)?;
     remove_with(recipe, simulate, stdout, stderr)
 }
@@ -288,7 +262,7 @@ pub fn pull_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    validate_pod_id(&recipe.pod)?;
+    validate_recipe_pull(recipe)?;
     log::write_print(
         stdout,
         &format!("Update pod '{}' ('{}') ...", recipe.pod.name, recipe.pod.id),
@@ -321,6 +295,7 @@ pub fn reload_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
+    validate_recipe_create(recipe)?;
     down_with(recipe, simulate, stdout, stderr)?;
     up_with(recipe, simulate, stdout, stderr)
 }
@@ -347,6 +322,7 @@ pub fn remove_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
+    validate_recipe_containers(recipe)?;
     for item in recipe.containers.iter().rev() {
         container::remove_with(item, simulate, stdout, stderr)?;
     }
@@ -375,6 +351,7 @@ pub fn restart_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
+    validate_recipe_containers(recipe)?;
     stop_with(recipe, simulate, stdout, stderr)?;
     start_with(recipe, simulate, stdout, stderr)
 }
@@ -401,7 +378,7 @@ pub fn start_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    validate_pod_id(&recipe.pod)?;
+    validate_recipe_containers(recipe)?;
     for item in &recipe.containers {
         container::start_with(item, simulate, stdout, stderr)?;
     }
@@ -430,6 +407,7 @@ pub fn stop_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
+    validate_recipe_containers(recipe)?;
     for item in recipe.containers.iter().rev() {
         container::stop_with(item, simulate, stdout, stderr)?;
     }
@@ -458,6 +436,7 @@ pub fn up_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
+    validate_recipe_create(recipe)?;
     create_with(recipe, simulate, stdout, stderr)?;
     start_with(recipe, simulate, stdout, stderr)
 }
@@ -484,6 +463,8 @@ pub fn update_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
+    validate_recipe_pull(recipe)?;
+    validate_recipe_create(recipe)?;
     pull_with(recipe, simulate, stdout, stderr)?;
     reload_with(recipe, simulate, stdout, stderr)
 }
@@ -532,6 +513,53 @@ fn validate_pod_id(pod: &Pod) -> Result<(), RecipeError> {
     Ok(())
 }
 
+/// Validates `recipe.pod.id` and all container names in `recipe.containers` before executing container lifecycle commands.
+fn validate_recipe_containers(recipe: &Recipe) -> Result<(), RecipeError> {
+    validate_pod_id(&recipe.pod)?;
+    for item in &recipe.containers {
+        if !is_valid_pod_or_container_name(&item.name) {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::InvalidContainerName,
+                item.line,
+                &item.name,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Validates `recipe.pod` and all `recipe.containers` before executing pod creation lifecycles.
+fn validate_recipe_create(recipe: &Recipe) -> Result<(), RecipeError> {
+    validate_pod_create(&recipe.pod)?;
+    for item in &recipe.containers {
+        if !is_valid_pod_or_container_name(&item.name) {
+            return Err(RecipeError::with_token(
+                RecipeErrorKind::InvalidContainerName,
+                item.line,
+                &item.name,
+            ));
+        }
+        item.validate()?;
+    }
+    Ok(())
+}
+
+/// Validates `recipe.pod.id`, `recipe.pod.registry`, and all `recipe.containers` before pulling container images.
+fn validate_recipe_pull(recipe: &Recipe) -> Result<(), RecipeError> {
+    validate_pod_id(&recipe.pod)?;
+    if !recipe.pod.registry.is_empty() && !is_valid_token(&recipe.pod.registry) {
+        return Err(RecipeError::with_token(
+            RecipeErrorKind::InvalidRegistry,
+            recipe.pod.line,
+            &recipe.pod.registry,
+        ));
+    }
+    for item in &recipe.containers {
+        item.validate()?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};
@@ -558,6 +586,67 @@ mod tests {
         fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
         }
+    }
+
+    fn assert_invalid_pod_id_rejected(recipe: &Recipe, invalid_id: &str) {
+        let mut bad_recipe = recipe.clone();
+        bad_recipe.pod.id = String::from(invalid_id);
+        bad_recipe.pod.line = 7;
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert!(matches!(
+            bad_recipe.pod.create_with(true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(matches!(
+            bad_recipe.pod.remove_with(true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(matches!(
+            start_with(&bad_recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(matches!(
+            bad_recipe.pod.stop_with(true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(matches!(
+            pull_with(&bad_recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(matches!(
+            remove_with(&bad_recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(matches!(
+            stop_with(&bad_recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(matches!(
+            down_with(&bad_recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(matches!(
+            restart_with(&bad_recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(matches!(
+            reload_with(&bad_recipe, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
+        ));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
     }
 
     #[test]
@@ -612,9 +701,11 @@ mod tests {
         assert_eq!(pod.build_stop_args(), vec!["pod", "stop", "si_po"]);
         assert_eq!(pod.build_remove_args(), vec!["pod", "rm", "si_po"]);
 
-        assert!(pod.create(true).is_ok());
-        assert!(pod.stop(true).is_ok());
-        assert!(pod.remove(true).is_ok());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert!(pod.create_with(true, &mut stdout, &mut stderr).is_ok());
+        assert!(pod.stop_with(true, &mut stdout, &mut stderr).is_ok());
+        assert!(pod.remove_with(true, &mut stdout, &mut stderr).is_ok());
     }
 
     #[test]
@@ -754,6 +845,212 @@ mod tests {
     }
 
     #[test]
+    fn pod_down_and_start_continue_when_containers_do_not_exist() {
+        let mut recipe = sample_multi_container_recipe();
+        recipe.pod.id = String::from("podoxide_missing_pod_999999");
+        recipe.containers.truncate(2);
+        recipe.containers[0].name = String::from("podoxide_missing_pod_999999-1");
+        recipe.containers[1].name = String::from("podoxide_missing_pod_999999-2");
+
+        let mut down_stdout = Vec::new();
+        let mut down_stderr = Vec::new();
+        down_with(&recipe, false, &mut down_stdout, &mut down_stderr).unwrap();
+
+        let down_out_text = String::from_utf8(down_stdout).unwrap();
+        assert!(down_out_text.contains("Stop container 'podoxide_missing_pod_999999-2': "));
+        assert!(down_out_text.contains("Stop container 'podoxide_missing_pod_999999-1': "));
+        assert!(
+            down_out_text.contains("Stop pod 'Order Stack' ('podoxide_missing_pod_999999'): ")
+        );
+        assert!(down_out_text.contains("Remove container 'podoxide_missing_pod_999999-2': "));
+        assert!(down_out_text.contains("Remove container 'podoxide_missing_pod_999999-1': "));
+        assert!(
+            down_out_text.contains("Remove pod 'Order Stack' ('podoxide_missing_pod_999999'): ")
+        );
+
+        let down_err_text = String::from_utf8(down_stderr).unwrap();
+        assert_eq!(down_err_text.lines().count(), 6);
+        assert!(
+            down_err_text
+                .lines()
+                .all(|line| line.starts_with("WARNING: Command exited with code '"))
+        );
+
+        let mut start_stdout = Vec::new();
+        let mut start_stderr = Vec::new();
+        start_with(&recipe, false, &mut start_stdout, &mut start_stderr).unwrap();
+
+        let start_out_text = String::from_utf8(start_stdout).unwrap();
+        assert!(start_out_text.contains("Start container 'podoxide_missing_pod_999999-1': "));
+        assert!(start_out_text.contains("Start container 'podoxide_missing_pod_999999-2': "));
+
+        let start_err_text = String::from_utf8(start_stderr).unwrap();
+        assert_eq!(start_err_text.lines().count(), 2);
+        assert!(
+            start_err_text
+                .lines()
+                .all(|line| line.starts_with("WARNING: Command exited with code '"))
+        );
+    }
+
+    #[test]
+    fn pod_lifecycles_reject_invalid_fields_up_front_without_partial_execution() {
+        let base_recipe = sample_multi_container_recipe();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let mut bad_publish = base_recipe.clone();
+        bad_publish.pod.line = 11;
+        bad_publish.pod.publish = vec![String::from("--privileged")];
+        assert!(matches!(
+            create_with(&bad_publish, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPublish && error.line == Some(11)
+        ));
+        assert!(matches!(
+            up_with(&bad_publish, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPublish && error.line == Some(11)
+        ));
+        assert!(matches!(
+            reload_with(&bad_publish, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPublish && error.line == Some(11)
+        ));
+        assert!(matches!(
+            update_with(&bad_publish, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidPublish && error.line == Some(11)
+        ));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let mut bad_option = base_recipe.clone();
+        bad_option.pod.line = 13;
+        bad_option.pod.options = vec![String::from("--flag\nspoof")];
+        assert!(matches!(
+            create_with(&bad_option, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidOption && error.line == Some(13)
+        ));
+        assert!(matches!(
+            up_with(&bad_option, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidOption && error.line == Some(13)
+        ));
+        assert!(matches!(
+            reload_with(&bad_option, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidOption && error.line == Some(13)
+        ));
+        assert!(matches!(
+            update_with(&bad_option, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidOption && error.line == Some(13)
+        ));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let mut bad_image = base_recipe.clone();
+        bad_image.containers[1].line = 24;
+        bad_image.containers[1].image = String::from("--help");
+        assert!(matches!(
+            create_with(&bad_image, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
+        ));
+        assert!(matches!(
+            up_with(&bad_image, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
+        ));
+        assert!(matches!(
+            reload_with(&bad_image, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
+        ));
+        assert!(matches!(
+            pull_with(&bad_image, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
+        ));
+        assert!(matches!(
+            update_with(&bad_image, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidImage && error.line == Some(24)
+        ));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let mut bad_name = base_recipe.clone();
+        bad_name.containers[1].line = 25;
+        bad_name.containers[1].name = String::from("--all");
+        assert!(matches!(
+            create_with(&bad_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
+        ));
+        assert!(matches!(
+            up_with(&bad_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
+        ));
+        assert!(matches!(
+            reload_with(&bad_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
+        ));
+        assert!(matches!(
+            update_with(&bad_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
+        ));
+        assert!(matches!(
+            start_with(&bad_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
+        ));
+        assert!(matches!(
+            stop_with(&bad_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
+        ));
+        assert!(matches!(
+            remove_with(&bad_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
+        ));
+        assert!(matches!(
+            down_with(&bad_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
+        ));
+        assert!(matches!(
+            restart_with(&bad_name, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidContainerName && error.line == Some(25)
+        ));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+
+        let mut bad_registry = base_recipe;
+        bad_registry.pod.line = 12;
+        bad_registry.pod.registry = String::from("--tls-verify=false");
+        assert!(matches!(
+            pull_with(&bad_registry, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidRegistry && error.line == Some(12)
+        ));
+        assert!(matches!(
+            update_with(&bad_registry, true, &mut stdout, &mut stderr),
+            Err(PodError::Recipe(error))
+                if error.kind == RecipeErrorKind::InvalidRegistry && error.line == Some(12)
+        ));
+        assert!(stdout.is_empty());
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
     fn pod_pull_with_sanitizes_name_and_tolerates_broken_pipe() {
         let recipe = sample_multi_container_recipe();
         let mut broken_stdout = BrokenPipeWriter;
@@ -792,38 +1089,7 @@ mod tests {
         let base_pod = recipe.pod.clone();
 
         for invalid_id in ["", "--all", "-f", "bad\nname", "bad\u{202E}name"] {
-            let mut bad_recipe = recipe.clone();
-            bad_recipe.pod.id = String::from(invalid_id);
-            bad_recipe.pod.line = 7;
-
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            assert!(matches!(
-                bad_recipe.pod.create_with(true, &mut stdout, &mut stderr),
-                Err(PodError::Recipe(error))
-                    if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
-            ));
-            assert!(matches!(
-                bad_recipe.pod.remove_with(true, &mut stdout, &mut stderr),
-                Err(PodError::Recipe(error))
-                    if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
-            ));
-            assert!(matches!(
-                start_with(&bad_recipe, true, &mut stdout, &mut stderr),
-                Err(PodError::Recipe(error))
-                    if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
-            ));
-            assert!(matches!(
-                bad_recipe.pod.stop_with(true, &mut stdout, &mut stderr),
-                Err(PodError::Recipe(error))
-                    if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
-            ));
-            assert!(matches!(
-                pull_with(&bad_recipe, true, &mut stdout, &mut stderr),
-                Err(PodError::Recipe(error))
-                    if error.kind == RecipeErrorKind::InvalidPodId && error.line == Some(7)
-            ));
-            assert!(stdout.is_empty());
+            assert_invalid_pod_id_rejected(&recipe, invalid_id);
         }
 
         for invalid_publish in ["", "--privileged", "-p", "80:80\nspoof", "80:80\u{202E}"] {
