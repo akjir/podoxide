@@ -23,9 +23,10 @@ use crate::io::exec::command::{self, ExecOptions};
 use crate::utilities::collection::{
     MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity, is_valid_option_value,
 };
+use crate::utilities::path::is_valid_directory_path;
 use crate::utilities::string::{
-    contains_control_or_bidi, is_valid_pod_or_container_name, is_valid_text, is_valid_token,
-    parse_ascii_u32,
+    contains_control_or_bidi, contains_control_or_whitespace, is_valid_pod_or_container_name,
+    is_valid_text, is_valid_token, parse_ascii_u32,
 };
 
 /// Command-line arguments executed inside a container to launch an interactive `bash` or `sh` shell.
@@ -357,6 +358,12 @@ pub fn pull_image<W: Write, E: Write>(
         stdout,
         stderr,
     )
+}
+
+/// Executes `podman image inspect -f '{{.Id}}' <image_reference>` and returns the local image ID.
+#[must_use]
+pub fn query_image_id(image_reference: &str) -> Option<String> {
+    query_image_id_with(image_reference, &mut run_podman_capture)
 }
 
 /// Executes `podman images [--filter dangling=true] --format ...` and returns raw `;;;`-delimited image lines.
@@ -713,6 +720,39 @@ fn is_valid_version_metadata(metadata: &str) -> bool {
         })
 }
 
+/// Evaluates whether `mount` is a valid `--volume` specification (`<container_dir>`, `<host_dir>:<container_dir>`, or `<host_dir>:<container_dir>:<options>`).
+#[must_use]
+fn is_valid_volume_spec(mount: &str) -> bool {
+    let Some((host_dir, remainder)) = mount.split_once(':') else {
+        return mount.starts_with('/') && is_valid_directory_path(mount);
+    };
+    if !is_valid_directory_path(host_dir) {
+        return false;
+    }
+    let Some((container_dir, options)) = remainder.split_once(':') else {
+        return remainder.starts_with('/') && is_valid_directory_path(remainder);
+    };
+    container_dir.starts_with('/')
+        && is_valid_directory_path(container_dir)
+        && !options.is_empty()
+        && !options.starts_with('-')
+        && !options.contains(':')
+        && !options.contains('/')
+        && !options.contains("..")
+        && !contains_control_or_whitespace(options)
+}
+
+/// Extracts a single valid trimmed image ID token from `podman image inspect -f '{{.Id}}'` output.
+#[must_use]
+fn parse_image_id_output(output: &str) -> Option<String> {
+    let mut lines = output.lines();
+    let first = lines.next()?.trim();
+    if lines.next().is_some() || !is_valid_token(first) {
+        return None;
+    }
+    Some(String::from(first))
+}
+
 /// Collects valid trimmed image IDs from `podman inspect -f '{{.Image}}'` output up to [`MAX_INSPECT_RECORDS`].
 #[must_use]
 fn parse_in_use_output(inspect_output: &str) -> BTreeSet<String> {
@@ -756,6 +796,19 @@ fn parse_podman_major_minor(output: &str) -> Option<(u32, u32)> {
         }
     }
     None
+}
+
+/// Queries `podman image inspect -f '{{.Id}}' <image_reference>` via `capture` and returns the validated image ID.
+#[must_use]
+fn query_image_id_with<F>(image_reference: &str, capture: &mut F) -> Option<String>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    if !is_valid_token(image_reference) {
+        return None;
+    }
+    let output = capture(&["image", "inspect", "-f", "{{.Id}}", image_reference])?;
+    parse_image_id_output(&output)
 }
 
 /// Queries `podman images` (with `--filter dangling=true` when `all` is `false`) via `capture`.
@@ -814,7 +867,10 @@ fn validate_create_container(request: &CreateContainer<'_>) -> Result<(), PodErr
         "invalid restart policy",
     )?;
     ensure_valid(
-        request.volumes.iter().all(|mount| is_valid_token(mount)),
+        request
+            .volumes
+            .iter()
+            .all(|mount| is_valid_volume_spec(mount)),
         "invalid volume mount",
     )?;
     ensure_valid(
@@ -911,9 +967,10 @@ mod tests {
         build_container_create_args, build_container_exec_args, build_pod_create_args,
         build_pod_logs_args, check_version, collect_in_use_images_with, container_running,
         create_container, create_pod, exec_container, is_running_container_status,
-        is_supported_version, logs_pod, parse_in_use_output, pod_exists, prune_images, pull_image,
-        query_images, query_images_with, query_in_use_images, query_ps_status, remove_container,
-        remove_pod, start_container, stop_container, stop_pod,
+        is_supported_version, logs_pod, parse_image_id_output, parse_in_use_output, pod_exists,
+        prune_images, pull_image, query_image_id, query_image_id_with, query_images,
+        query_images_with, query_in_use_images, query_ps_status, remove_container, remove_pod,
+        start_container, stop_container, stop_pod,
     };
 
     #[test]
@@ -1121,6 +1178,30 @@ mod tests {
             },
         ] {
             assert!(create_container(&bad_container, "", true, &mut stdout, &mut stderr).is_err());
+        }
+
+        for invalid_volume_spec in [
+            "",
+            "relative/target",
+            "../../etc/shadow:/etc/shadow",
+            "/:/mnt",
+            "/host:relative",
+            "/host:/container:",
+            "/host:/container:-ro",
+            "/host:/container:ro:extra",
+            "/host:/container:ro/rw",
+            "/host:/container:..",
+            "/host:/container:ro z",
+        ] {
+            let invalid_volumes = [String::from(invalid_volume_spec)];
+            let invalid_request = CreateContainer {
+                volumes: &invalid_volumes,
+                ..base_container
+            };
+            assert!(
+                create_container(&invalid_request, "", true, &mut stdout, &mut stderr).is_err(),
+                "expected invalid volume spec {invalid_volume_spec:?} to fail"
+            );
         }
 
         for bad_exec in [
@@ -1368,6 +1449,22 @@ mod tests {
             &mut stderr,
         )
         .unwrap();
+        let spaced_volumes = [
+            String::from("/anon"),
+            String::from("/host:/data"),
+            String::from("/pods/my pod/data:/data/my dir:ro,Z"),
+        ];
+        create_container(
+            &CreateContainer {
+                volumes: &spaced_volumes,
+                ..no_restart_request
+            },
+            "",
+            true,
+            &mut Vec::new(),
+            &mut stderr,
+        )
+        .unwrap();
         start_container(
             "si_po-1",
             "Start container: ",
@@ -1538,5 +1635,34 @@ mod tests {
         assert!(query_ps_status().is_some());
         assert!(query_images(false).is_some());
         let _ = query_in_use_images();
+        assert!(query_image_id("podoxide_nonexistent_test_image:999999").is_none());
+        assert!(query_image_id("--help").is_none());
+
+        assert_eq!(
+            parse_image_id_output("  sha256:abcd1234  \n"),
+            Some(String::from("sha256:abcd1234"))
+        );
+        assert!(parse_image_id_output("").is_none());
+        assert!(parse_image_id_output("   \n").is_none());
+        assert!(parse_image_id_output("--flag\n").is_none());
+        assert!(parse_image_id_output("two words\n").is_none());
+        assert!(parse_image_id_output("line1\nline2\n").is_none());
+
+        let mut inspect_calls: Vec<Vec<String>> = Vec::new();
+        let mut inspect_capture = |args: &[&str]| -> Option<String> {
+            inspect_calls.push(args.iter().map(|item| (*item).to_owned()).collect());
+            Some(String::from("sha256:feedface\n"))
+        };
+        assert_eq!(
+            query_image_id_with("docker.io/alpine:latest", &mut inspect_capture),
+            Some(String::from("sha256:feedface"))
+        );
+        assert!(query_image_id_with("--invalid", &mut inspect_capture).is_none());
+        assert_eq!(inspect_calls.len(), 1);
+        assert_eq!(
+            inspect_calls[0],
+            vec!["image", "inspect", "-f", "{{.Id}}", "docker.io/alpine:latest"]
+        );
+        assert!(query_image_id_with("alpine:latest", &mut |_: &[&str]| None).is_none());
     }
 }

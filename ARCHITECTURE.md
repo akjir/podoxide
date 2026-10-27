@@ -210,7 +210,7 @@ Executes primary pod lifecycle operations and displays container runtime status 
 | `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes or targeted containers, synthesizes `Not Found` and `Recipe Error` rows, and formats the runtime status table (including `TARGET NAME` in `--full` mode). |
 | `src/core/modes/default/stop.rs`    | Stops running target containers in reverse bottom-to-top order and stops the parent pod (or targeted containers) without removing them. |
 | `src/core/modes/default/up.rs`      | Loads and validates target recipes, then creates and starts pods and containers (or targeted containers) in top-to-bottom order (`create` + `start`). |
-| `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes (or targeted containers) and rebuilds them (`image update` + `reload`). |
+| `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes (or targeted containers) and reloads them when an image was updated (`image update` + conditional `reload`). |
 | `src/core/modes/default/version.rs` | Formats and outputs the application version string for `pods version`. |
 
 ### Image Mode (`src/core/modes/image/`)

@@ -442,7 +442,7 @@ pub fn up_with<W: Write, E: Write>(
     start_with(recipe, simulate, stdout, stderr)
 }
 
-/// Pulls the latest images for `recipe.containers` and reloads the pod (`pull` + `reload`).
+/// Pulls the latest images for `recipe.containers` and reloads the pod when at least one image was updated (`pull` + conditional `reload`).
 ///
 /// # Errors
 ///
@@ -453,7 +453,7 @@ pub fn update(recipe: &Recipe, simulate: bool) -> Result<(), PodError> {
     update_with(recipe, simulate, &mut stdout, &mut stderr)
 }
 
-/// Pulls the latest images for `recipe.containers` and reloads the pod, writing output to `stdout` and `stderr`.
+/// Pulls the latest images for `recipe.containers` and reloads the pod when at least one image was updated (or when `simulate` is `true`), writing output to `stdout` and `stderr`.
 ///
 /// # Errors
 ///
@@ -464,9 +464,67 @@ pub fn update_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
+    if simulate {
+        validate_recipe_pull(recipe)?;
+        validate_recipe_create(recipe)?;
+        pull_with(recipe, true, stdout, stderr)?;
+        return reload_with(recipe, true, stdout, stderr);
+    }
+    let mut query_id = podman::query_image_id;
+    update_with_query(recipe, false, &mut query_id, stdout, stderr)
+}
+
+/// Pulls the latest images for all `recipe.containers` in `1..N` order and returns `true` when at least one image changed.
+fn pull_containers_and_check<W, E, Q>(
+    recipe: &Recipe,
+    simulate: bool,
+    query_id: &mut Q,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<bool, PodError>
+where
+    W: Write,
+    E: Write,
+    Q: FnMut(&str) -> Option<String>,
+{
+    log::write_print(
+        stdout,
+        &format!("Update pod '{}' ('{}') ...", recipe.pod.name, recipe.pod.id),
+    );
+    let mut any_updated = false;
+    for item in &recipe.containers {
+        if container::pull_and_check_with(item, &recipe.pod, simulate, query_id, stdout, stderr)? {
+            any_updated = true;
+        }
+    }
+    Ok(any_updated)
+}
+
+/// Pulls the latest images for `recipe.containers` using `query_id` and reloads the pod only when at least one image was updated.
+fn update_with_query<W, E, Q>(
+    recipe: &Recipe,
+    simulate: bool,
+    query_id: &mut Q,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), PodError>
+where
+    W: Write,
+    E: Write,
+    Q: FnMut(&str) -> Option<String>,
+{
     validate_recipe_pull(recipe)?;
     validate_recipe_create(recipe)?;
-    pull_with(recipe, simulate, stdout, stderr)?;
+    if !pull_containers_and_check(recipe, simulate, query_id, stdout, stderr)? {
+        log::write_print(
+            stdout,
+            &format!(
+                "Pod '{}' ('{}') is up to date.",
+                recipe.pod.name, recipe.pod.id
+            ),
+        );
+        return Ok(());
+    }
     reload_with(recipe, simulate, stdout, stderr)
 }
 
@@ -542,7 +600,7 @@ mod tests {
     use super::{
         Pod, PodCommand, create, create_with, down, down_with, pull, pull_with, reload,
         reload_with, remove, remove_with, restart, restart_with, start, start_with, stop,
-        stop_with, up, up_with, update, update_with,
+        stop_with, up, up_with, update, update_with, update_with_query,
     };
 
     struct BrokenPipeWriter;
@@ -801,6 +859,67 @@ mod tests {
         assert_eq!(update_lines[7], "Stop container 'three': ");
         assert_eq!(update_lines[35], "Start container 'three': ");
         assert!(stderr.is_empty());
+
+        // When no container images change, update_with_query pulls all containers, skips reload, and prints up-to-date message.
+        let mut up_to_date_out = Vec::new();
+        let mut unchanged_query = |_: &str| Some(String::from("sha256:same"));
+        update_with_query(
+            &recipe,
+            true,
+            &mut unchanged_query,
+            &mut up_to_date_out,
+            &mut stderr,
+        )
+        .unwrap();
+        let up_to_date_lines: Vec<&str> = std::str::from_utf8(&up_to_date_out)
+            .unwrap()
+            .lines()
+            .collect();
+        assert_eq!(
+            up_to_date_lines,
+            vec![
+                "Update pod 'Order Stack' ('order') ...",
+                "Update container 'order-1' ...",
+                "podman pull obey.io/order:1",
+                "Update container 'order-two' ...",
+                "podman pull obey.io/order:2",
+                "Update container 'three' ...",
+                "podman pull custom.io/order:3",
+                "Pod 'Order Stack' ('order') is up to date.",
+            ]
+        );
+
+        // When at least one container image changes, update_with_query pulls all containers in 1..N order and reloads the pod.
+        let mut partial_update_out = Vec::new();
+        let mut second_calls = 0usize;
+        let mut partial_query = |image_ref: &str| {
+            if image_ref == "obey.io/order:2" {
+                second_calls += 1;
+                if second_calls == 1 {
+                    Some(String::from("sha256:old"))
+                } else {
+                    Some(String::from("sha256:new"))
+                }
+            } else {
+                Some(String::from("sha256:same"))
+            }
+        };
+        update_with_query(
+            &recipe,
+            true,
+            &mut partial_query,
+            &mut partial_update_out,
+            &mut stderr,
+        )
+        .unwrap();
+        let partial_lines: Vec<&str> = std::str::from_utf8(&partial_update_out)
+            .unwrap()
+            .lines()
+            .collect();
+        assert_eq!(partial_lines.len(), 37);
+        assert_eq!(partial_lines[5], "Update container 'three' ...");
+        assert_eq!(partial_lines[7], "Stop container 'three': ");
+        assert_eq!(partial_lines[35], "Start container 'three': ");
 
         // Exercise standard stream wrappers in simulate mode.
         assert!(create(&recipe, true).is_ok());

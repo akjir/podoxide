@@ -294,7 +294,7 @@ pods [OPTIONS] <action> [TARGETS...]
 | `status [target...]`  | Display a formatted status table of managed containers and report invalid recipes with `Recipe Error`.       |
 | `stop <target...>`    | Stop a running pod and its containers in reverse bottom-to-top order without removing them.                  |
 | `up <target...>`      | Create and start the pod and its containers in deterministic top-to-bottom order (`create` + `start`).       |
-| `update <target...>`  | Pull the latest container images and rebuild the pod (`image update` + `reload`).                            |
+| `update <target...>`  | Pull the latest container images and reload the pod (or targeted container) if an image was updated.          |
 | `version`             | Display the application version with Git build metadata and exit.                                            |
 
 ### Options

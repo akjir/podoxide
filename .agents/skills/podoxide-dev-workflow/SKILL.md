@@ -8,29 +8,17 @@ description: >-
 
 ## 1. Edit-Build-Test Cycle
 1. **Verify Baseline:** Run `cargo test` and `cargo clippy -- -D warnings` before editing files.
-2. **Edit:** Modify source files under `src/` following the deterministic file layout (`P-LICENSE-HEADER`), mandatory documentation (`P-FN-DOCS`), zero-dependency, direct-use (`P-NO-DEAD-CODE`), and flat control flow rules (`P-VERTICAL-CLARITY`, `P-FLAT-CONTROL-FLOW`, `P-FLATTEN-DISPATCH`, `P-NO-NESTED-LOOPS`, `P-LOOP-MODULARITY`) in `AGENTS.md`:
-   - **File Layout Gate (`P-LICENSE-HEADER`):** Ensure step 1 of every `.rs` vertical file layout contains the verbatim GPL-3.0 license header from `src/main.rs` followed by a single blank line and `//!` module-level documentation.
-   - **Implementation & Refactoring Gate (`P-FN-DOCS`):** Document every newly created or extracted production `fn`, method, constructor, `struct`, `enum`, or `type` (`pub`, `pub(crate)`, or private) with a concise `///` doc comment. Keep `#[test]` functions and test-only helpers inside `#[cfg(test)] mod tests` free of redundant `///` doc comments unless a comment is strictly required to explain a non-obvious edge case or attack vector.
-   - Ensure `crate::` precedes `self::` and `super::` in all import blocks (including `mod tests`), and enforce `MAX_*` bounds before scanning or allocating the $(N+1)$-th item.
-   - Do not create speculative helper methods, unused trait implementations, or fallback branches that have no active caller (`P-NO-DEAD-CODE`).
-   - If downstream modules are not implemented yet, create only the minimal no-op placeholder stubs (`Ok(())` or `Default`) directly invoked by the current module so the crate compiles cleanly.
-3. **Flatness, Readability & Allocation Gate (`P-VERTICAL-CLARITY`, `P-ZERO-ALLOC`, `P-ZERO-COPY`, `P-BOUND-ALLOC`):** Before running final verification (`cargo test` and `cargo clippy -- -D warnings`), scan all modified functions for:
-   - Nested loops (`P-NO-NESTED-LOOPS`)
-   - Indentation depth exceeding 3 levels (`P-FLAT-CONTROL-FLOW`)
-   - Complex inline closures or large loop bodies (`P-VERTICAL-CLARITY`, `P-LOOP-MODULARITY`)
-   - Avoidable heap allocations in loops (`.to_string()`, `.to_owned()`, `.clone()`, `PathBuf::from()`), intermediate `.collect::<Vec<_>>()` allocations where iterators or slices suffice (`P-ZERO-ALLOC`, `P-ZERO-COPY`), or missing pre-scan/pre-allocation bounds (`P-BOUND-ALLOC`), while keeping `P-VERTICAL-CLARITY` (readability over dense micro-optimizations) as the priority.
-   If any function violates these rules, refactor the inner blocks into small, alphabetically sorted helper functions (following Section 2 of `AGENTS.md`) with `///` doc comments (`P-FN-DOCS`) before completing the task.
-4. **License, Documentation & Dead-Code Audit Gate (`P-LICENSE-HEADER`, `P-FN-DOCS`, `P-NO-DEAD-CODE`):** Before running final verification (`cargo test` and `cargo clippy -- -D warnings`):
-   - Flag any `.rs` file missing the verbatim license header (`P-LICENSE-HEADER`) or `//!` module docs, or any production `fn`, `struct`, `enum`, or `type` missing a `///` doc comment (`P-FN-DOCS`), as a violation that must be fixed immediately.
-   - Scan all modified and affected files for orphaned functions, unused struct fields, obsolete error variants, legacy code paths, underscore-prefixed unused items (`_unused_fn`), or `#[allow(dead_code)]` attributes, and remove every piece of code without a direct use (along with its obsolete unit tests).
-5. **Test & Lint:** Run `cargo test` and `cargo clippy -- -D warnings` after every code modification.
-6. **Sync Docs, Templates & Changelog:** Follow **`update-documentation`** to sync `USAGE.md`, `README.md`, `PSL_SPEC.md`, CLI help output, `.pods-completion.bash`, `pods.conf`, `recipe.pod`, `ARCHITECTURE.md`, and `AGENTS.md`. Follow **`changelog-updater`** to update `CHANGELOG.md`.
+2. **Edit (`AGENTS.md` Sections 1–3):** Keep `mod.rs` files minimal (declarations, re-exports, constants, thin dispatchers) and place core logic in leaf `.rs` files:
+   - **Layout & Imports (`P-LICENSE-HEADER`):** Follow the 8-part vertical layout (verbatim GPL-3.0 header from `src/main.rs` + blank line + `//!` docs). Enforce `std::` then `crate::`, `self::`, `super::` import order (including in `mod tests`), single-module braces (`imports_granularity = Module`, no nested `::`), no production globs (`use ...::*;`), and direct type imports vs. module-qualified free functions.
+   - **Types & Docs (`P-FN-DOCS`, `P-NO-DEAD-CODE`):** Favor concrete types, named-field structs, and two-state enums over ambiguous `bool` parameters. Document every production item (`pub`, `pub(crate)`, private, and extracted helpers) with `///`; omit redundant `///` in `#[cfg(test)] mod tests`. Write only directly called items (or active `Ok(())` / `Default` compilation stubs).
+3. **Flatness, Readability & Allocation Gate (`P-VERTICAL-CLARITY`, `P-FLAT-CONTROL-FLOW`, `P-FLATTEN-DISPATCH`, `P-NO-NESTED-LOOPS`, `P-LOOP-MODULARITY`, `P-FUNCTIONAL-COMBINATORS`, `P-ZERO-ALLOC`, `P-ZERO-COPY`, `P-BOUND-ALLOC`):** Refactor any violating block into small, alphabetically sorted, `///`-documented helper functions:
+   - Enforce zero nested loops (`P-NO-NESTED-LOOPS`), indentation $\le 3$ levels (`P-FLAT-CONTROL-FLOW`), loop bodies $< 25$ lines (`P-LOOP-MODULARITY`), and dispatchers $< 40$ lines (`P-FLATTEN-DISPATCH`).
+   - Deconstruct `Option`/`Result` via `match`, `if let`, `?`, or `let ... else` (never check `.is_some()`/`.is_ok()` then unwrap). Prefer flat `for` loops calling a helper over complex combinator chains (`P-FUNCTIONAL-COMBINATORS`, `P-VERTICAL-CLARITY`).
+   - Eliminate avoidable loop allocations (`.to_string()`, `.to_owned()`, `.clone()`, `PathBuf::from()`, intermediate `.collect::<Vec<_>>()`), and check `MAX_*` bounds before scanning or allocating the $(N+1)$-th element (`P-BOUND-ALLOC`).
+4. **License, Documentation & Dead-Code Gate (`P-LICENSE-HEADER`, `P-FN-DOCS`, `P-NO-DEAD-CODE`):** Verify license headers, `//!` and `///` docs, and delete all orphaned functions, fields, variants, imports, `_unused` items, `#[allow(dead_code)]`, and obsolete unit tests.
+5. **Test & Lint:** Run `cargo test` and `cargo clippy -- -D warnings` after every modification.
+6. **Sync Docs, Templates & Changelog:** Follow **`update-documentation`** (`USAGE.md`, `README.md`, `PSL_SPEC.md`, CLI help, `.pods-completion.bash`, `pods.conf`, `recipe.pod`, `ARCHITECTURE.md`, `AGENTS.md`) and **`changelog-updater`** (`CHANGELOG.md`).
 
 ## 2. Testing Standards (`cargo test`)
-* **Coverage:** Write unit and integration tests for every feature, parser routine, or bug fix.
-* **Assertions:** Use semantic assertions (`.contains()`) over brittle exact-string matches.
-* **Edge Cases:**
-  * Cover fallback `_ =>` branches (`M-FALLBACK-TESTS`).
-  * Cover extreme capacity bounds (`M-EXTREME-BOUND-TESTS`) and delimiter/quote injection in PSL files (`M-DELIM-INJECT-TESTS`).
-  * Test path edge cases: hidden files, dot paths, multi-extensions, and empty paths (`M-PATH-EDGE-TESTS`).
-  * Test I/O and process logic using temporary directories, in-memory cursors, or mock executors (`M-IO-TESTS`).
+- **Coverage & Assertions:** Write unit and integration tests for every feature, parser routine, or bug fix. Use semantic assertions (`.contains()`) over exact-string matches, and include concise context strings in `assert!` / `assert_eq!` for loops, table-driven cases, and state transitions.
+- **Required Edge Cases (`AGENTS.md` Section 5):** Cover fallback `_ =>` arms (`M-FALLBACK-TESTS`), `MAX_*` bounds (`M-EXTREME-BOUND-TESTS`), PSL delimiter/quote injection (`M-DELIM-INJECT-TESTS`), path edge cases (`.` / `..` / hidden / multi-extension / empty; `M-PATH-EDGE-TESTS`), and isolated I/O/process tests via temp dirs, cursors, or mock executors (`M-IO-TESTS`).

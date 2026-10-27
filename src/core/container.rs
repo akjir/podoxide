@@ -225,10 +225,10 @@ pub fn is_valid_volume_mount(volume: &VolumeMount) -> bool {
     if !volume.container_dir.starts_with('/') || !is_valid_directory_path(&volume.container_dir) {
         return false;
     }
-    if !volume.host_dir.is_empty() && !is_valid_directory_path(&volume.host_dir) {
-        return false;
+    if volume.host_dir.is_empty() {
+        return volume.options.is_empty();
     }
-    is_valid_volume_options(&volume.options)
+    is_valid_directory_path(&volume.host_dir) && is_valid_volume_options(&volume.options)
 }
 
 /// Pulls the latest image for `container` in Podman (`podman pull`).
@@ -368,16 +368,16 @@ pub fn resolve_container_name_value(
 
 /// Resolves the fully qualified `<registry>/<image>` reference for `container` inside `pod`.
 #[must_use]
-pub fn resolve_image_reference(container: &Container, pod: &Pod) -> String {
+pub fn resolve_image_reference<'a>(container: &'a Container, pod: &'a Pod) -> Cow<'a, str> {
     let registry = if container.registry.is_empty() {
         pod.registry.as_str()
     } else {
         container.registry.as_str()
     };
     if registry.is_empty() {
-        return container.image.clone();
+        return Cow::Borrowed(container.image.as_str());
     }
-    format!("{registry}/{}", container.image)
+    Cow::Owned(format!("{registry}/{}", container.image))
 }
 
 /// Stops and starts `container` in Podman (`stop` + `start`).
@@ -488,7 +488,7 @@ pub fn up_with<W: Write, E: Write>(
     start_with(container, simulate, stdout, stderr)
 }
 
-/// Pulls the latest image for `container` and reloads the container inside `pod` (`pull` + `reload`).
+/// Pulls the latest image for `container` and reloads the container inside `pod` when the image was updated (`pull` + conditional `reload`).
 ///
 /// # Errors
 ///
@@ -499,7 +499,7 @@ pub fn update(container: &Container, pod: &Pod, simulate: bool) -> Result<(), Po
     update_with(container, pod, simulate, &mut stdout, &mut stderr)
 }
 
-/// Pulls the latest image for `container` and reloads the container inside `pod` (`pull` + `reload`), writing output to `stdout` and `stderr`.
+/// Pulls the latest image for `container` and reloads the container inside `pod` when the image was updated (or when `simulate` is `true`), writing output to `stdout` and `stderr`.
 ///
 /// # Errors
 ///
@@ -511,9 +511,42 @@ pub fn update_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    container.validate_create(pod)?;
-    pull_with(container, pod, simulate, stdout, stderr)?;
-    reload_with(container, pod, simulate, stdout, stderr)
+    if simulate {
+        container.validate_create(pod)?;
+        pull_with(container, pod, true, stdout, stderr)?;
+        return reload_with(container, pod, true, stdout, stderr);
+    }
+    let mut query_id = podman::query_image_id;
+    update_with_query(container, pod, false, &mut query_id, stdout, stderr)
+}
+
+/// Pulls the latest image for `container` and returns `true` when the local image ID changed or was newly downloaded.
+///
+/// # Errors
+///
+/// Returns [`PodError`] if container/pod validation or Podman execution fails.
+pub(crate) fn pull_and_check_with<W, E, Q>(
+    container: &Container,
+    pod: &Pod,
+    simulate: bool,
+    query_id: &mut Q,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<bool, PodError>
+where
+    W: Write,
+    E: Write,
+    Q: FnMut(&str) -> Option<String>,
+{
+    validate_container_name(container)?;
+    container.validate()?;
+    validate_optional_token(&pod.registry, RecipeErrorKind::InvalidRegistry, pod.line)?;
+    let image_reference = resolve_image_reference(container, pod);
+    let before_id = query_id(&image_reference);
+    log::write_print(stdout, &format!("Update container '{}' ...", container.name));
+    podman::pull_image(&image_reference, "", simulate, stdout, stderr)?;
+    let after_id = query_id(&image_reference);
+    Ok(after_id.is_some() && before_id != after_id)
 }
 
 /// Returns `name` when non-empty, or `"container"` as a fallback error token.
@@ -600,9 +633,15 @@ fn is_valid_volume_options(options: &str) -> bool {
 /// Joins a validated UTF-8 `pod_dir` and normalized relative `clean_host` into a volume host path.
 #[must_use]
 fn join_pod_volume_path(pod_dir: &str, clean_host: &str) -> String {
+    let trimmed_pod = pod_dir.trim_end_matches('/');
+    let clean_pod = if trimmed_pod.is_empty() {
+        pod_dir
+    } else {
+        trimmed_pod
+    };
     let needs_dot_prefix =
-        !pod_dir.starts_with('/') && pod_dir != "." && !pod_dir.starts_with("./");
-    let capacity = pod_dir
+        !clean_pod.starts_with('/') && clean_pod != "." && !clean_pod.starts_with("./");
+    let capacity = clean_pod
         .len()
         .saturating_add(clean_host.len())
         .saturating_add(3);
@@ -610,11 +649,9 @@ fn join_pod_volume_path(pod_dir: &str, clean_host: &str) -> String {
     if needs_dot_prefix {
         resolved.push_str("./");
     }
-    resolved.push_str(pod_dir);
+    resolved.push_str(clean_pod);
     if !clean_host.is_empty() {
-        if !pod_dir.ends_with('/') {
-            resolved.push('/');
-        }
+        resolved.push('/');
         resolved.push_str(clean_host);
     }
     resolved
@@ -637,12 +674,37 @@ fn resolve_host_volume_path<'a>(
             label,
         ));
     };
-    let mut rest = host_dir;
+    let mut rest = host_dir.trim_end_matches('/');
     while let Some(stripped) = rest.strip_prefix("./") {
-        rest = stripped;
+        rest = stripped.trim_start_matches('/');
     }
     let clean_host = if rest == "." { "" } else { rest };
     Ok(Cow::Owned(join_pod_volume_path(pod_dir, clean_host)))
+}
+
+/// Pulls the latest image for `container` using `query_id` to detect image updates and reloads the container only when updated.
+fn update_with_query<W, E, Q>(
+    container: &Container,
+    pod: &Pod,
+    simulate: bool,
+    query_id: &mut Q,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), PodError>
+where
+    W: Write,
+    E: Write,
+    Q: FnMut(&str) -> Option<String>,
+{
+    container.validate_create(pod)?;
+    if !pull_and_check_with(container, pod, simulate, query_id, stdout, stderr)? {
+        log::write_print(
+            stdout,
+            &format!("Container '{}' is up to date.", container.name),
+        );
+        return Ok(());
+    }
+    reload_with(container, pod, simulate, stdout, stderr)
 }
 
 /// Validates that `image` is non-empty and a valid single token without leading hyphens.
@@ -746,10 +808,10 @@ mod tests {
     use crate::utilities::collection::append_option_tokens;
     use super::{
         Container, VolumeMount, container_label, create, create_with, create_with_pod_check, down,
-        down_with, format_volume_mount, is_valid_volume_mount, pull, pull_with, reload,
-        reload_with, remove, remove_with, resolve_container_name_value, resolve_host_volume_path,
-        resolve_image_reference, restart, restart_with, start, start_with, stop, stop_with, up,
-        up_with, update, update_with,
+        down_with, format_volume_mount, is_valid_volume_mount, pull, pull_and_check_with,
+        pull_with, reload, reload_with, remove, remove_with, resolve_container_name_value,
+        resolve_host_volume_path, resolve_image_reference, restart, restart_with, start,
+        start_with, stop, stop_with, up, up_with, update, update_with, update_with_query,
     };
 
     struct BrokenPipeWriter;
@@ -835,6 +897,11 @@ mod tests {
                 container_dir: String::from("/data"),
                 host_dir: String::from("./data"),
                 options: String::from("-ro"),
+            },
+            VolumeMount {
+                container_dir: String::from("/data"),
+                host_dir: String::new(),
+                options: String::from("ro"),
             },
         ] {
             assert!(!is_valid_volume_mount(&invalid_volume));
@@ -954,6 +1021,10 @@ mod tests {
             "bestRegEver.io/squad:1998"
         );
         container.registry.clear();
+        assert!(matches!(
+            resolve_image_reference(&container, &Pod::new()),
+            Cow::Borrowed("squad:1998")
+        ));
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -1019,6 +1090,22 @@ mod tests {
             .collect();
         assert_eq!(composite_lines.len(), 30);
 
+        let mut spaced_pod = pod.clone();
+        spaced_pod.path = PathBuf::from("/pods/my pod");
+        let mut spaced_container = container.clone();
+        spaced_container.volumes = vec![VolumeMount {
+            container_dir: String::from("/container/my dir"),
+            host_dir: String::from("./my host"),
+            options: String::from("ro"),
+        }];
+        let mut spaced_out = Vec::new();
+        reload_with(&spaced_container, &spaced_pod, true, &mut spaced_out, &mut stderr).unwrap();
+        assert!(
+            String::from_utf8(spaced_out)
+                .unwrap()
+                .contains("--volume '/pods/my pod/my host:/container/my dir:ro'")
+        );
+
         // Exercise the standard stream wrappers in simulate mode.
         assert!(create(&container, &pod, true).is_ok());
         assert!(start(&container, true).is_ok());
@@ -1061,6 +1148,69 @@ mod tests {
         assert!(!formatted_error.contains('\x1b'));
         assert!(!formatted_error.contains('\u{202E}'));
         assert_eq!(formatted_error.lines().count(), 1);
+
+        // Conditional reload on container update:
+        // 1. Image ID unchanged (Some("id1") -> Some("id1")) skips reload and prints up-to-date message.
+        let mut unchanged_out = Vec::new();
+        let mut same_id = |_: &str| Some(String::from("sha256:id1"));
+        update_with_query(
+            &container,
+            &pod,
+            true,
+            &mut same_id,
+            &mut unchanged_out,
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(unchanged_out).unwrap().lines().collect::<Vec<_>>(),
+            vec![
+                "Update container 'app_1' ...",
+                "podman pull alpine:latest",
+                "Container 'app_1' is up to date.",
+            ]
+        );
+
+        // 2. Image missing before and after pull (None -> None) returns false and skips reload.
+        let mut missing_out = Vec::new();
+        let mut no_id = |_: &str| None;
+        assert!(
+            !pull_and_check_with(
+                &container,
+                &pod,
+                true,
+                &mut no_id,
+                &mut missing_out,
+                &mut stderr,
+            )
+            .unwrap()
+        );
+
+        // 3. Image ID changes (Some("id1") -> Some("id2")) triggers reload.
+        let mut changed_out = Vec::new();
+        let mut call_count = 0usize;
+        let mut changing_id = |_: &str| {
+            call_count += 1;
+            if call_count == 1 {
+                Some(String::from("sha256:id1"))
+            } else {
+                Some(String::from("sha256:id2"))
+            }
+        };
+        update_with_query(
+            &container,
+            &pod,
+            true,
+            &mut changing_id,
+            &mut changed_out,
+            &mut stderr,
+        )
+        .unwrap();
+        let changed_lines: Vec<&str> = std::str::from_utf8(&changed_out).unwrap().lines().collect();
+        assert!(changed_lines.contains(&"Stop container 'app_1': "));
+        assert!(changed_lines.contains(&"Create container 'app_1': "));
+        assert!(changed_lines.contains(&"Start container 'app_1': "));
+        assert!(!changed_lines.contains(&"Container 'app_1' is up to date."));
     }
 
     #[test]
@@ -1257,6 +1407,26 @@ mod tests {
             resolve_host_volume_path("data", Path::new("/my_pod_path/"), 1, "app").unwrap(),
             Cow::Owned::<str>(String::from("/my_pod_path/data"))
         );
+        assert_eq!(
+            resolve_host_volume_path(".", Path::new("/my_pod_path/"), 1, "app").unwrap(),
+            Cow::Owned::<str>(String::from("/my_pod_path"))
+        );
+        assert_eq!(
+            resolve_host_volume_path(".//data/", Path::new("/my_pod_path"), 1, "app").unwrap(),
+            Cow::Owned::<str>(String::from("/my_pod_path/data"))
+        );
+        assert_eq!(
+            resolve_host_volume_path(".//./data", Path::new("/my_pod_path"), 1, "app").unwrap(),
+            Cow::Owned::<str>(String::from("/my_pod_path/data"))
+        );
+        assert_eq!(
+            resolve_host_volume_path(".//.", Path::new("/my_pod_path"), 1, "app").unwrap(),
+            Cow::Owned::<str>(String::from("/my_pod_path"))
+        );
+        assert_eq!(
+            resolve_host_volume_path(".//", Path::new("/my_pod_path"), 1, "app").unwrap(),
+            Cow::Owned::<str>(String::from("/my_pod_path"))
+        );
 
         let cases = [
             ("", "/container/dir/anonymous", "", "/container/dir/anonymous"),
@@ -1319,6 +1489,12 @@ mod tests {
                 "/container/dir/dot_root",
                 "",
                 "/my_pod_path:/container/dir/dot_root",
+            ),
+            (
+                "./my dir",
+                "/container/my dir",
+                "ro,Z",
+                "/my_pod_path/my dir:/container/my dir:ro,Z",
             ),
         ];
 

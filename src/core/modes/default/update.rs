@@ -21,8 +21,9 @@ use crate::core::pod;
 use crate::error::PodError;
 use super::execute_lifecycle_action;
 
-/// Pulls the latest container images for target recipes and rebuilds the pods
-/// (`image update` + `reload`), or pulls and reloads explicitly targeted containers.
+/// Pulls the latest container images for target recipes and reloads the pods when at least one
+/// image was updated (`image update` + conditional `reload`), or pulls and conditionally reloads
+/// explicitly targeted containers.
 ///
 /// # Workflow
 ///
@@ -30,10 +31,11 @@ use super::execute_lifecycle_action;
 ///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
 ///    order and deduplicating repeated targets.
 /// 2. For pod/group targets: pull the latest container images and reload the pod and its
-///    containers (`down` + `up`).
+///    containers (`down` + `up`) when at least one container image changed (or when `--simulate`
+///    is active).
 /// 3. For container targets: pull the latest image for each targeted container and reload only
-///    those containers (`down` + `up`, creating the parent pod if missing) without tearing down
-///    an existing parent pod.
+///    those containers whose image changed (`down` + `up`, creating the parent pod if missing)
+///    without tearing down an existing parent pod.
 ///
 /// # Errors
 ///
