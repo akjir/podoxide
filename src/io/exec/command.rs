@@ -31,10 +31,14 @@ const SPINNER_DONE_SUMMARY: &str = "Done.";
 const SPINNER_FAILED_SUMMARY: &str = "Failed.";
 /// Braille spinner frames displayed while waiting for a background process to complete.
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// ANSI DECTCEM escape sequence that hides the terminal cursor while the spinner is active.
+const SPINNER_HIDE_CURSOR: &str = "\x1b[?25l";
 /// Polling interval in milliseconds between spinner frame updates.
 const SPINNER_INTERVAL_MS: u64 = 80;
 /// Maximum byte length of the sanitized spinner prefix so prefix plus summary fits within [`log::MAX_LOG_MESSAGE_BYTES`].
 const SPINNER_MAX_PREFIX_BYTES: usize = log::MAX_LOG_MESSAGE_BYTES - SPINNER_FAILED_SUMMARY.len();
+/// ANSI DECTCEM escape sequence that restores terminal cursor visibility when the spinner finishes.
+const SPINNER_SHOW_CURSOR: &str = "\x1b[?25h";
 
 /// Output and standard-stream handling mode for external process execution.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -51,6 +55,29 @@ pub(super) struct ExecOptions<'a> {
     pub(super) mode: ExecMode,
     pub(super) prefix: &'a str,
     pub(super) simulate: bool,
+}
+
+/// RAII guard that hides the terminal cursor on creation and restores it on drop.
+struct SpinnerCursor<'a, W: Write> {
+    stdout: &'a mut W,
+}
+
+impl<'a, W: Write> SpinnerCursor<'a, W> {
+    /// Writes the ANSI hide-cursor escape sequence to `stdout` and returns a guard that restores cursor visibility on drop.
+    #[must_use]
+    fn new(stdout: &'a mut W) -> Self {
+        let _ = stdout.write_all(SPINNER_HIDE_CURSOR.as_bytes());
+        let _ = stdout.flush();
+        Self { stdout }
+    }
+}
+
+impl<W: Write> Drop for SpinnerCursor<'_, W> {
+    /// Writes the ANSI show-cursor escape sequence to `stdout` and flushes the stream.
+    fn drop(&mut self) {
+        let _ = self.stdout.write_all(SPINNER_SHOW_CURSOR.as_bytes());
+        let _ = self.stdout.flush();
+    }
 }
 
 /// Executes `editor` with `file_path` interactively (or prints the command when `simulate` is `true`).
@@ -167,6 +194,26 @@ fn emit_captured_lines<W: Write>(
     }
 }
 
+/// Evaluates a `try_wait` `poll_result` for `child`, sleeping for `interval` when still running or killing and reaping `child` on error.
+fn poll_child_status(
+    child: &mut Child,
+    poll_result: io::Result<Option<ExitStatus>>,
+    interval: Duration,
+) -> Result<Option<ExitStatus>, PodError> {
+    match poll_result {
+        Ok(Some(status)) => Ok(Some(status)),
+        Ok(None) => {
+            thread::sleep(interval);
+            Ok(None)
+        }
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(PodError::from(error))
+        }
+    }
+}
+
 /// Executes `program` with `arguments`, writing captured output lines with `prefix` to `stdout` and logging exit warnings to `stderr`.
 fn run_captured<S, W, E>(
     program: &str,
@@ -230,27 +277,23 @@ where
     Ok(())
 }
 
-/// Polls `child` until completion while rendering spinner frames after `sanitized_prefix` on `stdout`.
+/// Polls `child` until completion while hiding the terminal cursor and rendering spinner frames after `sanitized_prefix` on `stdout`.
 fn wait_with_spinner<W: Write>(
     child: &mut Child,
     sanitized_prefix: &str,
     stdout: &mut W,
 ) -> Result<ExitStatus, PodError> {
+    let cursor = SpinnerCursor::new(stdout);
     let interval = Duration::from_millis(SPINNER_INTERVAL_MS);
-    for frame in SPINNER_FRAMES.iter().copied().cycle() {
-        write_spinner_frame(stdout, sanitized_prefix, frame);
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
-            Ok(None) => thread::sleep(interval),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(PodError::from(error));
-            }
+    let mut frames = SPINNER_FRAMES.iter().copied().cycle();
+    loop {
+        let frame = frames.next().unwrap_or("⠋");
+        write_spinner_frame(cursor.stdout, sanitized_prefix, frame);
+        let poll_result = child.try_wait();
+        if let Some(status) = poll_child_status(child, poll_result, interval)? {
+            return Ok(status);
         }
     }
-    let _ = child.kill();
-    Ok(child.wait()?)
 }
 
 /// Writes a warning to `stderr` when `status` exited with a non-zero code or was terminated by a signal.
@@ -286,14 +329,16 @@ fn write_spinner_result<W: Write>(stdout: &mut W, sanitized_prefix: &str, status
 mod tests {
     use std::io;
     use std::os::unix::process::ExitStatusExt;
-    use std::process::ExitStatus;
+    use std::process::{ExitStatus, Stdio};
+    use std::time::Duration;
 
     use crate::core::log;
     use crate::error::PodError;
     use crate::utilities::format;
     use super::{
-        ExecMode, ExecOptions, SPINNER_FAILED_SUMMARY, SPINNER_FRAMES, SPINNER_MAX_PREFIX_BYTES,
-        exec_capture, exec_editor_with, exec_with, warn_on_exit_failure,
+        ExecMode, ExecOptions, SPINNER_FAILED_SUMMARY, SPINNER_FRAMES, SPINNER_HIDE_CURSOR,
+        SPINNER_MAX_PREFIX_BYTES, SPINNER_SHOW_CURSOR, build_command, exec_capture,
+        exec_editor_with, exec_with, poll_child_status, warn_on_exit_failure,
     };
 
     #[test]
@@ -578,13 +623,18 @@ mod tests {
         .unwrap();
         let spinner_text = String::from_utf8(spinner_stdout).unwrap();
         assert!(spinner_text.starts_with(
-            &format!("\rTrying to pull docker.io/library/nginx:stable-alpine... {}", SPINNER_FRAMES[0])
+            &format!(
+                "{SPINNER_HIDE_CURSOR}\rTrying to pull docker.io/library/nginx:stable-alpine... {}",
+                SPINNER_FRAMES[0]
+            )
         ));
         assert!(spinner_text.contains(
             &format!("\rTrying to pull docker.io/library/nginx:stable-alpine... {}", SPINNER_FRAMES[1])
         ));
         assert!(spinner_text.ends_with(
-            "\rTrying to pull docker.io/library/nginx:stable-alpine... Done.\n"
+            &format!(
+                "{SPINNER_SHOW_CURSOR}\rTrying to pull docker.io/library/nginx:stable-alpine... Done.\n"
+            )
         ));
         assert!(spinner_stderr.is_empty());
 
@@ -603,7 +653,13 @@ mod tests {
         )
         .unwrap();
         let spinner_fail_text = String::from_utf8(spinner_fail_stdout).unwrap();
-        assert!(spinner_fail_text.ends_with("\rTrying to pull bad ... Failed.\n"));
+        assert!(spinner_fail_text.starts_with(
+            &format!("{SPINNER_HIDE_CURSOR}\rTrying to pull bad ... {}", SPINNER_FRAMES[0])
+        ));
+        assert!(
+            spinner_fail_text
+                .ends_with(&format!("{SPINNER_SHOW_CURSOR}\rTrying to pull bad ... Failed.\n"))
+        );
         assert!(!spinner_fail_text.contains('\u{202E}'));
         assert_eq!(
             String::from_utf8(spinner_fail_stderr).unwrap(),
@@ -662,5 +718,22 @@ mod tests {
                 "expected PodError::Io for mode {mode:?}"
             );
         }
+
+        let mut child = build_command("sleep", &["10"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let poll_error = poll_child_status(
+            &mut child,
+            Err(io::Error::other("poll failure")),
+            Duration::from_millis(1),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(poll_error, PodError::Io(ref io_err) if io_err.kind() == io::ErrorKind::Other)
+        );
+        assert!(child.try_wait().unwrap().is_some());
     }
 }

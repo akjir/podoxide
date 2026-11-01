@@ -1498,10 +1498,10 @@ mod tests {
         .unwrap();
         let pull_live_text = String::from_utf8(pull_live_stdout).unwrap();
         assert!(pull_live_text.starts_with(
-            "\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... "
+            "\x1b[?25l\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... "
         ));
         assert!(pull_live_text.ends_with(
-            "\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... Failed.\n"
+            "\x1b[?25h\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... Failed.\n"
         ));
         assert!(
             String::from_utf8(pull_live_stderr)
