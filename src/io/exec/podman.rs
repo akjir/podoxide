@@ -15,19 +15,14 @@
 
 //! Central Podman CLI API for pod, container, and image execution and inspection.
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::io::{self, Write};
 
 use crate::error::PodError;
-use crate::io::exec::command::{self, ExecOptions};
-use crate::utilities::collection::{
-    MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity, is_valid_option_value,
-};
-use crate::utilities::path::is_valid_directory_path;
-use crate::utilities::string::{
-    contains_control_or_bidi, contains_control_or_whitespace, is_valid_pod_or_container_name,
-    is_valid_text, is_valid_token, parse_ascii_u32,
-};
+use crate::io::exec::command::{self, ExecMode, ExecOptions};
+use crate::utilities::collection::{self, MAX_COLLECTION_PREALLOC};
+use crate::utilities::{path, string};
 
 /// Command-line arguments executed inside a container to launch an interactive `bash` or `sh` shell.
 pub const SHELL_FALLBACK_COMMAND: [&str; 3] = [
@@ -67,7 +62,7 @@ const PRUNE_DANGLING_ARGS: [&str; 3] = ["image", "prune", "-f"];
 const PS_FORMAT: &str = "{{.ID}};;;{{.Image}};;;{{.Command}};;;{{.CreatedAt}};;;{{.Status}};;;{{.Ports}};;;{{.Names}};;;{{.PodName}};;;{{.Restarts}}";
 
 /// Parameters for creating a container via [`create_container`] (`podman create`).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateContainer<'a> {
     pub commands: &'a [String],
     pub container_name: &'a str,
@@ -78,60 +73,25 @@ pub struct CreateContainer<'a> {
     pub volumes: &'a [String],
 }
 
-impl CreateContainer<'_> {
-    /// Creates a new [`CreateContainer`] instance with default empty fields.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
 /// Parameters for creating a pod via [`create_pod`] (`podman pod create`).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreatePod<'a> {
     pub options: &'a [String],
     pub pod_name: &'a str,
     pub publish: &'a [String],
 }
 
-impl CreatePod<'_> {
-    /// Creates a new [`CreatePod`] instance with default empty fields.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
 /// Parameters for executing a command inside a running container via [`exec_container`] (`podman exec -it`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExecContainer<'a, S: AsRef<str> = String> {
+pub struct ExecContainer<'a, S: AsRef<str>> {
     pub command: &'a [S],
     pub container_name: &'a str,
     pub interactive: bool,
     pub user: Option<&'a str>,
 }
 
-impl<S: AsRef<str>> ExecContainer<'_, S> {
-    /// Creates a new [`ExecContainer`] instance with default empty fields.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl<S: AsRef<str>> Default for ExecContainer<'_, S> {
-    fn default() -> Self {
-        Self {
-            command: &[],
-            container_name: "",
-            interactive: false,
-            user: None,
-        }
-    }
-}
-
 /// Parameters for fetching or streaming pod logs via [`logs_pod`] (`podman pod logs`).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PodLogs<'a> {
     pub container_name: Option<&'a str>,
     pub follow: bool,
@@ -140,14 +100,6 @@ pub struct PodLogs<'a> {
     pub tail: Option<&'a str>,
     pub timestamps: bool,
     pub until: Option<&'a str>,
-}
-
-impl PodLogs<'_> {
-    /// Creates a new [`PodLogs`] instance with default empty fields.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
 }
 
 /// Executes `podman --version` and evaluates whether the installed Podman CLI is version 5.8.0 or higher.
@@ -162,7 +114,7 @@ pub fn check_version() -> bool {
 /// Executes `podman container inspect -f '{{.State.Status}}' <container_name>` and returns `true` when the container is running.
 #[must_use]
 pub fn container_running(container_name: &str) -> bool {
-    if !is_valid_pod_or_container_name(container_name) {
+    if !string::is_valid_pod_or_container_name(container_name) {
         return false;
     }
     let Some(output) = run_podman_capture(&[
@@ -194,7 +146,7 @@ pub fn create_container<W: Write, E: Write>(
     run_podman_with(
         &arguments,
         &ExecOptions {
-            interactive: false,
+            mode: ExecMode::Captured,
             prefix,
             simulate,
         },
@@ -220,7 +172,7 @@ pub fn create_pod<W: Write, E: Write>(
     run_podman_with(
         &arguments,
         &ExecOptions {
-            interactive: false,
+            mode: ExecMode::Captured,
             prefix,
             simulate,
         },
@@ -243,32 +195,21 @@ pub fn exec_container<S: AsRef<str>, W: Write, E: Write>(
 ) -> Result<(), PodError> {
     validate_exec_container(request)?;
     let arguments = build_container_exec_args(request);
+    let mode = if request.interactive {
+        ExecMode::Interactive
+    } else {
+        ExecMode::Captured
+    };
     run_podman_with(
         &arguments,
         &ExecOptions {
-            interactive: request.interactive,
+            mode,
             prefix,
             simulate,
         },
         stdout,
         stderr,
     )
-}
-
-/// Evaluates whether `podman container inspect -f '{{.State.Status}}'` output indicates a running container.
-#[must_use]
-pub fn is_running_container_status(output: &str) -> bool {
-    let mut lines = output.lines();
-    lines.next() == Some("running") && lines.next().is_none()
-}
-
-/// Evaluates whether a `podman --version` output string satisfies version 5.8.0 or higher.
-#[must_use]
-pub fn is_supported_version(output: &str) -> bool {
-    let Some((major, minor)) = parse_podman_major_minor(output) else {
-        return false;
-    };
-    major > MIN_PODMAN_MAJOR || (major == MIN_PODMAN_MAJOR && minor >= MIN_PODMAN_MINOR)
 }
 
 /// Executes `podman pod logs -n --color [-f] [--since <since>] [--until <until>] [--tail <tail>] [--timestamps] [-c <container_name>] <pod_name>`.
@@ -288,7 +229,7 @@ pub fn logs_pod<W: Write, E: Write>(
     run_podman_with(
         &arguments,
         &ExecOptions {
-            interactive: true,
+            mode: ExecMode::Interactive,
             prefix,
             simulate,
         },
@@ -300,7 +241,7 @@ pub fn logs_pod<W: Write, E: Write>(
 /// Executes `podman pod exists <pod_name>` and returns `true` when the pod exists in local storage.
 #[must_use]
 pub fn pod_exists(pod_name: &str) -> bool {
-    if !is_valid_pod_or_container_name(pod_name) {
+    if !string::is_valid_pod_or_container_name(pod_name) {
         return false;
     }
     run_podman_capture(&["pod", "exists", pod_name]).is_some()
@@ -326,7 +267,7 @@ pub fn prune_images<W: Write, E: Write>(
     run_podman_with(
         arguments,
         &ExecOptions {
-            interactive: false,
+            mode: ExecMode::Captured,
             prefix,
             simulate,
         },
@@ -335,7 +276,7 @@ pub fn prune_images<W: Write, E: Write>(
     )
 }
 
-/// Executes `podman pull <image_reference>`.
+/// Executes `podman pull <image_reference>` while displaying a Braille spinner until completion.
 ///
 /// # Errors
 ///
@@ -347,12 +288,20 @@ pub fn pull_image<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    ensure_valid(is_valid_token(image_reference), "invalid image reference")?;
+    ensure_valid(
+        string::is_valid_token(image_reference),
+        "invalid image reference",
+    )?;
+    let pull_prefix = if simulate {
+        Cow::Borrowed(prefix)
+    } else {
+        Cow::Owned(format!("{prefix}Trying to pull {image_reference}... "))
+    };
     run_podman_with(
         &["pull", image_reference],
         &ExecOptions {
-            interactive: false,
-            prefix,
+            mode: ExecMode::Spinner,
+            prefix: &pull_prefix,
             simulate,
         },
         stdout,
@@ -397,13 +346,13 @@ pub fn remove_container<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<(), PodError> {
     ensure_valid(
-        is_valid_pod_or_container_name(container_name),
+        string::is_valid_pod_or_container_name(container_name),
         "invalid container name",
     )?;
     run_podman_with(
         &["rm", container_name],
         &ExecOptions {
-            interactive: false,
+            mode: ExecMode::Captured,
             prefix,
             simulate,
         },
@@ -424,11 +373,14 @@ pub fn remove_pod<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    ensure_valid(is_valid_pod_or_container_name(pod_name), "invalid pod name")?;
+    ensure_valid(
+        string::is_valid_pod_or_container_name(pod_name),
+        "invalid pod name",
+    )?;
     run_podman_with(
         &["pod", "rm", pod_name],
         &ExecOptions {
-            interactive: false,
+            mode: ExecMode::Captured,
             prefix,
             simulate,
         },
@@ -450,13 +402,13 @@ pub fn start_container<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<(), PodError> {
     ensure_valid(
-        is_valid_pod_or_container_name(container_name),
+        string::is_valid_pod_or_container_name(container_name),
         "invalid container name",
     )?;
     run_podman_with(
         &["start", container_name],
         &ExecOptions {
-            interactive: false,
+            mode: ExecMode::Captured,
             prefix,
             simulate,
         },
@@ -478,13 +430,13 @@ pub fn stop_container<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<(), PodError> {
     ensure_valid(
-        is_valid_pod_or_container_name(container_name),
+        string::is_valid_pod_or_container_name(container_name),
         "invalid container name",
     )?;
     run_podman_with(
         &["stop", container_name],
         &ExecOptions {
-            interactive: false,
+            mode: ExecMode::Captured,
             prefix,
             simulate,
         },
@@ -505,11 +457,14 @@ pub fn stop_pod<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<(), PodError> {
-    ensure_valid(is_valid_pod_or_container_name(pod_name), "invalid pod name")?;
+    ensure_valid(
+        string::is_valid_pod_or_container_name(pod_name),
+        "invalid pod name",
+    )?;
     run_podman_with(
         &["pod", "stop", pod_name],
         &ExecOptions {
-            interactive: false,
+            mode: ExecMode::Captured,
             prefix,
             simulate,
         },
@@ -545,7 +500,7 @@ fn append_volume_arguments(arguments: &mut Vec<String>, volumes: &[String]) {
 /// Builds the `podman create` argument vector from `request`.
 #[must_use]
 fn build_container_create_args(request: &CreateContainer<'_>) -> Vec<String> {
-    let capacity = bounded_capacity(
+    let capacity = collection::bounded_capacity(
         BASE_CONTAINER_CREATE_ARG_COUNT
             .saturating_add(request.volumes.len().saturating_mul(2))
             .saturating_add(request.options.len().saturating_mul(2))
@@ -563,7 +518,7 @@ fn build_container_create_args(request: &CreateContainer<'_>) -> Vec<String> {
         arguments.push(String::from(request.restart));
     }
     append_volume_arguments(&mut arguments, request.volumes);
-    append_option_tokens(&mut arguments, request.options);
+    collection::append_option_tokens(&mut arguments, request.options);
     arguments.push(String::from(request.image));
     arguments.extend(request.commands.iter().cloned());
     arguments
@@ -574,7 +529,7 @@ fn build_container_create_args(request: &CreateContainer<'_>) -> Vec<String> {
 fn build_container_exec_args<'a, S: AsRef<str>>(
     request: &'a ExecContainer<'a, S>,
 ) -> Vec<&'a str> {
-    let capacity = bounded_capacity(
+    let capacity = collection::bounded_capacity(
         BASE_CONTAINER_EXEC_ARG_COUNT.saturating_add(request.command.len()),
         MAX_COLLECTION_PREALLOC,
     );
@@ -595,7 +550,7 @@ fn build_container_exec_args<'a, S: AsRef<str>>(
 /// Builds the `podman pod create` argument vector from `request`.
 #[must_use]
 fn build_pod_create_args(request: &CreatePod<'_>) -> Vec<String> {
-    let capacity = bounded_capacity(
+    let capacity = collection::bounded_capacity(
         BASE_POD_CREATE_ARG_COUNT
             .saturating_add(request.publish.len().saturating_mul(2))
             .saturating_add(request.options.len().saturating_mul(2)),
@@ -607,7 +562,7 @@ fn build_pod_create_args(request: &CreatePod<'_>) -> Vec<String> {
     arguments.push(String::from("--name"));
     arguments.push(String::from(request.pod_name));
     append_publish_arguments(&mut arguments, request.publish);
-    append_option_tokens(&mut arguments, request.options);
+    collection::append_option_tokens(&mut arguments, request.options);
     arguments
 }
 
@@ -649,7 +604,7 @@ fn collect_container_ids(ps_output: &str) -> Vec<&str> {
             break;
         }
         let trimmed = line.trim();
-        if is_valid_pod_or_container_name(trimmed) {
+        if string::is_valid_pod_or_container_name(trimmed) {
             container_ids.push(trimmed);
         }
     }
@@ -704,12 +659,28 @@ fn extract_version_token(line: &str) -> Option<&str> {
     Some(version_token)
 }
 
+/// Evaluates whether `podman container inspect -f '{{.State.Status}}'` output indicates a running container.
+#[must_use]
+fn is_running_container_status(output: &str) -> bool {
+    let mut lines = output.lines();
+    lines.next() == Some("running") && lines.next().is_none()
+}
+
+/// Evaluates whether a `podman --version` output string satisfies version 5.8.0 or higher.
+#[must_use]
+fn is_supported_version(output: &str) -> bool {
+    let Some((major, minor)) = parse_podman_major_minor(output) else {
+        return false;
+    };
+    major > MIN_PODMAN_MAJOR || (major == MIN_PODMAN_MAJOR && minor >= MIN_PODMAN_MINOR)
+}
+
 /// Evaluates whether `patch_remainder` starts with valid patch digits followed by an optional SemVer suffix.
 fn is_valid_patch_segment(patch_remainder: &str) -> bool {
     let Some((patch_digits, metadata)) = patch_remainder.split_once(['-', '+']) else {
-        return parse_ascii_u32(patch_remainder).is_some();
+        return string::parse_ascii_u32(patch_remainder).is_some();
     };
-    parse_ascii_u32(patch_digits).is_some() && is_valid_version_metadata(metadata)
+    string::parse_ascii_u32(patch_digits).is_some() && is_valid_version_metadata(metadata)
 }
 
 /// Evaluates whether `metadata` is a non-empty SemVer pre-release or build metadata string.
@@ -724,22 +695,17 @@ fn is_valid_version_metadata(metadata: &str) -> bool {
 #[must_use]
 fn is_valid_volume_spec(mount: &str) -> bool {
     let Some((host_dir, remainder)) = mount.split_once(':') else {
-        return mount.starts_with('/') && is_valid_directory_path(mount);
+        return mount.starts_with('/') && path::is_valid_directory_path(mount);
     };
-    if !is_valid_directory_path(host_dir) {
+    if !path::is_valid_directory_path(host_dir) {
         return false;
     }
     let Some((container_dir, options)) = remainder.split_once(':') else {
-        return remainder.starts_with('/') && is_valid_directory_path(remainder);
+        return remainder.starts_with('/') && path::is_valid_directory_path(remainder);
     };
     container_dir.starts_with('/')
-        && is_valid_directory_path(container_dir)
-        && !options.is_empty()
-        && !options.starts_with('-')
-        && !options.contains(':')
-        && !options.contains('/')
-        && !options.contains("..")
-        && !contains_control_or_whitespace(options)
+        && path::is_valid_directory_path(container_dir)
+        && path::is_valid_volume_options(options)
 }
 
 /// Extracts a single valid trimmed image ID token from `podman image inspect -f '{{.Id}}'` output.
@@ -747,7 +713,7 @@ fn is_valid_volume_spec(mount: &str) -> bool {
 fn parse_image_id_output(output: &str) -> Option<String> {
     let mut lines = output.lines();
     let first = lines.next()?.trim();
-    if lines.next().is_some() || !is_valid_token(first) {
+    if lines.next().is_some() || !string::is_valid_token(first) {
         return None;
     }
     Some(String::from(first))
@@ -762,7 +728,7 @@ fn parse_in_use_output(inspect_output: &str) -> BTreeSet<String> {
             break;
         }
         let trimmed = line.trim();
-        if is_valid_token(trimmed) && !in_use.contains(trimmed) {
+        if string::is_valid_token(trimmed) && !in_use.contains(trimmed) {
             in_use.insert(String::from(trimmed));
         }
     }
@@ -777,8 +743,8 @@ fn parse_line_major_minor(line: &str) -> Option<(u32, u32)> {
     if !is_valid_patch_segment(patch_remainder) {
         return None;
     }
-    let major = parse_ascii_u32(major_str)?;
-    let minor = parse_ascii_u32(minor_str)?;
+    let major = string::parse_ascii_u32(major_str)?;
+    let minor = string::parse_ascii_u32(minor_str)?;
     Some((major, minor))
 }
 
@@ -804,7 +770,7 @@ fn query_image_id_with<F>(image_reference: &str, capture: &mut F) -> Option<Stri
 where
     F: FnMut(&[&str]) -> Option<String>,
 {
-    if !is_valid_token(image_reference) {
+    if !string::is_valid_token(image_reference) {
         return None;
     }
     let output = capture(&["image", "inspect", "-f", "{{.Id}}", image_reference])?;
@@ -854,16 +820,19 @@ where
 /// Validates all fields of `request` before building `podman create` arguments.
 fn validate_create_container(request: &CreateContainer<'_>) -> Result<(), PodError> {
     ensure_valid(
-        is_valid_pod_or_container_name(request.container_name),
+        string::is_valid_pod_or_container_name(request.container_name),
         "invalid container name",
     )?;
     ensure_valid(
-        is_valid_pod_or_container_name(request.pod_name),
+        string::is_valid_pod_or_container_name(request.pod_name),
         "invalid pod name",
     )?;
-    ensure_valid(is_valid_token(request.image), "invalid container image")?;
     ensure_valid(
-        request.restart.is_empty() || is_valid_token(request.restart),
+        string::is_valid_token(request.image),
+        "invalid container image",
+    )?;
+    ensure_valid(
+        request.restart.is_empty() || string::is_valid_token(request.restart),
         "invalid restart policy",
     )?;
     ensure_valid(
@@ -877,11 +846,14 @@ fn validate_create_container(request: &CreateContainer<'_>) -> Result<(), PodErr
         request
             .options
             .iter()
-            .all(|option| is_valid_option_value(option)),
+            .all(|option| collection::is_valid_option_value(option)),
         "invalid container option",
     )?;
     ensure_valid(
-        request.commands.iter().all(|command| is_valid_text(command)),
+        request
+            .commands
+            .iter()
+            .all(|command| string::is_valid_text(command)),
         "invalid container command",
     )
 }
@@ -889,18 +861,21 @@ fn validate_create_container(request: &CreateContainer<'_>) -> Result<(), PodErr
 /// Validates all fields of `request` before building `podman pod create` arguments.
 fn validate_create_pod(request: &CreatePod<'_>) -> Result<(), PodError> {
     ensure_valid(
-        is_valid_pod_or_container_name(request.pod_name),
+        string::is_valid_pod_or_container_name(request.pod_name),
         "invalid pod name",
     )?;
     ensure_valid(
-        request.publish.iter().all(|entry| is_valid_token(entry)),
+        request
+            .publish
+            .iter()
+            .all(|entry| string::is_valid_token(entry)),
         "invalid publish entry",
     )?;
     ensure_valid(
         request
             .options
             .iter()
-            .all(|option| is_valid_option_value(option)),
+            .all(|option| collection::is_valid_option_value(option)),
         "invalid pod option",
     )
 }
@@ -910,25 +885,25 @@ fn validate_exec_container<S: AsRef<str>>(
     request: &ExecContainer<'_, S>,
 ) -> Result<(), PodError> {
     ensure_valid(
-        is_valid_pod_or_container_name(request.container_name),
+        string::is_valid_pod_or_container_name(request.container_name),
         "invalid container name",
     )?;
     ensure_valid(
-        request.user.is_none_or(is_valid_token),
+        request.user.is_none_or(string::is_valid_token),
         "invalid exec user",
     )?;
     let Some(program) = request.command.first().map(AsRef::as_ref) else {
         return ensure_valid(false, "missing exec command");
     };
     ensure_valid(
-        is_valid_text(program) && !program.trim_start().starts_with('-'),
+        string::is_valid_text(program) && !program.trim_start().starts_with('-'),
         "invalid exec program",
     )?;
     ensure_valid(
         request
             .command
             .iter()
-            .all(|argument| !contains_control_or_bidi(argument.as_ref())),
+            .all(|argument| !string::contains_control_or_bidi(argument.as_ref())),
         "invalid exec argument",
     )
 }
@@ -936,24 +911,27 @@ fn validate_exec_container<S: AsRef<str>>(
 /// Validates all fields of `request` before building `podman pod logs` arguments.
 fn validate_pod_logs(request: &PodLogs<'_>) -> Result<(), PodError> {
     ensure_valid(
-        is_valid_pod_or_container_name(request.pod_name),
+        string::is_valid_pod_or_container_name(request.pod_name),
         "invalid pod name",
     )?;
     ensure_valid(
         request
             .container_name
-            .is_none_or(is_valid_pod_or_container_name),
+            .is_none_or(string::is_valid_pod_or_container_name),
         "invalid container name",
     )?;
     ensure_valid(
-        request.since.is_none_or(is_valid_token),
+        request.since.is_none_or(string::is_valid_token),
         "invalid since flag",
     )?;
     ensure_valid(
-        request.until.is_none_or(is_valid_token),
+        request.until.is_none_or(string::is_valid_token),
         "invalid until flag",
     )?;
-    ensure_valid(request.tail.is_none_or(is_valid_token), "invalid tail flag")
+    ensure_valid(
+        request.tail.is_none_or(string::is_valid_token),
+        "invalid tail flag",
+    )
 }
 
 #[cfg(test)]
@@ -1085,33 +1063,22 @@ mod tests {
 
     #[test]
     fn podman_api_rejects_flag_injection_and_malformed_inputs() {
-        let default_str_exec: ExecContainer<'_, &str> = ExecContainer::default();
-        assert_eq!(default_str_exec, ExecContainer::new());
-
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
         for bad_name in ["", "--all", "-fa", "..", "*", "Upper_Case", "a/b"] {
-            for result in [
-                remove_container(bad_name, "", true, &mut stdout, &mut stderr),
-                remove_pod(bad_name, "", true, &mut stdout, &mut stderr),
-                start_container(bad_name, "", true, &mut stdout, &mut stderr),
-                stop_container(bad_name, "", true, &mut stdout, &mut stderr),
-                stop_pod(bad_name, "", true, &mut stdout, &mut stderr),
-            ] {
-                assert!(matches!(
-                    result,
-                    Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::InvalidInput
-                ));
-            }
+            assert_invalid_lifecycle_name(bad_name, &mut stdout, &mut stderr);
         }
 
         for bad_image in ["", "--all-tags", "-q", "alpine:latest --tls-verify=false", "alpine\n"] {
             let result = pull_image(bad_image, "", true, &mut stdout, &mut stderr);
-            assert!(matches!(
-                result,
-                Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::InvalidInput
-            ));
+            assert!(
+                matches!(
+                    result,
+                    Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::InvalidInput
+                ),
+                "expected InvalidInput for bad_image {bad_image:?}"
+            );
         }
 
         let bad_publish = [String::from("--privileged")];
@@ -1133,7 +1100,10 @@ mod tests {
                 publish: &[],
             },
         ] {
-            assert!(create_pod(&bad_pod, "", true, &mut stdout, &mut stderr).is_err());
+            assert!(
+                create_pod(&bad_pod, "", true, &mut stdout, &mut stderr).is_err(),
+                "expected create_pod to fail for {bad_pod:?}"
+            );
         }
 
         let bad_volumes = [String::from("--privileged")];
@@ -1177,7 +1147,10 @@ mod tests {
                 ..base_container
             },
         ] {
-            assert!(create_container(&bad_container, "", true, &mut stdout, &mut stderr).is_err());
+            assert!(
+                create_container(&bad_container, "", true, &mut stdout, &mut stderr).is_err(),
+                "expected create_container to fail for {bad_container:?}"
+            );
         }
 
         for invalid_volume_spec in [
@@ -1236,7 +1209,10 @@ mod tests {
                 user: None,
             },
         ] {
-            assert!(exec_container(&bad_exec, "", true, &mut stdout, &mut stderr).is_err());
+            assert!(
+                exec_container(&bad_exec, "", true, &mut stdout, &mut stderr).is_err(),
+                "expected exec_container to fail for {bad_exec:?}"
+            );
         }
 
         let base_logs = PodLogs {
@@ -1270,7 +1246,10 @@ mod tests {
                 ..base_logs
             },
         ] {
-            assert!(logs_pod(&bad_logs, "", true, &mut stdout, &mut stderr).is_err());
+            assert!(
+                logs_pod(&bad_logs, "", true, &mut stdout, &mut stderr).is_err(),
+                "expected logs_pod to fail for {bad_logs:?}"
+            );
         }
 
         assert!(stdout.is_empty());
@@ -1279,11 +1258,6 @@ mod tests {
 
     #[test]
     fn podman_api_requests_and_direct_execution_commands() {
-        let default_pod = CreatePod::new();
-        assert!(default_pod.pod_name.is_empty());
-        assert!(default_pod.publish.is_empty());
-        assert!(default_pod.options.is_empty());
-
         let publish = vec![
             String::from("127.0.0.1:42:21/TCP"),
             String::from("127.0.0.1::42"),
@@ -1316,8 +1290,6 @@ mod tests {
             ]
         );
 
-        let default_container = CreateContainer::new();
-        assert!(default_container.container_name.is_empty());
         let volumes = vec![String::from("/host:/container:ro")];
         let commands = vec![String::from("sh"), String::from("-c")];
         let create_container_request = CreateContainer {
@@ -1363,13 +1335,8 @@ mod tests {
         assert!(
             !build_container_create_args(&no_restart_request)
                 .iter()
-                .any(|arg| arg == "--restart")
+                .any(|argument| argument == "--restart")
         );
-
-        let default_exec: ExecContainer<'_, String> = ExecContainer::new();
-        assert!(default_exec.container_name.is_empty());
-        assert!(!default_exec.interactive);
-        assert_eq!(default_exec.user, None);
 
         let exec_tokens = vec![
             String::from("sh"),
@@ -1396,9 +1363,6 @@ mod tests {
             ]
         );
 
-        let default_logs = PodLogs::new();
-        assert!(default_logs.pod_name.is_empty());
-        assert!(!default_logs.follow);
         let logs_request = PodLogs {
             container_name: Some("cmd_pod-db"),
             follow: true,
@@ -1521,6 +1485,29 @@ mod tests {
         assert!(rendered.contains("podman exec -it si_po-1 sh -c"));
         assert!(rendered.contains("podman pod logs -n --color -f --since 1h"));
         assert!(stderr.is_empty());
+
+        let mut pull_live_stdout = Vec::new();
+        let mut pull_live_stderr = Vec::new();
+        pull_image(
+            "127.0.0.1:1/podoxide_missing:999999",
+            "",
+            false,
+            &mut pull_live_stdout,
+            &mut pull_live_stderr,
+        )
+        .unwrap();
+        let pull_live_text = String::from_utf8(pull_live_stdout).unwrap();
+        assert!(pull_live_text.starts_with(
+            "\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... "
+        ));
+        assert!(pull_live_text.ends_with(
+            "\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... Failed.\n"
+        ));
+        assert!(
+            String::from_utf8(pull_live_stderr)
+                .unwrap()
+                .starts_with("WARNING: Command exited with code '")
+        );
     }
 
     #[test]
@@ -1568,8 +1555,8 @@ mod tests {
 
         assert!(collect_in_use_images_with(&mut |_: &[&str]| None).is_empty());
         assert!(
-            collect_in_use_images_with(&mut |args: &[&str]| {
-                if args.first() == Some(&"ps") {
+            collect_in_use_images_with(&mut |arguments: &[&str]| {
+                if arguments.first() == Some(&"ps") {
                     Some(String::new())
                 } else {
                     None
@@ -1578,8 +1565,8 @@ mod tests {
             .is_empty()
         );
         assert!(
-            collect_in_use_images_with(&mut |args: &[&str]| {
-                if args.first() == Some(&"ps") {
+            collect_in_use_images_with(&mut |arguments: &[&str]| {
+                if arguments.first() == Some(&"ps") {
                     Some(String::from("c1\n"))
                 } else {
                     None
@@ -1610,8 +1597,8 @@ mod tests {
 
         let invalid_ps_flood = format!("{}valid_after_limit\n", "..\n".repeat(MAX_INSPECT_RECORDS));
         assert!(
-            collect_in_use_images_with(&mut |args: &[&str]| {
-                if args.first() == Some(&"ps") {
+            collect_in_use_images_with(&mut |arguments: &[&str]| {
+                if arguments.first() == Some(&"ps") {
                     Some(invalid_ps_flood.clone())
                 } else {
                     Some(String::from("should_not_run\n"))
@@ -1620,11 +1607,11 @@ mod tests {
             .is_empty()
         );
 
-        let bounded_in_use = collect_in_use_images_with(&mut |args: &[&str]| {
-            match args.first().copied() {
+        let bounded_in_use = collect_in_use_images_with(&mut |arguments: &[&str]| {
+            match arguments.first().copied() {
                 Some("ps") => Some(oversized_ps.clone()),
                 Some("inspect") => {
-                    assert_eq!(args.len(), MAX_INSPECT_RECORDS + 3);
+                    assert_eq!(arguments.len(), MAX_INSPECT_RECORDS + 3);
                     Some(oversized_inspect.clone())
                 }
                 _ => None,
@@ -1649,8 +1636,8 @@ mod tests {
         assert!(parse_image_id_output("line1\nline2\n").is_none());
 
         let mut inspect_calls: Vec<Vec<String>> = Vec::new();
-        let mut inspect_capture = |args: &[&str]| -> Option<String> {
-            inspect_calls.push(args.iter().map(|item| (*item).to_owned()).collect());
+        let mut inspect_capture = |arguments: &[&str]| -> Option<String> {
+            inspect_calls.push(arguments.iter().map(|item| (*item).to_owned()).collect());
             Some(String::from("sha256:feedface\n"))
         };
         assert_eq!(
@@ -1664,5 +1651,27 @@ mod tests {
             vec!["image", "inspect", "-f", "{{.Id}}", "docker.io/alpine:latest"]
         );
         assert!(query_image_id_with("alpine:latest", &mut |_: &[&str]| None).is_none());
+    }
+
+    fn assert_invalid_lifecycle_name(
+        bad_name: &str,
+        stdout: &mut Vec<u8>,
+        stderr: &mut Vec<u8>,
+    ) {
+        for result in [
+            remove_container(bad_name, "", true, stdout, stderr),
+            remove_pod(bad_name, "", true, stdout, stderr),
+            start_container(bad_name, "", true, stdout, stderr),
+            stop_container(bad_name, "", true, stdout, stderr),
+            stop_pod(bad_name, "", true, stdout, stderr),
+        ] {
+            assert!(
+                matches!(
+                    result,
+                    Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::InvalidInput
+                ),
+                "expected InvalidInput for bad_name {bad_name:?}"
+            );
+        }
     }
 }

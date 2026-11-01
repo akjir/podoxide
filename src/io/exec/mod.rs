@@ -21,8 +21,7 @@ pub mod podman;
 pub use self::command::exec_editor_with;
 pub use self::podman::{
     CreateContainer, CreatePod, ExecContainer, PodLogs, SHELL_FALLBACK_COMMAND, check_version,
-    container_running, create_container, create_pod, exec_container, is_running_container_status,
-    is_supported_version, logs_pod, pod_exists, prune_images, pull_image, query_images,
-    query_in_use_images, query_ps_status, remove_container, remove_pod, start_container,
-    stop_container, stop_pod,
+    container_running, create_container, create_pod, exec_container, logs_pod, pod_exists,
+    prune_images, pull_image, query_images, query_in_use_images, query_ps_status, remove_container,
+    remove_pod, start_container, stop_container, stop_pod,
 };

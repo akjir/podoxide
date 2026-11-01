@@ -40,6 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Changed `pods config show` to print the raw `pods.conf` file with 1-based line numbers matching `pods recipe show <recipe>`.
 - Changed `src/io/exec/podman.rs` to provide the single central Podman execution and query API (`P-PODMAN-API`) and restricted direct process execution helpers in `src/io/exec/command.rs` to `src/io/`.
 - Changed `pods update` to inspect local image IDs (`podman image inspect -f '{{.Id}}'`) before and after `podman pull` and reload target pods or containers only when an image changed, outputting an up-to-date message otherwise.
+- Changed `pods update` and `pods image update` (`podman pull`) to suppress verbose Podman pull output and display an animated Braille spinner (`Trying to pull <image>...`) followed by `Done.` or `Failed.`.
 
 ### Fixed
 

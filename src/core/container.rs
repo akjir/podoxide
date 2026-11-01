@@ -26,10 +26,12 @@ use crate::io::exec::podman::{self, CreateContainer};
 use crate::utilities::collection::{
     MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value,
 };
-use crate::utilities::path::{is_valid_directory, is_valid_directory_path};
+use crate::utilities::path::{
+    is_valid_directory, is_valid_directory_path, is_valid_volume_options,
+};
 use crate::utilities::string::{
-    contains_control_or_bidi, contains_control_or_whitespace, is_valid_pod_or_container_name,
-    is_valid_text, is_valid_token, normalize_name,
+    contains_control_or_bidi, is_valid_pod_or_container_name, is_valid_text, is_valid_token,
+    normalize_name,
 };
 
 /// Container specification and runtime arguments from a `container` block in a `.pod` recipe.
@@ -228,7 +230,8 @@ pub fn is_valid_volume_mount(volume: &VolumeMount) -> bool {
     if volume.host_dir.is_empty() {
         return volume.options.is_empty();
     }
-    is_valid_directory_path(&volume.host_dir) && is_valid_volume_options(&volume.options)
+    is_valid_directory_path(&volume.host_dir)
+        && (volume.options.is_empty() || is_valid_volume_options(&volume.options))
 }
 
 /// Pulls the latest image for `container` in Podman (`podman pull`).
@@ -617,17 +620,6 @@ fn has_relative_host_volume(volumes: &[VolumeMount]) -> bool {
     volumes
         .iter()
         .any(|volume| !volume.host_dir.is_empty() && !volume.host_dir.starts_with('/'))
-}
-
-/// Evaluates whether volume mount `options` (when non-empty) are free of colons, slashes, `..`, leading hyphens, and whitespace.
-#[must_use]
-fn is_valid_volume_options(options: &str) -> bool {
-    options.is_empty()
-        || (!options.starts_with('-')
-            && !options.contains(':')
-            && !options.contains('/')
-            && !options.contains("..")
-            && !contains_control_or_whitespace(options))
 }
 
 /// Joins a validated UTF-8 `pod_dir` and normalized relative `clean_host` into a volume host path.

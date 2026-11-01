@@ -20,9 +20,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::core::config::{DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH};
 use crate::error::{ConfigError, ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError};
-use crate::utilities::string::{
-    contains_control_or_bidi, contains_control_or_whitespace, sanitize_text,
-};
+use crate::utilities::string;
 
 /// Constructs a full file or directory path from `base_dir`, `file_name`, and `file_extension`.
 #[must_use]
@@ -53,7 +51,7 @@ pub fn extract_config_stem(raw_value: &str) -> Option<&str> {
         || raw_value != raw_value.trim()
         || raw_value.starts_with('-')
         || raw_value.ends_with('/')
-        || contains_control_or_bidi(raw_value)
+        || string::contains_control_or_bidi(raw_value)
     {
         return None;
     }
@@ -95,7 +93,7 @@ pub fn is_valid_directory_path(value: &str) -> bool {
         || value != value.trim()
         || value.starts_with('-')
         || value.contains(':')
-        || contains_control_or_bidi(value)
+        || string::contains_control_or_bidi(value)
     {
         return false;
     }
@@ -112,7 +110,7 @@ pub fn is_valid_directory_path(value: &str) -> bool {
 pub fn is_valid_editor_value(value: &str) -> bool {
     if value.is_empty()
         || value.starts_with('-')
-        || contains_control_or_whitespace(value)
+        || string::contains_control_or_whitespace(value)
         || has_parent_dir(Path::new(value))
     {
         return false;
@@ -124,6 +122,7 @@ pub fn is_valid_editor_value(value: &str) -> bool {
         && file_name != "."
         && file_name != ".."
         && !file_name.starts_with('-')
+        && !file_name.eq_ignore_ascii_case("podman")
 }
 
 /// Evaluates whether `path` is a structurally valid, UTF-8 target file path without `..` traversal.
@@ -140,6 +139,17 @@ pub fn is_valid_target_path(path: &Path) -> bool {
     };
     let target_stem = config_stem.strip_suffix(".pod").unwrap_or(config_stem);
     has_valid_stem(target_stem)
+}
+
+/// Evaluates whether a non-empty volume mount `options` token is free of colons, slashes, `..`, leading hyphens, and control/whitespace characters.
+#[must_use]
+pub fn is_valid_volume_options(options: &str) -> bool {
+    !options.is_empty()
+        && !options.starts_with('-')
+        && !options.contains(':')
+        && !options.contains('/')
+        && !options.contains("..")
+        && !string::contains_control_or_whitespace(options)
 }
 
 /// Evaluates whether `file_name` ends with `extension` and retains a non-empty, non-dot-only stem.
@@ -254,13 +264,13 @@ pub fn resolve_config_path(config: Option<&Path>) -> PathBuf {
 #[must_use]
 pub fn sanitize_path_token(path: &Path) -> String {
     if let Some(valid_str) = path.to_str() {
-        return sanitize_text(valid_str, MAX_ERROR_TOKEN_BYTES);
+        return string::sanitize_text(valid_str, MAX_ERROR_TOKEN_BYTES);
     }
     let raw_bytes = path.as_os_str().as_encoded_bytes();
     let max_scan = MAX_ERROR_TOKEN_BYTES.saturating_add(3);
     let prefix_bytes = raw_bytes.get(..max_scan).unwrap_or(raw_bytes);
     let lossy = String::from_utf8_lossy(prefix_bytes);
-    sanitize_text(&lossy, MAX_ERROR_TOKEN_BYTES)
+    string::sanitize_text(&lossy, MAX_ERROR_TOKEN_BYTES)
 }
 
 /// Verifies that `editor` is non-empty and structurally valid for direct process execution.
@@ -331,9 +341,9 @@ mod tests {
     use super::{
         build_full_path, extract_config_stem, has_parent_dir, has_regular_target_name,
         is_valid_directory, is_valid_directory_path, is_valid_editor_value, is_valid_target_path,
-        matches_extension, normalize_lexical_path, parent_or_cur_dir, pop_relative_or_absolute,
-        relative_display_path, resolve_config_name, resolve_config_path, sanitize_path_token,
-        validate_editor,
+        is_valid_volume_options, matches_extension, normalize_lexical_path, parent_or_cur_dir,
+        pop_relative_or_absolute, relative_display_path, resolve_config_name, resolve_config_path,
+        sanitize_path_token, validate_editor,
     };
 
     #[test]
@@ -391,6 +401,8 @@ mod tests {
         assert!(!is_valid_editor_value("../vim"));
         assert!(!is_valid_editor_value("/usr/bin/"));
         assert!(!is_valid_editor_value("vim -u NONE"));
+        assert!(!is_valid_editor_value("podman"));
+        assert!(!is_valid_editor_value("/usr/bin/podman"));
         assert_eq!(validate_editor("vim").unwrap(), "vim");
         assert!(matches!(
             validate_editor("   "),
@@ -400,6 +412,14 @@ mod tests {
             validate_editor("-vim"),
             Err(PodError::Config(error)) if error.kind == ConfigErrorKind::InvalidPath
         ));
+
+        assert!(is_valid_volume_options("ro,Z"));
+        assert!(!is_valid_volume_options(""));
+        assert!(!is_valid_volume_options("-ro"));
+        assert!(!is_valid_volume_options("ro:z"));
+        assert!(!is_valid_volume_options("ro/rw"));
+        assert!(!is_valid_volume_options(".."));
+        assert!(!is_valid_volume_options("ro z"));
 
         assert!(has_regular_target_name(Path::new("./pods.conf")));
         assert!(!has_regular_target_name(Path::new("")));
