@@ -139,7 +139,7 @@ fn ensure_target_creatable(path: &Path, workspace_dir: &Path) -> Result<(), PodE
     fs::ensure_writable_target(path)
 }
 
-/// Writes `content` to `path` unless `simulate` is `true`, and logs creation or an existing-file warning to `stderr_writer`.
+/// Writes `content` atomically to `path` unless `simulate` is `true`, and logs creation or an existing-file warning to `stderr_writer`.
 fn write_template_file<W: Write>(
     path: &Path,
     workspace_dir: &Path,
@@ -148,21 +148,38 @@ fn write_template_file<W: Write>(
     stderr_writer: &mut W,
 ) -> Result<(), PodError> {
     let display_path = relative_display_path(path, workspace_dir);
-    if fs::file_exists(path) {
-        log::write_warning(
-            stderr_writer,
-            &format!("File '{}' already exists.", display_path.display()),
-        );
+    if simulate {
+        if fs::file_exists(path) {
+            log::write_warning(
+                stderr_writer,
+                &format!("File '{}' already exists.", display_path.display()),
+            );
+        } else {
+            log::write_info(
+                stderr_writer,
+                &format!("Created '{}'.", display_path.display()),
+            );
+        }
         return Ok(());
     }
-    if !simulate {
-        fs::write_file(path, content)?;
+    match fs::write_file_exclusive(path, content) {
+        Ok(()) => {
+            log::write_info(
+                stderr_writer,
+                &format!("Created '{}'.", display_path.display()),
+            );
+            Ok(())
+        }
+        Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::AlreadyExists => {
+            fs::ensure_writable_target(path)?;
+            log::write_warning(
+                stderr_writer,
+                &format!("File '{}' already exists.", display_path.display()),
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
     }
-    log::write_info(
-        stderr_writer,
-        &format!("Created '{}'.", display_path.display()),
-    );
-    Ok(())
 }
 
 #[cfg(test)]

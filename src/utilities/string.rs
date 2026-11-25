@@ -178,6 +178,15 @@ pub fn is_valid_token(value: &str) -> bool {
     !value.is_empty() && !value.starts_with('-') && !contains_control_or_whitespace(value)
 }
 
+/// Evaluates whether `name` is a valid unmanaged Podman container name (`[A-Za-z0-9][A-Za-z0-9_.-]*` without `..`).
+#[must_use]
+pub fn is_valid_unmanaged_container_name(name: &str) -> bool {
+    let Some((&first, rest)) = name.as_bytes().split_first() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric() && is_valid_unmanaged_name_rest(rest) && !name.contains("..")
+}
+
 /// Normalizes `input` by trimming whitespace, lowercasing characters, and collapsing internal whitespace runs into `'_'`.
 #[must_use]
 pub fn normalize_name(input: &str) -> String {
@@ -249,6 +258,14 @@ fn is_valid_pod_name_rest(rest: &[u8]) -> bool {
     })
 }
 
+/// Evaluates whether every trailing byte of an unmanaged container name matches `[A-Za-z0-9_.-]`.
+#[must_use]
+fn is_valid_unmanaged_name_rest(rest: &[u8]) -> bool {
+    rest.iter()
+        .copied()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-' || byte == b'.')
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -256,8 +273,8 @@ mod tests {
         is_bidi_control, is_empty_value_literal, is_identifier_continue, is_identifier_start,
         is_safe_shell_byte, is_valid_container_suffix, is_valid_group_target, is_valid_identifier,
         is_valid_pod_or_container_name, is_valid_recipe_identifier, is_valid_target_segment,
-        is_valid_text, is_valid_token, normalize_name, parse_ascii_u32, sanitize_char,
-        sanitize_text,
+        is_valid_text, is_valid_token, is_valid_unmanaged_container_name, normalize_name,
+        parse_ascii_u32, sanitize_char, sanitize_text,
     };
 
     #[test]
@@ -403,6 +420,17 @@ mod tests {
         assert!(!is_valid_pod_or_container_name("a..b"));
         assert!(!is_valid_pod_or_container_name("a/b"));
         assert!(!is_valid_pod_or_container_name("a:b"));
+
+        assert!(is_valid_unmanaged_container_name("MyApp_1"));
+        assert!(is_valid_unmanaged_container_name("Upper_Case.2-beta"));
+        assert!(is_valid_unmanaged_container_name("10_DB"));
+        assert!(!is_valid_unmanaged_container_name(""));
+        assert!(!is_valid_unmanaged_container_name("_leading"));
+        assert!(!is_valid_unmanaged_container_name("-flag"));
+        assert!(!is_valid_unmanaged_container_name(".hidden"));
+        assert!(!is_valid_unmanaged_container_name("My..App"));
+        assert!(!is_valid_unmanaged_container_name("My/App"));
+        assert!(!is_valid_unmanaged_container_name("My App"));
 
         assert!(is_valid_container_suffix("db"));
         assert!(is_valid_container_suffix("_db"));

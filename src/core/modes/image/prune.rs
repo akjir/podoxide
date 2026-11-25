@@ -17,13 +17,13 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, BufRead, Write};
 
 use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
-use crate::io::exec::podman;
-use crate::io::system::env::MAX_CONFIRMATION_BYTES;
+use crate::io::exec::podman::{self, FIELD_DELIMITER, RECORD_DELIMITER};
+use crate::io::system::env;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::format::{format_bytes, format_line, parse_size_to_bytes};
 
@@ -107,7 +107,7 @@ fn confirm_prune<R: BufRead, W: Write>(
     );
     stdout.write_all(prompt.as_bytes())?;
     stdout.flush()?;
-    let Some(input) = read_confirmation_line(reader)? else {
+    let Some(input) = env::read_bounded_confirmation_line(reader)? else {
         return Ok(false);
     };
     Ok(input.trim_end_matches(['\r', '\n']) == "yes")
@@ -126,7 +126,7 @@ where
     R: BufRead,
     W: Write,
     E: Write,
-    F: FnMut() -> BTreeSet<String>,
+    F: FnMut() -> Result<BTreeSet<String>, PodError>,
     G: FnMut(bool) -> Option<String>,
 {
     let is_all = context.flags.all;
@@ -188,15 +188,17 @@ fn parse_candidate_record<'a>(
     Some(record)
 }
 
-/// Parses a `;;;`-delimited `podman images` line into an [`ImageRecord`].
+/// Parses a control-delimited `podman images` record into an [`ImageRecord`].
 #[must_use]
-fn parse_image_record(line: &str) -> Option<ImageRecord<'_>> {
-    let (id, rest) = line.split_once(";;;")?;
-    let (long_id, rest) = rest.split_once(";;;")?;
-    let (repository, rest) = rest.split_once(";;;")?;
-    let (tag, rest) = rest.split_once(";;;")?;
-    let (size, rest) = rest.split_once(";;;")?;
-    let created = rest.split_once(";;;").map_or(rest, |(first, _)| first);
+fn parse_image_record(record: &str) -> Option<ImageRecord<'_>> {
+    let (id, rest) = record.split_once(FIELD_DELIMITER)?;
+    let (long_id, rest) = rest.split_once(FIELD_DELIMITER)?;
+    let (repository, rest) = rest.split_once(FIELD_DELIMITER)?;
+    let (tag, rest) = rest.split_once(FIELD_DELIMITER)?;
+    let (size, rest) = rest.split_once(FIELD_DELIMITER)?;
+    let created = rest
+        .split_once(FIELD_DELIMITER)
+        .map_or(rest, |(first, _)| first);
     Some(ImageRecord {
         created,
         id,
@@ -207,17 +209,6 @@ fn parse_image_record(line: &str) -> Option<ImageRecord<'_>> {
     })
 }
 
-/// Reads at most [`MAX_CONFIRMATION_BYTES`] bytes of a single confirmation line from `reader`.
-fn read_confirmation_line<R: BufRead>(reader: &mut R) -> Result<Option<String>, PodError> {
-    let mut buffer = String::with_capacity(MAX_CONFIRMATION_BYTES);
-    let mut bounded = reader.take((MAX_CONFIRMATION_BYTES + 1) as u64);
-    let bytes_read = bounded.read_line(&mut buffer)?;
-    if bytes_read == 0 || buffer.len() > MAX_CONFIRMATION_BYTES {
-        return Ok(None);
-    }
-    Ok(Some(buffer))
-}
-
 /// Queries Podman via `query_in_use` and `query_images`, filters out in-use images, and accumulates the prunable image count, reclaimable bytes, and optional preview lines.
 fn scan_prunable_images<F, G>(
     is_all: bool,
@@ -226,14 +217,18 @@ fn scan_prunable_images<F, G>(
     query_images: &mut G,
 ) -> Result<PruneScan, PodError>
 where
-    F: FnMut() -> BTreeSet<String>,
+    F: FnMut() -> Result<BTreeSet<String>, PodError>,
     G: FnMut(bool) -> Option<String>,
 {
-    let in_use_images = query_in_use();
+    let in_use_images = query_in_use()?;
     let output = query_images(is_all)
         .ok_or_else(|| PodError::from(io::Error::other("Failed to query podman images.")))?;
     let preview_lines = if include_lines {
-        let capacity = bounded_capacity(output.lines().count(), MAX_COLLECTION_PREALLOC);
+        let record_count = output
+            .bytes()
+            .filter(|&byte| byte == RECORD_DELIMITER as u8)
+            .count();
+        let capacity = bounded_capacity(record_count, MAX_COLLECTION_PREALLOC);
         Vec::with_capacity(capacity)
     } else {
         Vec::new()
@@ -244,11 +239,12 @@ where
         total_bytes: 0,
     };
 
-    for line in output.lines() {
+    for raw_record in output.split(RECORD_DELIMITER) {
         if scan.image_count >= MAX_PREVIEW_RECORDS {
             break;
         }
-        let Some(record) = parse_candidate_record(line, &in_use_images) else {
+        let record_text = raw_record.trim_start_matches(['\r', '\n']);
+        let Some(record) = parse_candidate_record(record_text, &in_use_images) else {
             continue;
         };
         scan.image_count += 1;
@@ -311,7 +307,7 @@ mod tests {
         let mut reader = Cursor::new(Vec::<u8>::new());
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let mut no_in_use = BTreeSet::new;
+        let mut no_in_use = || Ok(BTreeSet::new());
         let mut no_images = |_: bool| None;
         execute_with(
             &sim_context,
@@ -379,11 +375,12 @@ mod tests {
         interactive_context.flags.force = false;
 
         // Interactive confirmation declined or EOF prints "Aborted." with image count and reclaimable space.
-        let single_image_line = "abcd1234efgh;;;long1;;;<none>;;;<none>;;;500 B;;;1 hour ago\n";
+        let single_image_line =
+            "abcd1234efgh\x1flong1\x1f<none>\x1f<none>\x1f500 B\x1f1 hour ago\x1e\n";
         let three_images_lines = "\
-abcd1234efgh;;;long1;;;my-repo;;;1.0;;;10.5 MB;;;2 weeks ago\n\
-ijkl5678mnop;;;long2;;;<none>;;;<none>;;;500 kB;;;3 weeks ago\n\
-qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
+abcd1234efgh\x1flong1\x1fmy-repo\x1f1.0\x1f10.5 MB\x1f2 weeks ago\x1e\n\
+ijkl5678mnop\x1flong2\x1f<none>\x1f<none>\x1f500 kB\x1f3 weeks ago\x1e\n\
+qrst9012uvwx\x1flong3\x1funtagged-repo\x1f<none>\x1f1.5 MB\x1f5 weeks ago\x1e\n";
 
         for (is_all, images_output, expected_prompt, raw_input) in [
             (
@@ -454,7 +451,7 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
 
         // 1. --all passes true to query_images and prints "No images found to prune." when empty
         let mut captured_is_all = false;
-        let mut no_in_use = BTreeSet::new;
+        let mut no_in_use = || Ok(BTreeSet::new());
         let mut empty_images = |is_all: bool| -> Option<String> {
             captured_is_all = is_all;
             Some(String::new())
@@ -478,10 +475,10 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
         );
 
         // 2. All candidate images in use -> prints "No images found to prune."
-        let mut in_use_long1 = || BTreeSet::from([String::from("long1")]);
+        let mut in_use_long1 = || Ok(BTreeSet::from([String::from("long1")]));
         let mut one_image = |_: bool| {
             Some(String::from(
-                "abcd1234efgh;;;long1;;;my-repo;;;1.0;;;10.5 MB;;;2 weeks ago\n",
+                "abcd1234efgh\x1flong1\x1fmy-repo\x1f1.0\x1f10.5 MB\x1f2 weeks ago\x1e\n",
             ))
         };
         let mut in_use_stdout = Vec::new();
@@ -499,10 +496,31 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
             "No images found to prune.\n"
         );
 
-        // 3. Empty in-use set previews candidate images cleanly
+        // 3. Failed in-use image query propagates error instead of failing open
+        let mut fail_in_use = || -> Result<BTreeSet<String>, PodError> {
+            Err(PodError::from(io::Error::other(
+                "Failed to query in-use podman images.",
+            )))
+        };
+        let in_use_err = execute_with(
+            &context,
+            &mut fail_in_use,
+            &mut one_image,
+            &mut reader,
+            &mut Vec::new(),
+            &mut stderr,
+        )
+        .unwrap_err();
+        assert!(
+            in_use_err
+                .to_string()
+                .contains("Failed to query in-use podman images.")
+        );
+
+        // 4. Empty in-use set previews candidate images cleanly
         let mut fallback_images = |_: bool| {
             Some(String::from(
-                "abcd1234efgh;;;long1;;;my-repo;;;1.0;;;500 B;;;1 hour ago\n",
+                "abcd1234efgh\x1flong1\x1fmy-repo\x1f1.0\x1f500 B\x1f1 hour ago\x1e\n",
             ))
         };
         let mut fallback_stdout = Vec::new();
@@ -521,7 +539,7 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
                 .contains("500 B\n")
         );
 
-        // 4. Failed `podman images` returns PodError::Io containing "Failed to query podman images."
+        // 5. Failed `podman images` returns PodError::Io containing "Failed to query podman images."
         let mut fail_images = |_: bool| -> Option<String> { None };
         let error = execute_with(
             &context,
@@ -534,11 +552,11 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
         .unwrap_err();
         assert!(error.to_string().contains("Failed to query podman images."));
 
-        // 5. Extreme capacity bounds (MAX_PREVIEW_RECORDS)
+        // 6. Extreme capacity bounds (MAX_PREVIEW_RECORDS)
         let mut oversized_images = String::new();
         for index in 0..(MAX_PREVIEW_RECORDS + 10) {
             oversized_images.push_str(&format!(
-                "id_{index};;;unused_{index};;;repo;;;tag;;;1 B;;;now\n"
+                "id_{index}\x1funused_{index}\x1frepo\x1ftag\x1f1 B\x1fnow\x1e\n"
             ));
         }
 
@@ -567,15 +585,15 @@ qrst9012uvwx;;;long3;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago\n";
         context.flags.preview = true;
         context.flags.all = false;
 
-        let mut in_use = || BTreeSet::from([String::from("long2")]);
+        let mut in_use = || Ok(BTreeSet::from([String::from("long2")]));
         let mut query_images = |is_all: bool| -> Option<String> {
             assert!(!is_all);
             Some(String::from(
-                "abcd1234efgh;;;long1;;;my-repo;;;1.0;;;10.5 MB;;;2 weeks ago\n\
-                 ijkl5678mnop;;;long2;;;<none>;;;<none>;;;500 kB;;;3 weeks ago\n\
-                 qrst9012uvwx;;;long3;;;<none>;;;<none>;;;500 kB;;;4 weeks ago\n\
-                 yzab3456cdef;;;long4;;;untagged-repo;;;<none>;;;1.5 MB;;;5 weeks ago;;;extra\n\
-                 malformed;;;line\n\n",
+                "abcd1234efgh\x1flong1\x1fmy-repo\x1f1.0\x1f10.5 MB\x1f2 weeks ago\x1e\n\
+                 ijkl5678mnop\x1flong2\x1f<none>\x1f<none>\x1f500 kB\x1f3 weeks ago\x1e\n\
+                 qrst9012uvwx\x1flong3\x1f<none>\x1f<none>\x1f500 kB\x1f4 weeks ago\x1e\n\
+                 yzab3456cdef\x1flong4\x1funtagged-repo\x1f<none>\x1f1.5 MB\x1f5 weeks ago\x1fextra\x1e\n\
+                 malformed\x1fline\x1e\n\n",
             ))
         };
 

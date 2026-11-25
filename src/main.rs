@@ -79,30 +79,26 @@ where
 /// Verifies that the host OS is Linux, Podman is version 5.8.0+, and elevated execution is confirmed by the user.
 fn verify_environment() -> Result<(), PodError> {
     let mut stdin = io::stdin().lock();
-    let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     verify_environment_with(
         system_env::check_os(),
         podman::check_version(),
         system_env::runs_elevated(),
         &mut stdin,
-        &mut stdout,
         &mut stderr,
     )
 }
 
-/// Evaluates environment check flags and prompts for confirmation on `reader`/`stdout_writer`/`stderr_writer` when `elevated` is `true`.
-fn verify_environment_with<R, W, E>(
+/// Evaluates environment check flags and prompts for confirmation on `reader` and `stderr_writer` when `elevated` is `true`.
+fn verify_environment_with<R, E>(
     os_supported: bool,
     podman_supported: bool,
     elevated: bool,
     reader: &mut R,
-    stdout_writer: &mut W,
     stderr_writer: &mut E,
 ) -> Result<(), PodError>
 where
     R: BufRead,
-    W: Write,
     E: Write,
 {
     if !os_supported {
@@ -112,7 +108,7 @@ where
         return Err(PodError::from(SystemError::UnsupportedPodmanVersion));
     }
     if elevated {
-        system_env::confirm_elevated_execution(reader, stdout_writer, stderr_writer)?;
+        system_env::confirm_elevated_execution(reader, stderr_writer)?;
     }
     Ok(())
 }
@@ -640,56 +636,27 @@ mod tests {
     #[test]
     fn verify_environment_enforces_os_podman_and_elevation_checks() {
         let mut empty_input = Cursor::new(Vec::<u8>::new());
-        let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let os_error = verify_environment_with(
-            false,
-            true,
-            false,
-            &mut empty_input,
-            &mut stdout,
-            &mut stderr,
-        )
-        .unwrap_err();
+        let os_error =
+            verify_environment_with(false, true, false, &mut empty_input, &mut stderr).unwrap_err();
         assert_eq!(os_error.to_string(), "Only Linux is supported.");
 
-        let podman_error = verify_environment_with(
-            true,
-            false,
-            false,
-            &mut empty_input,
-            &mut stdout,
-            &mut stderr,
-        )
-        .unwrap_err();
+        let podman_error =
+            verify_environment_with(true, false, false, &mut empty_input, &mut stderr).unwrap_err();
         assert_eq!(
             podman_error.to_string(),
             "Podman 5.8.0 or higher is required."
         );
 
-        assert!(
-            verify_environment_with(
-                true,
-                true,
-                false,
-                &mut empty_input,
-                &mut stdout,
-                &mut stderr
-            )
-            .is_ok()
-        );
+        assert!(verify_environment_with(true, true, false, &mut empty_input, &mut stderr).is_ok());
 
         let mut yes_input = Cursor::new(b"yes\n".to_vec());
-        assert!(
-            verify_environment_with(true, true, true, &mut yes_input, &mut stdout, &mut stderr)
-                .is_ok()
-        );
+        assert!(verify_environment_with(true, true, true, &mut yes_input, &mut stderr).is_ok());
 
         let mut no_input = Cursor::new(b"no\n".to_vec());
         let abort_error =
-            verify_environment_with(true, true, true, &mut no_input, &mut stdout, &mut stderr)
-                .unwrap_err();
+            verify_environment_with(true, true, true, &mut no_input, &mut stderr).unwrap_err();
         assert_eq!(abort_error.to_string(), "Aborting execution.");
     }
 }

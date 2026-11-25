@@ -24,7 +24,7 @@ use crate::core::context::Context;
 use crate::core::log::{self, MAX_LOG_MESSAGE_BYTES};
 use crate::core::recipe::Recipe;
 use crate::error::PodError;
-use crate::io::exec::podman;
+use crate::io::exec::podman::{self, FIELD_DELIMITER, RECORD_DELIMITER};
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::format::format_recipe_error_hint;
 use crate::utilities::string::clamp_utf8_prefix;
@@ -226,11 +226,12 @@ fn build_display_rows<'a>(
     let mut display_rows = Vec::with_capacity(capacity);
     let mut found_names = BTreeSet::new();
 
-    for line in ps_output.lines().take(MAX_STATUS_RECORDS) {
+    for raw_record in ps_output.split(RECORD_DELIMITER).take(MAX_STATUS_RECORDS) {
         if display_rows.len() >= MAX_STATUS_RECORDS {
             break;
         }
-        let Some(mut row) = parse_status_record(line) else {
+        let record = raw_record.trim_start_matches(['\r', '\n']);
+        let Some(mut row) = parse_status_record(record) else {
             continue;
         };
         if let Some(expected_container) = expected.get(row.name) {
@@ -398,20 +399,20 @@ fn insert_targeted_container(
     );
 }
 
-/// Parses a `;;;`-delimited `podman ps -a --format` output line into a [`StatusRow`].
+/// Parses a control-delimited `podman ps -a --format` record into a [`StatusRow`].
 #[must_use]
-fn parse_status_record(line: &str) -> Option<StatusRow<'_>> {
-    if line.is_empty() {
+fn parse_status_record(record: &str) -> Option<StatusRow<'_>> {
+    if record.is_empty() {
         return None;
     }
-    let (id, rest) = line.split_once(";;;")?;
-    let (image, rest) = rest.split_once(";;;")?;
-    let (rest, restarts) = rest.rsplit_once(";;;")?;
-    let (rest, pod) = rest.rsplit_once(";;;")?;
-    let (rest, name) = rest.rsplit_once(";;;")?;
-    let (rest, ports) = rest.rsplit_once(";;;")?;
-    let (rest, status) = rest.rsplit_once(";;;")?;
-    let (command, created) = rest.rsplit_once(";;;")?;
+    let (id, rest) = record.split_once(FIELD_DELIMITER)?;
+    let (image, rest) = rest.split_once(FIELD_DELIMITER)?;
+    let (rest, restarts) = rest.rsplit_once(FIELD_DELIMITER)?;
+    let (rest, pod) = rest.rsplit_once(FIELD_DELIMITER)?;
+    let (rest, name) = rest.rsplit_once(FIELD_DELIMITER)?;
+    let (rest, ports) = rest.rsplit_once(FIELD_DELIMITER)?;
+    let (rest, status) = rest.rsplit_once(FIELD_DELIMITER)?;
+    let (command, created) = rest.rsplit_once(FIELD_DELIMITER)?;
     Some(StatusRow {
         command,
         created,
@@ -545,9 +546,9 @@ mod tests {
     };
 
     const MOCK_PS_OUTPUT: &str = "\
-a1b2c3d4e5f6;;;nginx:alpine;;;nginx -g 'daemon off;';;;2 hours ago;;;Up 2 hours (healthy);;;0.0.0.0:8080->80/tcp;;;test_simple_cnt_pod-app-1;;;test_simple_cnt_pod;;;0\n\
-b2c3d4e5f6a1;;;alpine:latest;;;/bin/sh;;;5 mins ago;;;Up 5 mins;;;;;;test_pod-1;;;test_pod;;;1\n\
-c3d4e5f6a1b2;;;busybox;;;sh;;;1 day ago;;;Exited (0) 1 day ago;;;;;;unmanaged_container;;;;;;0\n";
+a1b2c3d4e5f6\x1fnginx:alpine\x1fnginx -g 'daemon off;'\x1f2 hours ago\x1fUp 2 hours (healthy)\x1f0.0.0.0:8080->80/tcp\x1ftest_simple_cnt_pod-app-1\x1ftest_simple_cnt_pod\x1f0\x1e\n\
+b2c3d4e5f6a1\x1falpine:latest\x1f/bin/sh\x1f5 mins ago\x1fUp 5 mins\x1f\x1ftest_pod-1\x1ftest_pod\x1f1\x1e\n\
+c3d4e5f6a1b2\x1fbusybox\x1fsh\x1f1 day ago\x1fExited (0) 1 day ago\x1f\x1funmanaged_container\x1f\x1f0\x1e\n";
 
     const NAMING_RECIPE_PSL: &str = "\
 pod test_pod {
@@ -732,7 +733,7 @@ container \"*app-1\" {
         empty_context.config.recipes.path = temp_dir.join("recipes");
         let mut unmanaged_only_capture = || {
             Some(String::from(
-                "c3d4e5f6a1b2;;;busybox;;;sh;;;1 day ago;;;Exited (0) 1 day ago;;;;;;unmanaged;;;;;;0\n",
+                "c3d4e5f6a1b2\x1fbusybox\x1fsh\x1f1 day ago\x1fExited (0) 1 day ago\x1f\x1funmanaged\x1f\x1f0\x1e\n",
             ))
         };
         let mut empty_stdout = Vec::new();
@@ -747,14 +748,14 @@ container \"*app-1\" {
             "No containers found.\n"
         );
 
-        // 5. Malformed lines and delimiter injection inside command in parse_status_record
+        // 5. Malformed records and delimiter/newline injection inside command in parse_status_record
         assert!(parse_status_record("").is_none());
-        assert!(parse_status_record("too;;;few;;;fields").is_none());
+        assert!(parse_status_record("too\x1ffew\x1ffields").is_none());
         let injected_row = parse_status_record(
-            "id;;;img;;;sh -c 'a;;;b;';;;created;;;status;;;ports;;;name;;;pod;;;3",
+            "id\x1fimg\x1fsh -c 'a;;;b\nforged'\x1fcreated\x1fstatus\x1fports\x1fname\x1fpod\x1f3",
         )
         .unwrap();
-        assert_eq!(injected_row.command, "sh -c 'a;;;b;'");
+        assert_eq!(injected_row.command, "sh -c 'a;;;b\nforged'");
         assert_eq!(injected_row.created, "created");
         assert_eq!(injected_row.restarts, "3");
 
@@ -763,7 +764,7 @@ container \"*app-1\" {
         let mut oversized_expected = BTreeMap::new();
         for index in 0..(MAX_STATUS_RECORDS + 10) {
             oversized_ps.push_str(&format!(
-                "id_{index};;;img;;;cmd;;;now;;;Up;;;80;;;cnt_{index};;;pod;;;0\n"
+                "id_{index}\x1fimg\x1fcmd\x1fnow\x1fUp\x1f80\x1fcnt_{index}\x1fpod\x1f0\x1e\n"
             ));
             oversized_expected.insert(
                 format!("missing_{index}"),
@@ -904,5 +905,15 @@ Recipes 'invalid_recipe' and 'missing_recipe' have errors! Run 'pods recipe insp
         );
 
         let _ = std_fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn build_display_rows_handles_newline_and_semicolons_in_command_without_row_forgery() {
+        let output = "id1\x1fnginx:alpine\x1fsh -c 'a;;;b\nforged_id\x1fimg\x1fcmd\x1fnow\x1fUp\x1f\x1fforged\x1f\x1f0'\x1f2h ago\x1fUp 2h\x1f80/tcp\x1fmy_app\x1fmypod\x1f0\x1e\n";
+        let empty = BTreeMap::new();
+        let rows = build_display_rows(output, &empty, &[], true);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].name, "my_app");
+        assert!(rows[0].command.contains("a;;;b\nforged_id"));
     }
 }

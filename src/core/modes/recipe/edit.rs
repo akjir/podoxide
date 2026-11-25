@@ -62,10 +62,9 @@ fn edit_with<W: Write, E: Write>(
     let recipe_name = extract_registered_recipe(context)?;
     let editor = validate_editor(&context.config.editor)?;
     let recipe_path = build_recipe_path(&context.config.recipes.path, recipe_name)?;
-    let recipe_argument = recipe_path.to_string_lossy();
     command::exec_editor_with(
         editor,
-        recipe_argument.as_ref(),
+        &recipe_path,
         context.config.simulate,
         stdout,
         stderr,

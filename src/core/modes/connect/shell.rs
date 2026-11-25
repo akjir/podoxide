@@ -21,7 +21,9 @@ use crate::core::context::Context;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::podman::{self, ExecContainer, SHELL_FALLBACK_COMMAND};
-use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_target_segment, is_valid_text};
+use crate::utilities::string::{
+    is_valid_target_segment, is_valid_text, is_valid_unmanaged_container_name,
+};
 
 /// Output prefix printed before simulating or executing the interactive shell command.
 const CONNECT_PREFIX: &str = "Execute connect command: ";
@@ -207,7 +209,7 @@ fn resolve_unmanaged_container(
             recipe_name,
         )));
     }
-    if !is_valid_pod_or_container_name(recipe_name) {
+    if !is_valid_unmanaged_container_name(recipe_name) {
         return Err(PodError::from(CliError::with_argument(
             CliErrorKind::InvalidTarget,
             recipe_name,
@@ -370,7 +372,7 @@ container {
             "recipe_001_valid/-flag",
             "Invalid Container Name!",
             "-flag",
-            "Upper_Case",
+            "_leading_underscore",
             "bad..name",
         ] {
             context.parameters = vec![String::from(invalid_target)];
@@ -491,6 +493,10 @@ container {
             (
                 "my_custom_container",
                 "Execute connect command: \npodman exec -it my_custom_container sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'\n",
+            ),
+            (
+                "MyApp_1",
+                "Execute connect command: \npodman exec -it MyApp_1 sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'\n",
             ),
         ];
 

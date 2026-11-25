@@ -112,8 +112,17 @@ podoxide/
     │   ├── mod.rs
     │   ├── exec/
     │   │   ├── command.rs
+    │   │   ├── command_tests.rs
     │   │   ├── mod.rs
-    │   │   └── podman.rs
+    │   │   ├── spinner.rs
+    │   │   └── podman/
+    │   │       ├── lifecycle.rs
+    │   │       ├── lifecycle_tests.rs
+    │   │       ├── mod.rs
+    │   │       ├── query.rs
+    │   │       ├── query_tests.rs
+    │   │       ├── runtime.rs
+    │   │       └── runtime_tests.rs
     │   ├── psl/
     │   │   ├── ast.rs
     │   │   ├── error_tests.rs
@@ -124,7 +133,9 @@ podoxide/
     │   └── system/
     │       ├── env.rs
     │       ├── fs.rs
-    │       └── mod.rs
+    │       ├── fs_tests.rs
+    │       ├── mod.rs
+    │       └── path_resolve.rs
     └── utilities/
         ├── collection.rs
         ├── format.rs
@@ -288,11 +299,15 @@ The `src/io/` directory isolates all external process calls, filesystem operatio
 
 Executes external commands directly via `std::process::Command` without shell interpolation.
 
-| File                     | Function |
-| :----------------------- | :------- |
-| `src/io/exec/mod.rs`     | Declares and re-exports the central Podman API and editor execution helper. |
-| `src/io/exec/command.rs` | Provides internal (`pub(super)`) OS process runners (`exec_capture`, `exec_spinner_with`, `exec_with`) and `exec_editor_with` for interactive file editing. |
-| `src/io/exec/podman.rs`  | Provides the central Podman CLI API for all pod, container, log, and image commands (`CreateContainer`, `CreatePod`, `ExecContainer`, `PodLogs`, `PullOutcome`, lifecycle actions, version verification `5.8.0+`, and runtime inspection queries). |
+| File                              | Function |
+| :-------------------------------- | :------- |
+| `src/io/exec/mod.rs`              | Declares the `command`, `podman`, and internal `spinner` execution submodules. |
+| `src/io/exec/command.rs`          | Provides bounded process runners (`exec_capture`, `exec_with`, `ExecOutcome`, `InterruptPolicy`) and `exec_editor_with` for interactive file editing. |
+| `src/io/exec/spinner.rs`          | Provides terminal-aware Braille spinner execution with bounded `stderr` capture and non-TTY single-line fallback. |
+| `src/io/exec/podman/mod.rs`       | Re-exports the central Podman CLI API and provides shared validation and process invocation helpers. |
+| `src/io/exec/podman/lifecycle.rs` | Builds and executes Podman lifecycle operations (`CreateContainer`, `CreatePod`, create, start, stop, remove, and image prune). |
+| `src/io/exec/podman/query.rs`     | Executes Podman inspection queries (`check_version` 5.8.0+, `container_running`, `pod_exists`, `query_image_id`, `query_images`, `query_in_use_images`, `query_ps_status`, and control-character record delimiters). |
+| `src/io/exec/podman/runtime.rs`   | Builds and executes TTY-aware `podman exec`, color/SIGINT-aware `podman pod logs`, and spinner-backed `podman pull` (`ExecContainer`, `PodLogs`, `PullOutcome`, `SHELL_FALLBACK_COMMAND`). |
 
 ### PodScript Language (`src/io/psl/`)
 
@@ -311,11 +326,12 @@ Parses Podoxide configuration files (`pods.conf`) and declarative recipe files (
 
 Provides host operating system checks and filesystem operations.
 
-| File                    | Function |
-| :---------------------- | :------- |
-| `src/io/system/mod.rs`  | Declares and re-exports the `env` and `fs` submodules. |
-| `src/io/system/env.rs`  | Verifies that the host OS is Linux and detects elevated execution privileges (`UID 0`). |
-| `src/io/system/fs.rs`   | Checks file and directory existence, resolves canonical paths, lists directories, and reads or writes files. |
+| File                             | Function |
+| :------------------------------- | :------- |
+| `src/io/system/mod.rs`           | Declares the `env`, `fs`, and internal `path_resolve` submodules. |
+| `src/io/system/env.rs`           | Verifies Linux OS via `std::env::consts::OS`, parses `/proc/self/status` for effective `UID 0`, and reads bounded confirmation lines. |
+| `src/io/system/fs.rs`            | Performs `O_NONBLOCK` bounded file reads, `O_NOFOLLOW` writes, `O_CREAT \| O_EXCL` exclusive file creation, regular-file directory listing, and source-preserving path I/O error wrapping. |
+| `src/io/system/path_resolve.rs`  | Anchors relative paths to the working directory and resolves canonical paths with bounded symlink expansion. |
 
 ## Utilities (`src/utilities/`)
 

@@ -27,6 +27,7 @@ use crate::core::update::{
     ContainerPullRecord, IndentedWriter, POD_INDENT, PodUpdateResult, UpdateAction,
 };
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
+use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::{self, CreatePod, PullOutcome};
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value};
 use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_token};
@@ -66,7 +67,7 @@ impl Pod {
     ) -> Result<(), PodError> {
         self.validate_create()?;
         let prefix = format!("Create pod '{}' ('{}'): ", self.name, self.id);
-        podman::create_pod(
+        let outcome = podman::create_pod(
             &CreatePod {
                 options: &self.options,
                 pod_name: &self.id,
@@ -77,7 +78,9 @@ impl Pod {
             stdout,
             stderr,
         )?;
-        self.created.set(true);
+        if outcome == ExecOutcome::Succeeded {
+            self.created.set(true);
+        }
         Ok(())
     }
 
@@ -1144,21 +1147,23 @@ mod tests {
         down_with(&recipe, false, &mut down_stdout, &mut down_stderr).unwrap();
 
         let down_out_text = String::from_utf8(down_stdout).unwrap();
-        assert!(down_out_text.contains("Stop container 'podoxide_missing_pod_999999-2': "));
-        assert!(down_out_text.contains("Stop container 'podoxide_missing_pod_999999-1': "));
-        assert!(down_out_text.contains("Stop pod 'Order Stack' ('podoxide_missing_pod_999999'): "));
-        assert!(down_out_text.contains("Remove container 'podoxide_missing_pod_999999-2': "));
-        assert!(down_out_text.contains("Remove container 'podoxide_missing_pod_999999-1': "));
-        assert!(
-            down_out_text.contains("Remove pod 'Order Stack' ('podoxide_missing_pod_999999'): ")
-        );
+        assert!(down_out_text.is_empty());
 
         let down_err_text = String::from_utf8(down_stderr).unwrap();
-        assert_eq!(down_err_text.lines().count(), 6);
+        assert!(down_err_text.contains("Stop container 'podoxide_missing_pod_999999-2': "));
+        assert!(down_err_text.contains("Stop container 'podoxide_missing_pod_999999-1': "));
+        assert!(down_err_text.contains("Stop pod 'Order Stack' ('podoxide_missing_pod_999999'): "));
+        assert!(down_err_text.contains("Remove container 'podoxide_missing_pod_999999-2': "));
+        assert!(down_err_text.contains("Remove container 'podoxide_missing_pod_999999-1': "));
         assert!(
+            down_err_text.contains("Remove pod 'Order Stack' ('podoxide_missing_pod_999999'): ")
+        );
+        assert_eq!(
             down_err_text
                 .lines()
-                .all(|line| line.starts_with("WARNING: Command exited with code '"))
+                .filter(|line| line.starts_with("WARNING: Command exited with code '"))
+                .count(),
+            6
         );
 
         let mut start_stdout = Vec::new();
@@ -1166,15 +1171,17 @@ mod tests {
         start_with(&recipe, false, &mut start_stdout, &mut start_stderr).unwrap();
 
         let start_out_text = String::from_utf8(start_stdout).unwrap();
-        assert!(start_out_text.contains("Start container 'podoxide_missing_pod_999999-1': "));
-        assert!(start_out_text.contains("Start container 'podoxide_missing_pod_999999-2': "));
+        assert!(start_out_text.is_empty());
 
         let start_err_text = String::from_utf8(start_stderr).unwrap();
-        assert_eq!(start_err_text.lines().count(), 2);
-        assert!(
+        assert!(start_err_text.contains("Start container 'podoxide_missing_pod_999999-1': "));
+        assert!(start_err_text.contains("Start container 'podoxide_missing_pod_999999-2': "));
+        assert_eq!(
             start_err_text
                 .lines()
-                .all(|line| line.starts_with("WARNING: Command exited with code '"))
+                .filter(|line| line.starts_with("WARNING: Command exited with code '"))
+                .count(),
+            2
         );
     }
 

@@ -63,9 +63,10 @@ fn edit_with<W: Write, E: Write>(
 }
 
 /// Verifies that `path` is a safe UTF-8 configuration file path without `..` traversal or leading dashes.
-fn validate_config_path(path: &Path) -> Result<&str, PodError> {
+fn validate_config_path(path: &Path) -> Result<&Path, PodError> {
     path.to_str()
         .filter(|raw| !has_parent_dir(path) && extract_config_stem(raw).is_some())
+        .map(|_| path)
         .ok_or_else(|| {
             PodError::from(ConfigError::without_line(
                 ConfigErrorKind::InvalidPath,

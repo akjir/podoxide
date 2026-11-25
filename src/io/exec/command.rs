@@ -15,28 +15,43 @@
 
 //! Direct operating system process execution helpers.
 
-use std::io::{self, Write};
+use std::borrow::Cow;
+use std::io::{self, Read, Write};
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
-use std::time::Duration;
 
 use crate::core::log;
 use crate::error::PodError;
 use crate::utilities::{format, path, string};
 
-/// Braille spinner frames displayed while waiting for a background process to complete.
-const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-/// ANSI DECTCEM escape sequence that hides the terminal cursor while the spinner is active.
-const SPINNER_HIDE_CURSOR: &str = "\x1b[?25l";
-/// Polling interval in milliseconds between spinner frame updates.
-const SPINNER_INTERVAL_MS: u64 = 80;
-/// Maximum byte length of the sanitized spinner prefix so prefix plus summary fits within [`log::MAX_LOG_MESSAGE_BYTES`].
-const SPINNER_MAX_PREFIX_BYTES: usize = log::MAX_LOG_MESSAGE_BYTES - SPINNER_MAX_SUMMARY_BYTES;
-/// Maximum byte length of the sanitized spinner completion summary suffix.
-const SPINNER_MAX_SUMMARY_BYTES: usize = 16;
-/// ANSI DECTCEM escape sequence that restores terminal cursor visibility when the spinner finishes.
-const SPINNER_SHOW_CURSOR: &str = "\x1b[?25h";
+/// Initial allocation size for bounded process stream capture buffers.
+const INITIAL_CAPTURE_CAPACITY: usize = 4096;
+/// Maximum bytes captured from a single child process stream (`4 MiB`).
+const MAX_CAPTURED_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+/// POSIX signal number for interactive terminal interrupt (`SIGINT`).
+const SIGINT: i32 = 2;
+
+/// Exit outcome of an external process execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ExecOutcome {
+    Failed,
+    Succeeded,
+}
+
+impl ExecOutcome {
+    /// Converts a process [`ExitStatus`] into [`ExecOutcome::Succeeded`] or [`ExecOutcome::Failed`].
+    #[inline]
+    #[must_use]
+    pub(super) fn from_status(status: ExitStatus) -> Self {
+        if status.success() {
+            Self::Succeeded
+        } else {
+            Self::Failed
+        }
+    }
+}
 
 /// Output and standard-stream handling mode for external process execution.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -46,42 +61,28 @@ pub(super) enum ExecMode {
     Interactive,
 }
 
-/// Execution options controlling output mode, output prefixing, and command simulation.
+/// Execution options controlling output mode, interrupt warning policy, prefixing, and simulation.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct ExecOptions<'a> {
+    pub(super) interrupt_policy: InterruptPolicy,
     pub(super) mode: ExecMode,
     pub(super) prefix: &'a str,
     pub(super) simulate: bool,
 }
 
-/// Exit outcome of a background command executed via [`exec_spinner_with`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum SpinnerStatus {
-    Failed,
-    Succeeded,
+/// Controls whether a `SIGINT` signal termination emits a warning on `stderr`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum InterruptPolicy {
+    QuietOnSigint,
+    #[default]
+    WarnOnInterrupt,
 }
 
-/// RAII guard that hides the terminal cursor on creation and restores it on drop.
-struct SpinnerCursor<'a, W: Write> {
-    stdout: &'a mut W,
-}
-
-impl<'a, W: Write> SpinnerCursor<'a, W> {
-    /// Writes the ANSI hide-cursor escape sequence to `stdout` and returns a guard that restores cursor visibility on drop.
-    #[must_use]
-    fn new(stdout: &'a mut W) -> Self {
-        let _ = stdout.write_all(SPINNER_HIDE_CURSOR.as_bytes());
-        let _ = stdout.flush();
-        Self { stdout }
-    }
-}
-
-impl<W: Write> Drop for SpinnerCursor<'_, W> {
-    /// Writes the ANSI show-cursor escape sequence to `stdout` and flushes the stream.
-    fn drop(&mut self) {
-        let _ = self.stdout.write_all(SPINNER_SHOW_CURSOR.as_bytes());
-        let _ = self.stdout.flush();
-    }
+/// Bounded `stdout`, `stderr`, and exit status collected from a child process.
+struct CapturedOutput {
+    status: ExitStatus,
+    stderr: Vec<u8>,
+    stdout: Vec<u8>,
 }
 
 /// Executes `editor` with `file_path` interactively (or prints the command when `simulate` is `true`).
@@ -91,7 +92,7 @@ impl<W: Write> Drop for SpinnerCursor<'_, W> {
 /// Returns [`PodError`] if `editor` or `file_path` is invalid or if spawning the editor process fails.
 pub fn exec_editor_with<W, E>(
     editor: &str,
-    file_path: &str,
+    file_path: &Path,
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
@@ -106,96 +107,61 @@ where
             "invalid editor executable",
         )));
     }
-    if !path::is_valid_target_path(Path::new(file_path)) {
+    if !path::is_valid_target_path(file_path) {
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::InvalidInput,
             "invalid editor target path",
         )));
     }
-    exec_with(
+    let Some(raw_path) = file_path.to_str() else {
+        return Err(PodError::from(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid editor target path",
+        )));
+    };
+    let safe_path = normalize_editor_target(raw_path);
+    let _ = exec_with(
         editor,
-        &[file_path],
+        &[safe_path.as_ref()],
         &ExecOptions {
+            interrupt_policy: InterruptPolicy::WarnOnInterrupt,
             mode: ExecMode::Interactive,
             prefix: "",
             simulate,
         },
         stdout,
         stderr,
-    )
-}
-
-/// Executes `program` with `arguments` directly and returns captured `stdout` when exit status is 0.
-#[must_use]
-pub(in crate::io) fn exec_capture(program: &str, arguments: &[&str]) -> Option<String> {
-    let output = build_command(program, arguments).output().ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    String::from_utf8(output.stdout).ok()
-}
-
-/// Executes `program` with `arguments` while animating a Braille spinner prefixed by `prefix` on `stdout`, resolving the final completion label via `resolve_summary`.
-///
-/// # Errors
-///
-/// Returns [`PodError`] if spawning or polling the child process fails.
-pub(super) fn exec_spinner_with<S, W, E, F>(
-    program: &str,
-    arguments: &[S],
-    prefix: &str,
-    simulate: bool,
-    resolve_summary: F,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> Result<(), PodError>
-where
-    S: AsRef<str>,
-    W: Write,
-    E: Write,
-    F: FnOnce(SpinnerStatus) -> &'static str,
-{
-    if simulate {
-        write_simulated_command(program, arguments, prefix, stdout);
-        return Ok(());
-    }
-    if log::is_debug_enabled() {
-        let formatted = format::format_command(program, arguments);
-        log::write_debug(stderr, &format!("Execute: {formatted}"));
-    }
-    let mut child = build_command(program, arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let sanitized_prefix = string::sanitize_text(prefix, SPINNER_MAX_PREFIX_BYTES);
-    let (exit_status, summary) = {
-        let cursor = SpinnerCursor::new(stdout);
-        let status = wait_with_spinner(&mut child, &sanitized_prefix, cursor.stdout)?;
-        let outcome = if status.success() {
-            SpinnerStatus::Succeeded
-        } else {
-            SpinnerStatus::Failed
-        };
-        (status, resolve_summary(outcome))
-    };
-    write_spinner_result(stdout, &sanitized_prefix, summary);
-    warn_on_exit_failure(exit_status, stderr);
+    )?;
     Ok(())
+}
+
+/// Constructs a [`Command`] for `program` populated with `arguments`.
+pub(super) fn build_command<S: AsRef<str>>(program: &str, arguments: &[S]) -> Command {
+    let mut command = Command::new(program);
+    for argument in arguments {
+        command.arg(argument.as_ref());
+    }
+    command
+}
+
+/// Executes `program` with `arguments` directly and returns bounded UTF-8 `stdout` when exit status is `0`.
+#[must_use]
+pub(super) fn exec_capture(program: &str, arguments: &[&str]) -> Option<String> {
+    exec_capture_bounded(program, arguments, MAX_CAPTURED_OUTPUT_BYTES)
 }
 
 /// Executes `program` with `arguments` using `options`, routing formatted output to `stdout` and `stderr`.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if spawning the process fails.
+/// Returns [`PodError`] if spawning or waiting on the process fails.
 pub(super) fn exec_with<S, W, E>(
     program: &str,
     arguments: &[S],
     options: &ExecOptions<'_>,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError>
+) -> Result<ExecOutcome, PodError>
 where
     S: AsRef<str>,
     W: Write,
@@ -207,135 +173,67 @@ where
             log::write_print(stdout, options.prefix);
         }
         log::write_print(stdout, &formatted);
-        return Ok(());
+        return Ok(ExecOutcome::Succeeded);
     }
     if log::is_debug_enabled() {
         let formatted = format::format_command(program, arguments);
         log::write_debug(stderr, &format!("Execute: {formatted}"));
     }
     match options.mode {
-        ExecMode::Captured => run_captured(program, arguments, options.prefix, stdout, stderr),
-        ExecMode::Interactive => run_interactive(program, arguments, stderr),
-    }
-}
-
-/// Constructs a [`Command`] for `program` populated with `arguments`.
-fn build_command<S: AsRef<str>>(program: &str, arguments: &[S]) -> Command {
-    let mut command = Command::new(program);
-    for argument in arguments {
-        command.arg(argument.as_ref());
-    }
-    command
-}
-
-/// Writes each line of `text` to `stdout`, prepending `clamped_prefix` to the first emitted line.
-fn emit_captured_lines<W: Write>(
-    text: &str,
-    clamped_prefix: &str,
-    stdout: &mut W,
-    output_captured: &mut bool,
-) {
-    for line in text.lines() {
-        if !*output_captured {
-            let clamped_line = string::clamp_utf8_prefix(line, log::MAX_LOG_MESSAGE_BYTES);
-            log::write_print(stdout, &format!("{clamped_prefix}{clamped_line}"));
-            *output_captured = true;
-        } else {
-            log::write_print(stdout, line);
+        ExecMode::Captured => run_captured(
+            program,
+            arguments,
+            options.prefix,
+            MAX_CAPTURED_OUTPUT_BYTES,
+            stdout,
+            stderr,
+        ),
+        ExecMode::Interactive => {
+            run_interactive(program, arguments, options.interrupt_policy, stderr)
         }
     }
 }
 
-/// Evaluates a `try_wait` `poll_result` for `child`, sleeping for `interval` when still running or killing and reaping `child` on error.
-fn poll_child_status(
-    child: &mut Child,
-    poll_result: io::Result<Option<ExitStatus>>,
-    interval: Duration,
-) -> Result<Option<ExitStatus>, PodError> {
-    match poll_result {
-        Ok(Some(status)) => Ok(Some(status)),
-        Ok(None) => {
-            thread::sleep(interval);
-            Ok(None)
-        }
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Err(PodError::from(error))
-        }
+/// Reads at most `max_bytes` from `reader`, returning collected bytes and whether unread bytes remained.
+pub(super) fn read_bounded_bytes<R: Read>(
+    reader: R,
+    max_bytes: usize,
+) -> io::Result<(Vec<u8>, bool)> {
+    let initial_capacity = max_bytes.min(INITIAL_CAPTURE_CAPACITY);
+    let mut buffer = Vec::with_capacity(initial_capacity);
+    let limit = u64::try_from(max_bytes)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    reader.take(limit).read_to_end(&mut buffer)?;
+    let truncated = buffer.len() > max_bytes;
+    if truncated {
+        buffer.truncate(max_bytes);
     }
+    Ok((buffer, truncated))
 }
 
-/// Executes `program` with `arguments`, writing captured output lines with `prefix` to `stdout` and logging exit warnings to `stderr`.
-fn run_captured<S, W, E>(
-    program: &str,
-    arguments: &[S],
-    prefix: &str,
-    stdout: &mut W,
+/// Writes a warning to `stderr` when `status` exited with a non-zero code or was terminated by a signal,
+/// suppressing `SIGINT` warnings when `interrupt_policy` is [`InterruptPolicy::QuietOnSigint`].
+pub(super) fn warn_on_exit_failure<E: Write>(
+    status: ExitStatus,
+    interrupt_policy: InterruptPolicy,
     stderr: &mut E,
-) -> Result<(), PodError>
-where
-    S: AsRef<str>,
-    W: Write,
-    E: Write,
-{
-    let output = build_command(program, arguments).output()?;
-    let stdout_text = String::from_utf8_lossy(&output.stdout);
-    let stderr_text = String::from_utf8_lossy(&output.stderr);
-    let clamped_prefix = string::clamp_utf8_prefix(prefix, log::MAX_LOG_MESSAGE_BYTES);
-    let mut output_captured = false;
-    emit_captured_lines(&stdout_text, clamped_prefix, stdout, &mut output_captured);
-    emit_captured_lines(&stderr_text, clamped_prefix, stdout, &mut output_captured);
-    if !output_captured {
-        log::write_print(stdout, &format!("{clamped_prefix}..."));
-    }
-    warn_on_exit_failure(output.status, stderr);
-    Ok(())
-}
-
-/// Executes `program` with `arguments` interactively, inheriting standard streams and logging exit warnings to `stderr`.
-fn run_interactive<S, E>(program: &str, arguments: &[S], stderr: &mut E) -> Result<(), PodError>
-where
-    S: AsRef<str>,
-    E: Write,
-{
-    let status = build_command(program, arguments).status()?;
-    warn_on_exit_failure(status, stderr);
-    Ok(())
-}
-
-/// Polls `child` until completion while rendering spinner frames after `sanitized_prefix` on `stdout`.
-fn wait_with_spinner<W: Write>(
-    child: &mut Child,
-    sanitized_prefix: &str,
-    stdout: &mut W,
-) -> Result<ExitStatus, PodError> {
-    let interval = Duration::from_millis(SPINNER_INTERVAL_MS);
-    let mut frames = SPINNER_FRAMES.iter().copied().cycle();
-    loop {
-        let frame = frames.next().unwrap_or("⠋");
-        write_spinner_frame(stdout, sanitized_prefix, frame);
-        let poll_result = child.try_wait();
-        if let Some(status) = poll_child_status(child, poll_result, interval)? {
-            return Ok(status);
-        }
-    }
-}
-
-/// Writes a warning to `stderr` when `status` exited with a non-zero code or was terminated by a signal.
-fn warn_on_exit_failure<E: Write>(status: ExitStatus, stderr: &mut E) {
+) {
     if status.success() {
         return;
     }
     if let Some(code) = status.code() {
         log::write_warning(stderr, &format!("Command exited with code '{code}'!"));
-    } else {
-        log::write_warning(stderr, "Command terminated by signal!");
+        return;
     }
+    if interrupt_policy == InterruptPolicy::QuietOnSigint && status.signal() == Some(SIGINT) {
+        return;
+    }
+    log::write_warning(stderr, "Command terminated by signal!");
 }
 
 /// Writes `prefix` (when non-empty) and the shell-escaped simulated command line, preserving leading space indentation from `prefix`.
-fn write_simulated_command<S: AsRef<str>, W: Write>(
+pub(super) fn write_simulated_command<S: AsRef<str>, W: Write>(
     program: &str,
     arguments: &[S],
     prefix: &str,
@@ -356,453 +254,153 @@ fn write_simulated_command<S: AsRef<str>, W: Write>(
     }
 }
 
-/// Writes a single carriage-returned spinner frame (`\r<prefix><frame>`) to `stdout` and flushes the stream.
-fn write_spinner_frame<W: Write>(stdout: &mut W, sanitized_prefix: &str, frame: &str) {
-    let _ = write!(stdout, "\r{sanitized_prefix}{frame}");
-    let _ = stdout.flush();
+/// Drains bounded `stdout` and `stderr` concurrently from `child` without pipe deadlocks and reaps `child`.
+fn capture_child_streams(child: &mut Child, max_bytes: usize) -> io::Result<CapturedOutput> {
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+    let (stdout_result, stderr_result) = thread::scope(|scope| {
+        let stderr_handle = scope.spawn(move || read_optional_pipe(stderr_pipe, max_bytes));
+        let stdout_result = read_optional_pipe(stdout_pipe, max_bytes);
+        let stderr_result = stderr_handle
+            .join()
+            .unwrap_or_else(|_| Err(io::Error::other("stderr reader thread panicked")));
+        (stdout_result, stderr_result)
+    });
+    let stdout = match stdout_result {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    let stderr = match stderr_result {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    };
+    let status = child.wait()?;
+    Ok(CapturedOutput {
+        status,
+        stderr,
+        stdout,
+    })
 }
 
-/// Writes the final sanitized spinner completion line (`\r<prefix><summary>\n`) to `stdout` and flushes the stream.
-fn write_spinner_result<W: Write>(stdout: &mut W, sanitized_prefix: &str, summary: &str) {
-    let sanitized_summary = string::sanitize_text(summary, SPINNER_MAX_SUMMARY_BYTES);
-    let _ = writeln!(stdout, "\r{sanitized_prefix}{sanitized_summary}");
-    let _ = stdout.flush();
+/// Writes each line of `text` to `writer`, prepending `clamped_prefix` to the first emitted line.
+fn emit_captured_lines<W: Write>(
+    text: &str,
+    clamped_prefix: &str,
+    writer: &mut W,
+    output_captured: &mut bool,
+) {
+    for line in text.lines() {
+        if !*output_captured {
+            let clamped_line = string::clamp_utf8_prefix(line, log::MAX_LOG_MESSAGE_BYTES);
+            log::write_print(writer, &format!("{clamped_prefix}{clamped_line}"));
+            *output_captured = true;
+        } else {
+            log::write_print(writer, line);
+        }
+    }
+}
+
+/// Executes `program` with `arguments` and returns bounded UTF-8 `stdout` when exit status is `0` and output fits within `max_bytes`.
+#[must_use]
+fn exec_capture_bounded(program: &str, arguments: &[&str], max_bytes: usize) -> Option<String> {
+    let mut child = build_command(program, arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let Some(stdout_pipe) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let Ok((stdout_bytes, truncated)) = read_bounded_bytes(stdout_pipe, max_bytes) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let status = child.wait().ok()?;
+    if !status.success() || truncated {
+        return None;
+    }
+    String::from_utf8(stdout_bytes).ok()
+}
+
+/// Prefixes bare relative editor file paths with `./` so editors never parse them as options.
+#[must_use]
+fn normalize_editor_target(raw_path: &str) -> Cow<'_, str> {
+    if raw_path.starts_with('/') || raw_path.starts_with("./") {
+        return Cow::Borrowed(raw_path);
+    }
+    Cow::Owned(format!("./{raw_path}"))
+}
+
+/// Reads up to `max_bytes` from an optional child stream pipe, returning an empty buffer when `None`.
+fn read_optional_pipe<R: Read>(pipe: Option<R>, max_bytes: usize) -> io::Result<Vec<u8>> {
+    let Some(reader) = pipe else {
+        return Ok(Vec::new());
+    };
+    let (bytes, _) = read_bounded_bytes(reader, max_bytes)?;
+    Ok(bytes)
+}
+
+/// Executes `program` with `arguments`, writing bounded `stdout` to `stdout`, bounded `stderr` to `stderr`, and logging exit warnings to `stderr`.
+fn run_captured<S, W, E>(
+    program: &str,
+    arguments: &[S],
+    prefix: &str,
+    max_bytes: usize,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<ExecOutcome, PodError>
+where
+    S: AsRef<str>,
+    W: Write,
+    E: Write,
+{
+    let mut child = build_command(program, arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let captured = capture_child_streams(&mut child, max_bytes)?;
+    let stdout_text = String::from_utf8_lossy(&captured.stdout);
+    let stderr_text = String::from_utf8_lossy(&captured.stderr);
+    let clamped_prefix = string::clamp_utf8_prefix(prefix, log::MAX_LOG_MESSAGE_BYTES);
+    let mut output_captured = false;
+    emit_captured_lines(&stdout_text, clamped_prefix, stdout, &mut output_captured);
+    emit_captured_lines(&stderr_text, clamped_prefix, stderr, &mut output_captured);
+    if !output_captured {
+        log::write_print(stdout, &format!("{clamped_prefix}..."));
+    }
+    warn_on_exit_failure(captured.status, InterruptPolicy::WarnOnInterrupt, stderr);
+    Ok(ExecOutcome::from_status(captured.status))
+}
+
+/// Executes `program` with `arguments` interactively, inheriting standard streams and logging exit warnings to `stderr`.
+fn run_interactive<S, E>(
+    program: &str,
+    arguments: &[S],
+    interrupt_policy: InterruptPolicy,
+    stderr: &mut E,
+) -> Result<ExecOutcome, PodError>
+where
+    S: AsRef<str>,
+    E: Write,
+{
+    let status = build_command(program, arguments).status()?;
+    warn_on_exit_failure(status, interrupt_policy, stderr);
+    Ok(ExecOutcome::from_status(status))
 }
 
 #[cfg(test)]
-mod tests {
-    use std::io;
-    use std::os::unix::process::ExitStatusExt;
-    use std::process::{ExitStatus, Stdio};
-    use std::time::Duration;
-
-    use crate::core::log;
-    use crate::error::PodError;
-    use crate::utilities::format;
-    use super::{
-        ExecMode, ExecOptions, SPINNER_FRAMES, SPINNER_HIDE_CURSOR, SPINNER_MAX_PREFIX_BYTES,
-        SPINNER_MAX_SUMMARY_BYTES, SPINNER_SHOW_CURSOR, SpinnerStatus, build_command, exec_capture,
-        exec_editor_with, exec_spinner_with, exec_with, poll_child_status, warn_on_exit_failure,
-    };
-
-    #[test]
-    fn exec_capture_handles_success_failure_and_missing_binary() {
-        let output = exec_capture("echo", &["podoxide-test"]).unwrap();
-        assert_eq!(output.trim(), "podoxide-test");
-
-        assert!(exec_capture("false", &[]).is_none());
-        assert!(exec_capture("/nonexistent/podoxide_missing_bin", &[]).is_none());
-        assert!(exec_capture("printf", &["\\377\\376"]).is_none());
-    }
-
-    #[test]
-    fn exec_editor_with_validates_editor_and_target_path() {
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        exec_editor_with("vim", "./pods.conf", true, &mut stdout, &mut stderr).unwrap();
-        assert_eq!(String::from_utf8(stdout).unwrap(), "vim ./pods.conf\n");
-        assert!(stderr.is_empty());
-
-        let mut live_stdout = Vec::new();
-        let mut live_stderr = Vec::new();
-        exec_editor_with(
-            "true",
-            "./recipe.pod",
-            false,
-            &mut live_stdout,
-            &mut live_stderr,
-        )
-        .unwrap();
-        assert!(live_stdout.is_empty());
-        assert!(live_stderr.is_empty());
-
-        for invalid_editor in [
-            "",
-            "-vim",
-            "/usr/bin/-vim",
-            "../vim",
-            "vim\n",
-            "vim -u NONE",
-            "podman",
-            "/usr/bin/podman",
-        ] {
-            let error = exec_editor_with(
-                invalid_editor,
-                "./pods.conf",
-                true,
-                &mut Vec::new(),
-                &mut Vec::new(),
-            )
-            .unwrap_err();
-            assert!(
-                matches!(error, PodError::Io(ref io_err) if io_err.kind() == io::ErrorKind::InvalidInput),
-                "expected InvalidInput for editor {invalid_editor:?}"
-            );
-        }
-
-        for invalid_path in [
-            "",
-            "-c",
-            "--cmd",
-            "../etc/passwd",
-            ".",
-            "..",
-            "/",
-            ".pod",
-            "./.conf",
-            "pods\n.conf",
-        ] {
-            let error =
-                exec_editor_with("vim", invalid_path, true, &mut Vec::new(), &mut Vec::new())
-                    .unwrap_err();
-            assert!(
-                matches!(error, PodError::Io(ref io_err) if io_err.kind() == io::ErrorKind::InvalidInput),
-                "expected InvalidInput for file_path {invalid_path:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn exec_simulate_captured_interactive_spinner_and_error_handling() {
-        let default_options = ExecOptions::default();
-        assert_eq!(default_options.mode, ExecMode::Captured);
-        assert_eq!(default_options.prefix, "");
-        assert!(!default_options.simulate);
-
-        assert_eq!(
-            format::format_command("podman", &["run", "--name", "app", "O'Hara", "Hancock 2"]),
-            "podman run --name app 'O'\\''Hara' 'Hancock 2'"
-        );
-
-        let mut stdout = Vec::new();
-        let mut stderr = Vec::new();
-        let simulate_options = ExecOptions {
-            mode: ExecMode::Captured,
-            prefix: "Create container 'app': ",
-            simulate: true,
-        };
-        exec_with(
-            "podman",
-            &["create", "--name", "app"],
-            &simulate_options,
-            &mut stdout,
-            &mut stderr,
-        )
-        .unwrap();
-        let simulate_output = String::from_utf8(stdout).unwrap();
-        assert_eq!(
-            simulate_output,
-            "Create container 'app': \npodman create --name app\n"
-        );
-        assert!(stderr.is_empty());
-
-        let mut no_prefix_stdout = Vec::new();
-        let simulate_without_prefix = ExecOptions {
-            mode: ExecMode::Interactive,
-            prefix: "",
-            simulate: true,
-        };
-        exec_with(
-            "podman",
-            &["pull", "docker.io/alpine:latest"],
-            &simulate_without_prefix,
-            &mut no_prefix_stdout,
-            &mut stderr,
-        )
-        .unwrap();
-        assert_eq!(
-            String::from_utf8(no_prefix_stdout).unwrap(),
-            "podman pull docker.io/alpine:latest\n"
-        );
-
-        let mut captured_stdout = Vec::new();
-        let mut captured_stderr = Vec::new();
-        let capture_options = ExecOptions {
-            mode: ExecMode::Captured,
-            prefix: "Echo: ",
-            simulate: false,
-        };
-        exec_with(
-            "printf",
-            &["line1\\nline2\\n"],
-            &capture_options,
-            &mut captured_stdout,
-            &mut captured_stderr,
-        )
-        .unwrap();
-        assert_eq!(
-            String::from_utf8(captured_stdout).unwrap(),
-            "Echo: line1\nline2\n"
-        );
-        assert!(captured_stderr.is_empty());
-
-        let mut stderr_capture_stdout = Vec::new();
-        let mut stderr_capture_stderr = Vec::new();
-        exec_with(
-            "ls",
-            &["-d", "/", "/nonexistent/podoxide_missing_path"],
-            &ExecOptions {
-                mode: ExecMode::Captured,
-                prefix: "List: ",
-                simulate: false,
-            },
-            &mut stderr_capture_stdout,
-            &mut stderr_capture_stderr,
-        )
-        .unwrap();
-        let stderr_capture_text = String::from_utf8(stderr_capture_stdout).unwrap();
-        assert!(stderr_capture_text.starts_with("List: /\n"));
-        assert!(stderr_capture_text.lines().count() >= 2);
-        let stderr_warning_text = String::from_utf8(stderr_capture_stderr).unwrap();
-        assert!(stderr_warning_text.starts_with("WARNING: Command exited with code '"));
-
-        let mut stderr_only_stdout = Vec::new();
-        let mut stderr_only_stderr = Vec::new();
-        exec_with(
-            "ls",
-            &["-d", "/nonexistent/podoxide_exec_missing_path"],
-            &ExecOptions {
-                mode: ExecMode::Captured,
-                prefix: "Missing: ",
-                simulate: false,
-            },
-            &mut stderr_only_stdout,
-            &mut stderr_only_stderr,
-        )
-        .unwrap();
-        let stderr_only_text = String::from_utf8(stderr_only_stdout).unwrap();
-        assert!(stderr_only_text.starts_with("Missing: "));
-        assert!(!stderr_only_text.starts_with("Missing: ..."));
-        let stderr_only_warning = String::from_utf8(stderr_only_stderr).unwrap();
-        assert!(stderr_only_warning.starts_with("WARNING: Command exited with code '"));
-
-        let mut empty_stdout = Vec::new();
-        let mut empty_stderr = Vec::new();
-        exec_with(
-            "true",
-            &Vec::<String>::new(),
-            &ExecOptions {
-                mode: ExecMode::Captured,
-                prefix: "Quiet: ",
-                simulate: false,
-            },
-            &mut empty_stdout,
-            &mut empty_stderr,
-        )
-        .unwrap();
-        assert_eq!(String::from_utf8(empty_stdout).unwrap(), "Quiet: ...\n");
-        assert!(empty_stderr.is_empty());
-
-        let mut debug_stdout = Vec::new();
-        let mut debug_stderr = Vec::new();
-        log::set_debug_enabled(true);
-        let debug_result = exec_with(
-            "true",
-            &["--version"],
-            &ExecOptions {
-                mode: ExecMode::Captured,
-                prefix: "Debug: ",
-                simulate: false,
-            },
-            &mut debug_stdout,
-            &mut debug_stderr,
-        );
-        log::set_debug_enabled(false);
-        debug_result.unwrap();
-        assert_eq!(
-            String::from_utf8(debug_stderr).unwrap(),
-            "DEBUG: Execute: true --version\n"
-        );
-
-        let mut fail_stderr = Vec::new();
-        exec_with(
-            "false",
-            &Vec::<String>::new(),
-            &ExecOptions::default(),
-            &mut Vec::new(),
-            &mut fail_stderr,
-        )
-        .unwrap();
-        assert_eq!(
-            String::from_utf8(fail_stderr).unwrap(),
-            "WARNING: Command exited with code '1'!\n"
-        );
-
-        let mut interactive_fail_stderr = Vec::new();
-        exec_with(
-            "false",
-            &Vec::<String>::new(),
-            &ExecOptions {
-                mode: ExecMode::Interactive,
-                prefix: "",
-                simulate: false,
-            },
-            &mut Vec::new(),
-            &mut interactive_fail_stderr,
-        )
-        .unwrap();
-        assert_eq!(
-            String::from_utf8(interactive_fail_stderr).unwrap(),
-            "WARNING: Command exited with code '1'!\n"
-        );
-
-        let mut spinner_sim_stdout = Vec::new();
-        let mut spinner_sim_stderr = Vec::new();
-        exec_spinner_with(
-            "podman",
-            &["pull", "docker.io/library/nginx:stable-alpine"],
-            "  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine): ",
-            true,
-            |_| panic!("resolve_summary must not run in simulate mode"),
-            &mut spinner_sim_stdout,
-            &mut spinner_sim_stderr,
-        )
-        .unwrap();
-        assert_eq!(
-            String::from_utf8(spinner_sim_stdout).unwrap(),
-            "  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine): \n  podman pull docker.io/library/nginx:stable-alpine\n"
-        );
-        assert!(spinner_sim_stderr.is_empty());
-
-        let mut spinner_stdout = Vec::new();
-        let mut spinner_stderr = Vec::new();
-        exec_spinner_with(
-            "sleep",
-            &["0.1"],
-            "  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine)... ",
-            false,
-            |status| {
-                assert_eq!(status, SpinnerStatus::Succeeded);
-                "Updated."
-            },
-            &mut spinner_stdout,
-            &mut spinner_stderr,
-        )
-        .unwrap();
-        let spinner_text = String::from_utf8(spinner_stdout).unwrap();
-        assert!(spinner_text.starts_with(
-            &format!(
-                "{SPINNER_HIDE_CURSOR}\r  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine)... {}",
-                SPINNER_FRAMES[0]
-            )
-        ));
-        assert!(spinner_text.contains(&format!(
-            "\r  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine)... {}",
-            SPINNER_FRAMES[1]
-        )));
-        assert!(spinner_text.ends_with(
-            &format!(
-                "{SPINNER_SHOW_CURSOR}\r  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine)... Updated.\n"
-            )
-        ));
-        assert!(spinner_stderr.is_empty());
-
-        let mut spinner_fail_stdout = Vec::new();
-        let mut spinner_fail_stderr = Vec::new();
-        exec_spinner_with(
-            "false",
-            &Vec::<String>::new(),
-            "Trying to pull\nbad\u{202E}... ",
-            false,
-            |status| {
-                assert_eq!(status, SpinnerStatus::Failed);
-                "Failed."
-            },
-            &mut spinner_fail_stdout,
-            &mut spinner_fail_stderr,
-        )
-        .unwrap();
-        let spinner_fail_text = String::from_utf8(spinner_fail_stdout).unwrap();
-        assert!(spinner_fail_text.starts_with(&format!(
-            "{SPINNER_HIDE_CURSOR}\rTrying to pull bad ... {}",
-            SPINNER_FRAMES[0]
-        )));
-        assert!(spinner_fail_text.ends_with(&format!(
-            "{SPINNER_SHOW_CURSOR}\rTrying to pull bad ... Failed.\n"
-        )));
-        assert!(!spinner_fail_text.contains('\u{202E}'));
-        assert_eq!(
-            String::from_utf8(spinner_fail_stderr).unwrap(),
-            "WARNING: Command exited with code '1'!\n"
-        );
-
-        let mut oversized_spinner_stdout = Vec::new();
-        let mut oversized_spinner_stderr = Vec::new();
-        let oversized_prefix = "p".repeat(log::MAX_LOG_MESSAGE_BYTES + 1);
-        exec_spinner_with(
-            "false",
-            &Vec::<String>::new(),
-            &oversized_prefix,
-            false,
-            |_| "0123456789abcdef_overflow",
-            &mut oversized_spinner_stdout,
-            &mut oversized_spinner_stderr,
-        )
-        .unwrap();
-        let oversized_spinner_text = String::from_utf8(oversized_spinner_stdout).unwrap();
-        let final_spinner_line = oversized_spinner_text
-            .trim_end_matches('\n')
-            .rsplit('\r')
-            .next()
-            .unwrap();
-        assert_eq!(
-            final_spinner_line.len(),
-            SPINNER_MAX_PREFIX_BYTES + SPINNER_MAX_SUMMARY_BYTES
-        );
-        assert_eq!(final_spinner_line.len(), log::MAX_LOG_MESSAGE_BYTES);
-
-        let mut signal_stderr = Vec::new();
-        warn_on_exit_failure(ExitStatus::from_raw(9), &mut signal_stderr);
-        assert_eq!(
-            String::from_utf8(signal_stderr).unwrap(),
-            "WARNING: Command terminated by signal!\n"
-        );
-
-        for mode in [ExecMode::Captured, ExecMode::Interactive] {
-            let io_error = exec_with(
-                "/nonexistent/podoxide_missing_bin",
-                &Vec::<String>::new(),
-                &ExecOptions {
-                    mode,
-                    prefix: "",
-                    simulate: false,
-                },
-                &mut Vec::new(),
-                &mut Vec::new(),
-            )
-            .unwrap_err();
-            assert!(
-                matches!(io_error, PodError::Io(_)),
-                "expected PodError::Io for mode {mode:?}"
-            );
-        }
-        let spinner_io_error = exec_spinner_with(
-            "/nonexistent/podoxide_missing_bin",
-            &Vec::<String>::new(),
-            "",
-            false,
-            |_| "Failed.",
-            &mut Vec::new(),
-            &mut Vec::new(),
-        )
-        .unwrap_err();
-        assert!(matches!(spinner_io_error, PodError::Io(_)));
-
-        let mut child = build_command("sleep", &["10"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        let poll_error = poll_child_status(
-            &mut child,
-            Err(io::Error::other("poll failure")),
-            Duration::from_millis(1),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(poll_error, PodError::Io(ref io_err) if io_err.kind() == io::ErrorKind::Other)
-        );
-        assert!(child.try_wait().unwrap().is_some());
-    }
-}
+#[path = "command_tests.rs"]
+mod tests;

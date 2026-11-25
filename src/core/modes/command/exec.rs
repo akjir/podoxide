@@ -95,7 +95,7 @@ fn exec_command<W: Write, E: Write>(
         &ExecContainer {
             command: &execute_tokens,
             container_name: &container_name,
-            interactive: false,
+            interactive: true,
             user: command.user.as_deref(),
         },
         &prefix,
