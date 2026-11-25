@@ -1443,6 +1443,9 @@ recipes {
             "/usr/bin/vim/.",
             "/usr/bin/",
             "../../bin/vim",
+            "./bin/editor_1",
+            "./evil",
+            "sub/vim",
             "/usr/bin/../../etc/passwd",
             "/usr/bin/\u{202E}miv",
         ] {
@@ -1452,7 +1455,7 @@ recipes {
             assert_config_error(&editor_input, ConfigErrorKind::InvalidPath);
         }
 
-        for valid_editor in ["vim", "nvim", "/usr/bin/vim", "./bin/editor_1"] {
+        for valid_editor in ["vim", "nvim", "/usr/bin/vim", "/usr/local/bin/editor_1"] {
             let editor_input = format!(
                 "general {{\n    editor {valid_editor}\n}}\nrecipes {{\n    groups {{\n        all app\n    }}\n}}"
             );

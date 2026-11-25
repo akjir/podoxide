@@ -35,8 +35,9 @@ use crate::utilities::path::{
     parent_or_cur_dir, sanitize_path_token,
 };
 use crate::utilities::string::{
-    contains_control_or_bidi, is_valid_identifier, is_valid_pod_or_container_name,
-    is_valid_recipe_identifier, is_valid_text, is_valid_token, normalize_name, parse_ascii_u32,
+    contains_control_or_bidi, is_valid_container_suffix, is_valid_identifier,
+    is_valid_pod_or_container_name, is_valid_recipe_identifier, is_valid_text, is_valid_token,
+    normalize_name, parse_ascii_u32,
 };
 
 /// File extension for PodScript Language recipe files.
@@ -560,8 +561,11 @@ fn parse_container_name_arg(block: &PslBlock<'_>) -> Result<String, RecipeError>
         ));
     }
     let normalized = normalize_name(raw_name);
-    let candidate = normalized.strip_prefix('*').unwrap_or(&normalized);
-    if !is_valid_pod_or_container_name(candidate) {
+    let is_valid = match normalized.strip_prefix('*') {
+        Some(suffix) => is_valid_container_suffix(suffix),
+        None => is_valid_pod_or_container_name(&normalized),
+    };
+    if !is_valid {
         return Err(RecipeError::with_token(
             RecipeErrorKind::InvalidContainerName,
             block.line,

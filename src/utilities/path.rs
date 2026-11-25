@@ -26,7 +26,8 @@ use crate::utilities::string;
 #[must_use]
 pub fn build_full_path(base_dir: &Path, file_name: &str, file_extension: &str) -> PathBuf {
     let base_bytes = base_dir.as_os_str().as_encoded_bytes();
-    let leaf = format_leaf_name(file_name, file_extension);
+    let relative_name = file_name.trim_start_matches('/');
+    let leaf = format_leaf_name(relative_name, file_extension);
     let capacity = base_bytes
         .len()
         .saturating_add(leaf.len())
@@ -47,23 +48,9 @@ pub fn build_full_path(base_dir: &Path, file_name: &str, file_extension: &str) -
 /// Extracts the configuration file stem from a raw `.conf` path string if it is structurally valid.
 #[must_use]
 pub fn extract_config_stem(raw_value: &str) -> Option<&str> {
-    if raw_value.is_empty()
-        || raw_value != raw_value.trim()
-        || raw_value.starts_with('-')
-        || raw_value.ends_with('/')
-        || string::contains_control_or_bidi(raw_value)
-    {
-        return None;
-    }
-    let file_name = raw_value.rsplit('/').next().unwrap_or(raw_value);
-    if file_name.starts_with('-') {
-        return None;
-    }
+    let file_name = validate_raw_target_file_name(raw_value)?;
     let stem = file_name.strip_suffix(".conf").unwrap_or(file_name);
-    if !has_valid_stem(stem) {
-        return None;
-    }
-    Some(stem)
+    has_valid_stem(stem).then_some(stem)
 }
 
 /// Evaluates whether `path` contains any parent directory (`..`) traversal component.
@@ -105,11 +92,12 @@ pub fn is_valid_directory_path(value: &str) -> bool {
         .any(|component| matches!(component, Component::CurDir | Component::Normal(_)))
 }
 
-/// Evaluates whether `value` is a safe executable name or path without `..` traversal, leading dashes, or control/whitespace characters.
+/// Evaluates whether `value` is a safe bare executable name or absolute path without `..` traversal, leading dashes, or control/whitespace characters.
 #[must_use]
 pub fn is_valid_editor_value(value: &str) -> bool {
     if value.is_empty()
         || value.starts_with('-')
+        || (value.contains('/') && !value.starts_with('/'))
         || string::contains_control_or_whitespace(value)
         || has_parent_dir(Path::new(value))
     {
@@ -125,7 +113,7 @@ pub fn is_valid_editor_value(value: &str) -> bool {
         && !file_name.eq_ignore_ascii_case("podman")
 }
 
-/// Evaluates whether `path` is a structurally valid, UTF-8 target file path without `..` traversal.
+/// Evaluates whether `path` is a structurally valid, UTF-8 target file path without `..` traversal or leading `-`/`+`.
 #[must_use]
 pub fn is_valid_target_path(path: &Path) -> bool {
     let Some(raw_path) = path.to_str() else {
@@ -134,22 +122,30 @@ pub fn is_valid_target_path(path: &Path) -> bool {
     if has_parent_dir(path) {
         return false;
     }
-    let Some(config_stem) = extract_config_stem(raw_path) else {
+    let Some(file_name) = validate_raw_target_file_name(raw_path) else {
         return false;
     };
-    let target_stem = config_stem.strip_suffix(".pod").unwrap_or(config_stem);
-    has_valid_stem(target_stem)
+    let stem = file_name
+        .strip_suffix(".conf")
+        .or_else(|| file_name.strip_suffix(".pod"))
+        .unwrap_or(file_name);
+    has_valid_stem(stem)
 }
 
-/// Evaluates whether a non-empty volume mount `options` token is free of colons, slashes, `..`, leading hyphens, and control/whitespace characters.
+/// Evaluates whether comma-separated volume mount `options` are non-empty, free of empty segments, colons, slashes, `..`, leading hyphens, and control/whitespace characters.
 #[must_use]
 pub fn is_valid_volume_options(options: &str) -> bool {
-    !options.is_empty()
-        && !options.starts_with('-')
-        && !options.contains(':')
-        && !options.contains('/')
-        && !options.contains("..")
-        && !string::contains_control_or_whitespace(options)
+    if options.is_empty()
+        || options.contains(':')
+        || options.contains('/')
+        || options.contains("..")
+        || string::contains_control_or_whitespace(options)
+    {
+        return false;
+    }
+    options
+        .split(',')
+        .all(|segment| !segment.is_empty() && !segment.starts_with('-'))
 }
 
 /// Evaluates whether `file_name` ends with `extension` and retains a non-empty, non-dot-only stem.
@@ -211,12 +207,14 @@ pub fn pop_relative_or_absolute(path: &mut PathBuf) {
 /// Formats `path` relative to `base_dir` without a leading `./` prefix for display and log output.
 #[must_use]
 pub fn relative_display_path<'a>(path: &'a Path, base_dir: &Path) -> &'a Path {
-    let relative = if base_dir != Path::new(".") {
-        path.strip_prefix(base_dir).unwrap_or(path)
+    let clean_path = strip_leading_cur_dir(path);
+    let clean_base = strip_leading_cur_dir(base_dir);
+    let relative = if clean_base.as_os_str().is_empty() {
+        clean_path
     } else {
-        path
+        clean_path.strip_prefix(clean_base).unwrap_or(clean_path)
     };
-    let stripped = relative.strip_prefix("./").unwrap_or(relative);
+    let stripped = strip_leading_cur_dir(relative);
     if stripped.as_os_str().is_empty() && !path.as_os_str().is_empty() {
         return Path::new(".");
     }
@@ -331,6 +329,30 @@ fn has_valid_stem(stem: &str) -> bool {
     !stem.is_empty() && !stem.bytes().all(|byte| byte == b'.')
 }
 
+/// Strips any leading `.` (`./`) current-directory prefix components from `path`.
+#[must_use]
+fn strip_leading_cur_dir(mut path: &Path) -> &Path {
+    while let Ok(stripped) = path.strip_prefix(".") {
+        path = stripped;
+    }
+    path
+}
+
+/// Validates structural invariants of a raw target path string and returns its terminal file name.
+#[must_use]
+fn validate_raw_target_file_name(raw_value: &str) -> Option<&str> {
+    if raw_value.is_empty()
+        || raw_value != raw_value.trim()
+        || raw_value.starts_with(['-', '+'])
+        || raw_value.ends_with('/')
+        || string::contains_control_or_bidi(raw_value)
+    {
+        return None;
+    }
+    let file_name = raw_value.rsplit('/').next().unwrap_or(raw_value);
+    (!file_name.starts_with(['-', '+'])).then_some(file_name)
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -376,6 +398,10 @@ mod tests {
             build_full_path(Path::new(""), "recipe", ".pod"),
             PathBuf::from("./recipe.pod")
         );
+        assert_eq!(
+            build_full_path(Path::new("./recipes"), "/etc/passwd", ".pod"),
+            PathBuf::from("./recipes/etc/passwd.pod")
+        );
 
         assert!(is_valid_directory(Path::new(".")));
         assert!(is_valid_directory(Path::new("/var/lib/pods")));
@@ -395,6 +421,8 @@ mod tests {
 
         assert!(is_valid_editor_value("vim"));
         assert!(is_valid_editor_value("/usr/bin/nvim"));
+        assert!(!is_valid_editor_value("./evil"));
+        assert!(!is_valid_editor_value("sub/vim"));
         assert!(!is_valid_editor_value(""));
         assert!(!is_valid_editor_value("-vim"));
         assert!(!is_valid_editor_value("/usr/bin/-vim"));
@@ -415,6 +443,10 @@ mod tests {
 
         assert!(is_valid_volume_options("ro,Z"));
         assert!(!is_valid_volume_options(""));
+        assert!(!is_valid_volume_options(","));
+        assert!(!is_valid_volume_options("ro,"));
+        assert!(!is_valid_volume_options(",ro"));
+        assert!(!is_valid_volume_options("ro,,Z"));
         assert!(!is_valid_volume_options("-ro"));
         assert!(!is_valid_volume_options("ro:z"));
         assert!(!is_valid_volume_options("ro/rw"));
@@ -550,6 +582,13 @@ mod tests {
         assert!(is_valid_target_path(Path::new("./recipe.pod")));
         assert!(is_valid_target_path(Path::new("./pods.conf")));
         assert!(is_valid_target_path(Path::new("./.hidden.pod")));
+        assert_eq!(
+            is_valid_target_path(Path::new(".pod.conf")),
+            extract_config_stem(".pod.conf").is_some()
+        );
+        assert!(!is_valid_target_path(Path::new("+!id.conf")));
+        assert!(!is_valid_target_path(Path::new("+q.pod")));
+        assert!(!is_valid_target_path(Path::new("./+q.pod")));
         assert!(!is_valid_target_path(Path::new("")));
         assert!(!is_valid_target_path(Path::new(".pod")));
         assert!(!is_valid_target_path(Path::new("./.pod")));
@@ -596,6 +635,14 @@ mod tests {
         assert_eq!(
             relative_display_path(Path::new("/etc/pods/staging.conf"), Path::new(".")),
             Path::new("/etc/pods/staging.conf")
+        );
+        assert_eq!(
+            relative_display_path(Path::new("./a/b"), Path::new("a")),
+            Path::new("b")
+        );
+        assert_eq!(
+            relative_display_path(Path::new("a/b"), Path::new("./a")),
+            Path::new("b")
         );
     }
 

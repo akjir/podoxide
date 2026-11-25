@@ -17,10 +17,11 @@
 
 use std::io::{self, Write};
 
+use crate::core::constants::{APP_NAME, APP_VERSION};
 use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
-use crate::utilities::format::format_version_header;
+use crate::utilities::format;
 
 /// Formats and outputs the CLI help text for `pods image` (`pods img`).
 ///
@@ -55,7 +56,10 @@ fn write_actions_section<W: Write>(writer: &mut W) {
 
 /// Writes the `pods image` help text to `writer`.
 fn write_help<W: Write>(writer: &mut W) {
-    log::write_print(writer, &format_version_header(Some("Image Mode")));
+    log::write_print(
+        writer,
+        &format::format_version_header(APP_NAME, APP_VERSION, Some("Image Mode")),
+    );
     log::write_print(writer, "");
     log::write_print(writer, "Manage orphaned and dangling container images.");
     log::write_print(writer, "Usage: pods image [OPTIONS] ACTION [TARGETS]");
@@ -101,8 +105,9 @@ fn write_targets_section<W: Write>(writer: &mut W) {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::constants::{APP_NAME, APP_VERSION};
     use crate::core::context::Context;
-    use crate::utilities::format::format_version_header;
+    use crate::utilities::format;
     use super::{handle, write_help};
 
     #[test]
@@ -111,7 +116,10 @@ mod tests {
         write_help(&mut buffer);
         let output = String::from_utf8(buffer).unwrap();
 
-        assert!(output.contains(&format!("{}\n", format_version_header(Some("Image Mode")))));
+        assert!(output.contains(&format!(
+            "{}\n",
+            format::format_version_header(APP_NAME, APP_VERSION, Some("Image Mode"))
+        )));
         assert!(output.contains("Manage orphaned and dangling container images.\n"));
         assert!(output.contains("Usage: pods image [OPTIONS] ACTION [TARGETS]\n"));
         assert!(output.contains("ACTIONS:\n"));

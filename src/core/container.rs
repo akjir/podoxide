@@ -27,8 +27,8 @@ use crate::io::exec::podman::{self, CreateContainer, PullOutcome};
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value};
 use crate::utilities::path::{is_valid_directory, is_valid_directory_path, is_valid_volume_options};
 use crate::utilities::string::{
-    contains_control_or_bidi, is_valid_pod_or_container_name, is_valid_text, is_valid_token,
-    normalize_name,
+    contains_control_or_bidi, is_valid_container_suffix, is_valid_pod_or_container_name,
+    is_valid_text, is_valid_token, normalize_name,
 };
 
 /// Container specification and runtime arguments from a `container` block in a `.pod` recipe.
@@ -355,7 +355,7 @@ pub fn resolve_container_name_value(
     }
     let normalized = normalize_name(raw_name);
     if let Some(suffix) = normalized.strip_prefix('*') {
-        if !is_valid_pod_or_container_name(pod_id) || !is_valid_pod_or_container_name(suffix) {
+        if !is_valid_pod_or_container_name(pod_id) || !is_valid_container_suffix(suffix) {
             return Err(RecipeError::with_token(
                 RecipeErrorKind::InvalidContainerName,
                 line,
@@ -989,8 +989,12 @@ mod tests {
             resolve_container_name_value(" *Relative ", "con_name", 2, 8).unwrap(),
             "con_name-relative"
         );
+        assert_eq!(
+            resolve_container_name_value("*_db", "con_name", 2, 8).unwrap(),
+            "con_name-_db"
+        );
 
-        for invalid_pod_id in ["", "--bad", "-p", "bad\npod"] {
+        for invalid_pod_id in ["", "--bad", "-p", "_internal", "bad\npod"] {
             assert_eq!(
                 resolve_container_name_value("", invalid_pod_id, 1, 6)
                     .unwrap_err()

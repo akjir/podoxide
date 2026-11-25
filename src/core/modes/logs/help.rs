@@ -17,10 +17,11 @@
 
 use std::io::{self, Write};
 
+use crate::core::constants::{APP_NAME, APP_VERSION};
 use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
-use crate::utilities::format::format_version_header;
+use crate::utilities::format;
 
 /// Formats and outputs the CLI help text for `pods logs` (`pods log`).
 ///
@@ -53,7 +54,10 @@ fn write_actions_section<W: Write>(writer: &mut W) {
 
 /// Writes the `pods logs` help text to `writer`.
 fn write_help<W: Write>(writer: &mut W) {
-    log::write_print(writer, &format_version_header(Some("Logs Mode")));
+    log::write_print(
+        writer,
+        &format::format_version_header(APP_NAME, APP_VERSION, Some("Logs Mode")),
+    );
     log::write_print(writer, "");
     log::write_print(
         writer,
@@ -110,8 +114,9 @@ fn write_target_section<W: Write>(writer: &mut W) {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::constants::{APP_NAME, APP_VERSION};
     use crate::core::context::Context;
-    use crate::utilities::format::format_version_header;
+    use crate::utilities::format;
     use super::{handle, write_help};
 
     #[test]
@@ -120,7 +125,10 @@ mod tests {
         write_help(&mut buffer);
         let output = String::from_utf8(buffer).unwrap();
 
-        assert!(output.contains(&format!("{}\n", format_version_header(Some("Logs Mode")))));
+        assert!(output.contains(&format!(
+            "{}\n",
+            format::format_version_header(APP_NAME, APP_VERSION, Some("Logs Mode"))
+        )));
         assert!(output.contains("Show or follow logs for a recipe's pod or container.\n"));
         assert!(output.contains("Usage: pods logs [OPTIONS] [<action>] <recipe>[/container]\n"));
         assert!(output.contains("ACTIONS:\n"));

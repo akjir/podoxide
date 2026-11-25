@@ -17,10 +17,11 @@
 
 use std::io::{self, Write};
 
+use crate::core::constants::{APP_NAME, APP_VERSION};
 use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
-use crate::utilities::format::format_version_header;
+use crate::utilities::format;
 
 /// Formats and outputs the CLI help text for `pods connect` (`pods con`).
 ///
@@ -51,7 +52,10 @@ fn write_actions_section<W: Write>(writer: &mut W) {
 
 /// Writes the `pods connect` help text to `writer`.
 fn write_help<W: Write>(writer: &mut W) {
-    log::write_print(writer, &format_version_header(Some("Connect Mode")));
+    log::write_print(
+        writer,
+        &format::format_version_header(APP_NAME, APP_VERSION, Some("Connect Mode")),
+    );
     log::write_print(writer, "");
     log::write_print(
         writer,
@@ -99,8 +103,9 @@ fn write_target_section<W: Write>(writer: &mut W) {
 
 #[cfg(test)]
 mod tests {
+    use crate::core::constants::{APP_NAME, APP_VERSION};
     use crate::core::context::Context;
-    use crate::utilities::format::format_version_header;
+    use crate::utilities::format;
     use super::{handle, write_help};
 
     #[test]
@@ -111,7 +116,7 @@ mod tests {
 
         assert!(output.contains(&format!(
             "{}\n",
-            format_version_header(Some("Connect Mode"))
+            format::format_version_header(APP_NAME, APP_VERSION, Some("Connect Mode"))
         )));
         assert!(output.contains("Connect to a running container with an interactive shell.\n"));
         assert!(output.contains("Usage: pods connect [OPTIONS] [<action>] <target>\n"));

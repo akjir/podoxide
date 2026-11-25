@@ -35,9 +35,16 @@ podoxide/
 ├── README.md
 ├── USAGE.md
 └── src/
-    ├── error.rs
     ├── lib.rs
     ├── main.rs
+    ├── error/
+    │   ├── cli.rs
+    │   ├── config.rs
+    │   ├── diagnostic.rs
+    │   ├── mod.rs
+    │   ├── psl.rs
+    │   ├── recipe.rs
+    │   └── span.rs
     ├── core/
     │   ├── cli.rs
     │   ├── config.rs
@@ -135,7 +142,13 @@ podoxide/
 | `.pods-completion.bash` | Provides Bash autocompletion for all CLI modes, actions, and flags. |
 | `src/main.rs`           | Serves as the binary entry point (`pods`), delegates execution to `podoxide`, and returns `ExitCode`. |
 | `src/lib.rs`            | Serves as the library root, enforces `#![forbid(unsafe_code)]`, and exports `core`, `error`, `io`, and `utilities`. |
-| `src/error.rs`          | Defines the central `CliError`, `ConfigError`, `DiagnosticError`, `PodError`, `PslError`, `RecipeError`, and `SystemError` domain error types, `build_caret_annotation`, and implements `Error` and `Display`. |
+| `src/error/mod.rs`      | Declares and re-exports the central domain error submodules, `MAX_ERROR_TOKEN_BYTES`, `PodError`, and `SystemError`. |
+| `src/error/cli.rs`      | Defines `CliError` and `CliErrorKind` for CLI parsing and validation failures. |
+| `src/error/config.rs`   | Defines `ConfigError` and `ConfigErrorKind` for `pods.conf` semantic validation failures. |
+| `src/error/diagnostic.rs` | Defines `DiagnosticError`, `build_caret_annotation`, and sanitized diagnostic and I/O error formatters. |
+| `src/error/psl.rs`      | Defines `PslError` and `PslErrorKind` for PSL lexical, grammatical, and resource-limit failures. |
+| `src/error/recipe.rs`   | Defines `RecipeError` and `RecipeErrorKind` for `.pod` recipe validation and target resolution failures. |
+| `src/error/span.rs`     | Provides unified quote-aware source scanning and token span resolution for compiler-style diagnostics. |
 
 ## Core Domain (`src/core/`)
 
@@ -149,7 +162,7 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/constants.rs` | Defines global application metadata and the compile-time build version constant (`APP_NAME`, `APP_VERSION`). |
 | `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and executes container lifecycle operations (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`, `pull`, `update`). |
 | `src/core/context.rs`   | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
-| `src/core/log.rs`       | Provides structured output, numbered-line printing (`write_numbered_lines`), and diagnostic logging (`debug`, `info`, `pod_error`, `print`, `write_*`) with debug state control. |
+| `src/core/log.rs`       | Provides structured output, numbered-line printing (`write_numbered_lines`), and diagnostic logging (`debug`, `info`, `pod_error`, `write_*`) with debug state control. |
 | `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `pull`, `update`) across containers. |
 | `src/core/recipe.rs`    | Defines the `.pod` recipe model, loads and validates pod and container definitions (`Recipe::inspect`), and resolves target container specifications (`<recipe>/<spec>`). |
 | `src/core/update.rs`    | Defines update outcome models (`ContainerPullRecord`, `ContainerUpdateResult`, `PodUpdateResult`, `SummaryKind`, `SummaryScope`, `UpdateAction`, `UpdateSummary`), the indented reload writer (`IndentedWriter`), pull prefix formatting, and grouped `Update Summary:` rendering. |
@@ -307,8 +320,8 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 | `src/utilities/mod.rs`        | Declares and re-exports the utility submodules. |
 | `src/utilities/collection.rs` | Provides slice and vector helpers such as option token splitting and validation (`append_option_tokens`, `is_valid_option_value`), order-preserving deduplication (`dedup_preserve_order`), and bounded pre-allocation utilities (`bounded_capacity`). |
 | `src/utilities/format.rs`     | Formats shell-escaped command strings (`format_command`), 1-based list indices (`format_index_prefix`), quoted conjunctions (`format_quoted_conjunction`), recipe inspection hints (`format_recipe_error_hint`), and byte counts (`format_bytes`), parses human-readable sizes (`parse_size_to_bytes`), aligns status columns (`format_line`), and formats CLI version headers (`format_version_header`). |
-| `src/utilities/path.rs`       | Provides lexical path normalization (`normalize_lexical_path`, `pop_relative_or_absolute`), full path construction (`build_full_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), directory, editor, and target path validation (`has_regular_target_name`, `is_valid_directory`, `is_valid_directory_path`, `is_valid_editor_value`, `is_valid_target_path`, `validate_editor`), path token sanitization (`sanitize_path_token`), extension matching (`matches_extension`), parent traversal checks (`has_parent_dir`), and `.conf` stem/path resolution (`extract_config_stem`, `resolve_config_name`, `resolve_config_path`). |
-| `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character detection and sanitization (`contains_control_or_bidi`, `contains_control_or_whitespace`, `is_bidi_control`, `sanitize_char`, `sanitize_text`), empty value literal detection (`is_empty_value_literal`), shell quoting (`escape_shell`, `is_safe_shell_byte`), identifier, target, token, text, and pod/container name validation and normalization (`is_identifier_continue`, `is_identifier_start`, `is_valid_group_target`, `is_valid_identifier`, `is_valid_pod_or_container_name`, `is_valid_recipe_identifier`, `is_valid_target_segment`, `is_valid_text`, `is_valid_token`, `normalize_name`), and strict ASCII integer parsing (`parse_ascii_u32`). |
+| `src/utilities/path.rs`       | Provides lexical path normalization (`normalize_lexical_path`, `pop_relative_or_absolute`), full path construction (`build_full_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), directory, editor, volume option, and target path validation (`has_regular_target_name`, `is_valid_directory`, `is_valid_directory_path`, `is_valid_editor_value`, `is_valid_target_path`, `is_valid_volume_options`, `validate_editor`), path token sanitization (`sanitize_path_token`), extension matching (`matches_extension`), parent traversal checks (`has_parent_dir`), and `.conf` stem/path resolution (`extract_config_stem`, `resolve_config_name`, `resolve_config_path`). |
+| `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character detection and sanitization (`contains_control_or_bidi`, `contains_control_or_whitespace`, `is_bidi_control`, `sanitize_char`, `sanitize_text`), empty value literal detection (`is_empty_value_literal`), shell quoting (`escape_shell`, `is_safe_shell_byte`), identifier, target, token, text, and pod/container name validation and normalization (`is_identifier_continue`, `is_identifier_start`, `is_valid_container_suffix`, `is_valid_group_target`, `is_valid_identifier`, `is_valid_pod_or_container_name`, `is_valid_recipe_identifier`, `is_valid_target_segment`, `is_valid_text`, `is_valid_token`, `normalize_name`), and strict ASCII integer parsing (`parse_ascii_u32`). |
 
 ## Execution Flow
 

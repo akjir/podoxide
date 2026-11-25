@@ -106,6 +106,16 @@ pub const fn is_safe_shell_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'=' | b'@')
 }
 
+/// Evaluates whether `suffix` is a valid relative container suffix after `*` (`[a-z0-9_][a-z0-9_.-]*` without `..`).
+#[must_use]
+pub fn is_valid_container_suffix(suffix: &str) -> bool {
+    let Some((&first, rest)) = suffix.as_bytes().split_first() else {
+        return false;
+    };
+    let valid_first = first.is_ascii_lowercase() || first.is_ascii_digit() || first == b'_';
+    valid_first && is_valid_pod_name_rest(rest) && !suffix.contains("..")
+}
+
 /// Evaluates whether `target` is a valid `@<group>` reference or recipe stem identifier.
 #[must_use]
 pub fn is_valid_group_target(target: &str) -> bool {
@@ -124,21 +134,14 @@ pub fn is_valid_identifier(identifier: &str) -> bool {
     is_identifier_start(first) && rest.iter().copied().all(is_identifier_continue)
 }
 
-/// Evaluates whether `name` is a valid normalized pod or container name (`[a-z0-9_][a-z0-9_.-]*` without `..`).
+/// Evaluates whether `name` is a valid normalized pod or container name (`[a-z0-9][a-z0-9_.-]*` without `..`).
 #[must_use]
 pub fn is_valid_pod_or_container_name(name: &str) -> bool {
     let Some((&first, rest)) = name.as_bytes().split_first() else {
         return false;
     };
-    let valid_first = first.is_ascii_lowercase() || first.is_ascii_digit() || first == b'_';
-    let valid_rest = rest.iter().copied().all(|byte| {
-        byte.is_ascii_lowercase()
-            || byte.is_ascii_digit()
-            || byte == b'_'
-            || byte == b'-'
-            || byte == b'.'
-    });
-    valid_first && valid_rest && !name.contains("..")
+    let valid_first = first.is_ascii_lowercase() || first.is_ascii_digit();
+    valid_first && is_valid_pod_name_rest(rest) && !name.contains("..")
 }
 
 /// Evaluates whether `identifier` is a valid recipe identifier (`[A-Za-z0-9_][A-Za-z0-9_-]*`).
@@ -234,12 +237,24 @@ fn append_normalized_char(normalized: &mut String, character: char, in_whitespac
     }
 }
 
+/// Evaluates whether every trailing byte of a pod or container name matches `[a-z0-9_.-]`.
+#[must_use]
+fn is_valid_pod_name_rest(rest: &[u8]) -> bool {
+    rest.iter().copied().all(|byte| {
+        byte.is_ascii_lowercase()
+            || byte.is_ascii_digit()
+            || byte == b'_'
+            || byte == b'-'
+            || byte == b'.'
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         clamp_utf8_prefix, contains_control_or_bidi, contains_control_or_whitespace, escape_shell,
         is_bidi_control, is_empty_value_literal, is_identifier_continue, is_identifier_start,
-        is_safe_shell_byte, is_valid_group_target, is_valid_identifier,
+        is_safe_shell_byte, is_valid_container_suffix, is_valid_group_target, is_valid_identifier,
         is_valid_pod_or_container_name, is_valid_recipe_identifier, is_valid_target_segment,
         is_valid_text, is_valid_token, normalize_name, parse_ascii_u32, sanitize_char,
         sanitize_text,
@@ -379,7 +394,7 @@ mod tests {
 
         assert!(is_valid_pod_or_container_name("example-stack_1.0"));
         assert!(is_valid_pod_or_container_name("10_db"));
-        assert!(is_valid_pod_or_container_name("_internal"));
+        assert!(!is_valid_pod_or_container_name("_internal"));
         assert!(!is_valid_pod_or_container_name(""));
         assert!(!is_valid_pod_or_container_name("-flag"));
         assert!(!is_valid_pod_or_container_name(".hidden"));
@@ -388,5 +403,13 @@ mod tests {
         assert!(!is_valid_pod_or_container_name("a..b"));
         assert!(!is_valid_pod_or_container_name("a/b"));
         assert!(!is_valid_pod_or_container_name("a:b"));
+
+        assert!(is_valid_container_suffix("db"));
+        assert!(is_valid_container_suffix("_db"));
+        assert!(is_valid_container_suffix("1_app.0"));
+        assert!(!is_valid_container_suffix(""));
+        assert!(!is_valid_container_suffix("-bad"));
+        assert!(!is_valid_container_suffix(".bad"));
+        assert!(!is_valid_container_suffix("a..b"));
     }
 }

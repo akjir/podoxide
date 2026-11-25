@@ -16,17 +16,44 @@
 //! Structured output and diagnostic logging for Podoxide.
 
 use std::cell::Cell;
+use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use crate::error::PodError;
-use crate::utilities::string::{clamp_utf8_prefix, sanitize_char};
+use crate::utilities::string;
 
 /// Maximum payload bytes written per diagnostic or output line.
 pub const MAX_LOG_MESSAGE_BYTES: usize = 4096;
+/// Minimum digit width used for 1-based line numbers in [`write_numbered_lines`].
+const MIN_LINE_NUMBER_WIDTH: usize = 3;
 
 thread_local! {
     /// Thread-local flag controlling whether `DEBUG:` messages are emitted.
     static DEBUG_ENABLED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// RAII guard restoring the thread-local debug logging state when dropped in tests.
+#[cfg(test)]
+pub(crate) struct DebugGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl DebugGuard {
+    /// Sets the thread-local debug state to `enabled` and returns a guard restoring the prior state on drop.
+    #[must_use]
+    pub(crate) fn new(enabled: bool) -> Self {
+        let previous = is_debug_enabled();
+        set_debug_enabled(enabled);
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for DebugGuard {
+    fn drop(&mut self) {
+        set_debug_enabled(self.previous);
+    }
 }
 
 /// Writes a debug diagnostic message (`DEBUG: <message>`) to standard error when debug mode is enabled.
@@ -53,11 +80,6 @@ pub fn pod_error(error: &PodError) {
     write_pod_error(&mut io::stderr().lock(), error);
 }
 
-/// Writes a standard output line (`<message>`) to standard output.
-pub fn print(message: &str) {
-    write_print(&mut io::stdout().lock(), message);
-}
-
 /// Enables or disables verbose debug logging.
 pub fn set_debug_enabled(enabled: bool) {
     DEBUG_ENABLED.set(enabled);
@@ -80,11 +102,22 @@ pub fn write_info<W: Write>(writer: &mut W, message: &str) {
     write_line(writer, "INFO: ", message);
 }
 
-/// Writes each line of `content` prefixed with its 1-based line number (`"{line_number:3}: {line}"`) to `writer`.
+/// Writes each line of `content` prefixed with its right-aligned 1-based line number to `writer`.
 pub fn write_numbered_lines<W: Write>(writer: &mut W, content: &str) {
+    let total_lines = content.lines().count();
+    if total_lines == 0 {
+        return;
+    }
+    let width = (total_lines.checked_ilog10().unwrap_or(0) as usize + 1).max(MIN_LINE_NUMBER_WIDTH);
+    let mut line_buffer = String::with_capacity(128);
     for (zero_based, line) in content.lines().enumerate() {
+        line_buffer.clear();
         let line_number = zero_based + 1;
-        write_print(writer, &format!("{line_number:3}: {line}"));
+        let _ = write!(&mut line_buffer, "{line_number:>width$}: ");
+        let remaining = MAX_LOG_MESSAGE_BYTES.saturating_sub(line_buffer.len());
+        append_sanitized(&mut line_buffer, line, remaining);
+        line_buffer.push('\n');
+        let _ = writer.write_all(line_buffer.as_bytes());
     }
 }
 
@@ -114,14 +147,20 @@ pub fn write_warning<W: Write>(writer: &mut W, message: &str) {
     write_line(writer, "WARNING: ", message);
 }
 
+/// Clamps `text` to `max_bytes` on a UTF-8 boundary and appends sanitized characters into `buffer`.
+fn append_sanitized(buffer: &mut String, text: &str, max_bytes: usize) {
+    let clamped = string::clamp_utf8_prefix(text, max_bytes);
+    for character in clamped.chars() {
+        buffer.push(string::sanitize_char(character));
+    }
+}
+
 /// Formats a single sanitized output line with `prefix`, clamped to [`MAX_LOG_MESSAGE_BYTES`], and writes it to `writer`.
 fn write_line<W: Write>(writer: &mut W, prefix: &str, message: &str) {
-    let clamped = clamp_utf8_prefix(message, MAX_LOG_MESSAGE_BYTES);
+    let clamped = string::clamp_utf8_prefix(message, MAX_LOG_MESSAGE_BYTES);
     let mut line = String::with_capacity(prefix.len() + clamped.len() + 1);
     line.push_str(prefix);
-    for character in clamped.chars() {
-        line.push(sanitize_char(character));
-    }
+    append_sanitized(&mut line, clamped, MAX_LOG_MESSAGE_BYTES);
     line.push('\n');
     let _ = writer.write_all(line.as_bytes());
 }
@@ -129,13 +168,14 @@ fn write_line<W: Write>(writer: &mut W, prefix: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use std::io::{self, Write};
+    use std::panic::{self, AssertUnwindSafe};
     use std::thread;
 
     use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
     use super::{
-        MAX_LOG_MESSAGE_BYTES, debug, info, is_debug_enabled, pod_error, print, set_debug_enabled,
-        write_debug, write_error, write_info, write_numbered_lines, write_pod_error, write_print,
-        write_warning,
+        DebugGuard, MAX_LOG_MESSAGE_BYTES, debug, info, is_debug_enabled, pod_error,
+        set_debug_enabled, write_debug, write_error, write_info, write_numbered_lines,
+        write_pod_error, write_print, write_warning,
     };
 
     struct FailingWriter;
@@ -148,6 +188,20 @@ mod tests {
         fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
             Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
         }
+    }
+
+    #[test]
+    fn debug_guard_restores_state_across_panics() {
+        let _baseline = DebugGuard::new(false);
+        assert!(!is_debug_enabled());
+
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _active = DebugGuard::new(true);
+            assert!(is_debug_enabled());
+            panic!("intentional test panic");
+        }));
+        assert!(result.is_err());
+        assert!(!is_debug_enabled());
     }
 
     #[test]
@@ -183,12 +237,11 @@ mod tests {
 
     #[test]
     fn thread_local_debug_state_isolation() {
-        set_debug_enabled(false);
+        let _guard = DebugGuard::new(false);
         assert!(!is_debug_enabled());
 
         let spawned_state = thread::spawn(|| {
-            assert!(!is_debug_enabled());
-            set_debug_enabled(true);
+            let _child_guard = DebugGuard::new(true);
             is_debug_enabled()
         })
         .join()
@@ -202,22 +255,19 @@ mod tests {
 
         let child_inherits_false = thread::spawn(is_debug_enabled).join().unwrap();
         assert!(!child_inherits_false);
-
-        set_debug_enabled(false);
-        assert!(!is_debug_enabled());
     }
 
     #[test]
     fn write_and_stderr_logging_levels_and_debug_toggle() {
+        let _baseline = DebugGuard::new(false);
         let mut buffer = Vec::new();
 
-        set_debug_enabled(false);
         assert!(!is_debug_enabled());
         write_debug(&mut buffer, "Suppressed debug message.");
         debug("suppressed stderr debug output");
         assert!(buffer.is_empty());
 
-        set_debug_enabled(true);
+        let _enabled = DebugGuard::new(true);
         assert!(is_debug_enabled());
         write_debug(&mut buffer, "Debug mode is enabled.");
         write_info(&mut buffer, "Simulate mode is active.");
@@ -273,9 +323,27 @@ mod tests {
         debug("test stderr debug output");
         info("test stderr info output");
         pod_error(&plain_error);
-        print("test stdout print output");
+    }
 
-        set_debug_enabled(false);
-        assert!(!is_debug_enabled());
+    #[test]
+    fn write_numbered_lines_handles_empty_crlf_and_four_digit_line_counts() {
+        let mut empty_buf = Vec::new();
+        write_numbered_lines(&mut empty_buf, "");
+        assert!(empty_buf.is_empty());
+
+        let mut crlf_buf = Vec::new();
+        write_numbered_lines(&mut crlf_buf, "alpha\r\nbeta\r\n");
+        assert_eq!(
+            String::from_utf8(crlf_buf).unwrap(),
+            "  1: alpha\n  2: beta\n"
+        );
+
+        let thousand = "x\n".repeat(1000);
+        let mut large_buf = Vec::new();
+        write_numbered_lines(&mut large_buf, &thousand);
+        let large_out = String::from_utf8(large_buf).unwrap();
+        let mut lines = large_out.lines();
+        assert_eq!(lines.next(), Some("   1: x"));
+        assert_eq!(lines.last(), Some("1000: x"));
     }
 }

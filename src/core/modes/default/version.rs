@@ -17,10 +17,11 @@
 
 use std::io::{self, Write};
 
+use crate::core::constants::{APP_NAME, APP_VERSION};
 use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
-use crate::utilities::format::format_version_header;
+use crate::utilities::format;
 
 /// Formats and outputs the application version string for `pods version`.
 ///
@@ -40,13 +41,17 @@ pub fn handle(_context: &Context) -> Result<(), PodError> {
 
 /// Writes the formatted application version string to `writer`.
 fn write_version<W: Write>(writer: &mut W) {
-    log::write_print(writer, &format_version_header(None));
+    log::write_print(
+        writer,
+        &format::format_version_header(APP_NAME, APP_VERSION, None),
+    );
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::core::constants::{APP_NAME, APP_VERSION};
     use crate::core::context::Context;
-    use crate::utilities::format::format_version_header;
+    use crate::utilities::format;
     use super::{handle, write_version};
 
     #[test]
@@ -55,7 +60,13 @@ mod tests {
         write_version(&mut buffer);
         let output = String::from_utf8(buffer).unwrap();
 
-        assert_eq!(output, format!("{}\n", format_version_header(None)));
+        assert_eq!(
+            output,
+            format!(
+                "{}\n",
+                format::format_version_header(APP_NAME, APP_VERSION, None)
+            )
+        );
 
         let context = Context::new();
         assert!(handle(&context).is_ok());
