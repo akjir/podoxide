@@ -40,11 +40,19 @@ enum QuoteScanEvent {
 
 /// Computes the 1-based character column and span for a [`PslErrorKind`] on `sanitized_line`.
 #[must_use]
-pub(super) fn locate_psl_error_span(sanitized_line: &str, kind: PslErrorKind) -> (usize, usize) {
+pub(super) fn locate_psl_error_span(
+    sanitized_line: &str,
+    kind: PslErrorKind,
+    column: Option<usize>,
+) -> (usize, usize) {
     let code_slice = strip_inline_comment(sanitized_line);
+    if let Some(column_number) = column {
+        return locate_psl_span_at_column(sanitized_line, code_slice, kind, column_number);
+    }
+
     match kind {
         PslErrorKind::InvalidBlockHeader => {
-            span_from_byte_offset(code_slice, find_unquoted_byte(code_slice, b'{', true), 1)
+            span_from_byte_offset(code_slice, find_unquoted_byte(code_slice, b'{'), 1)
         }
         PslErrorKind::InvalidEscapeSequence => find_invalid_escape_bytes(code_slice).map_or_else(
             || highlight_trimmed_code(code_slice),
@@ -57,7 +65,7 @@ pub(super) fn locate_psl_error_span(sanitized_line: &str, kind: PslErrorKind) ->
         | PslErrorKind::UnclosedBlock
         | PslErrorKind::UnexpectedToken => highlight_trimmed_code(code_slice),
         PslErrorKind::UnexpectedClosingBrace => {
-            span_from_byte_offset(code_slice, find_unquoted_byte(code_slice, b'}', false), 1)
+            span_from_byte_offset(code_slice, find_unquoted_byte(code_slice, b'}'), 1)
         }
         PslErrorKind::UnterminatedString => find_unterminated_quote_byte(sanitized_line)
             .map_or_else(
@@ -126,6 +134,16 @@ fn escape_sequence_byte_len(text: &str, backslash_index: usize) -> usize {
     1 + char_len
 }
 
+/// Returns the character width (1 or 2) of a backslash escape sequence starting at 1-based `column`.
+#[must_use]
+fn escape_span_at_column(line: &str, column: usize) -> usize {
+    line.chars()
+        .skip(column.saturating_sub(1))
+        .take(2)
+        .count()
+        .max(1)
+}
+
 /// Finds the byte offset and length of an invalid escape sequence inside a double-quoted string on `code_slice`.
 #[must_use]
 fn find_invalid_escape_bytes(code_slice: &str) -> Option<(usize, usize)> {
@@ -170,21 +188,15 @@ fn find_matching_token_bytes(
     first_match
 }
 
-/// Finds the first or last byte offset of `target_byte` outside of single- or double-quoted strings in `code_slice`.
+/// Finds the first byte offset of `target_byte` outside of single- or double-quoted strings in `code_slice`.
 #[must_use]
-fn find_unquoted_byte(code_slice: &str, target_byte: u8, from_end: bool) -> Option<usize> {
-    let mut matched = None;
-    let early = scan_quoted_text(code_slice, |event| match event {
+fn find_unquoted_byte(code_slice: &str, target_byte: u8) -> Option<usize> {
+    scan_quoted_text(code_slice, |event| match event {
         QuoteScanEvent::UnquotedByte { byte, offset } if byte == target_byte => {
-            if !from_end {
-                return ControlFlow::Break(offset);
-            }
-            matched = Some(offset);
-            ControlFlow::Continue(())
+            ControlFlow::Break(offset)
         }
         _ => ControlFlow::Continue(()),
-    });
-    early.or(matched)
+    })
 }
 
 /// Finds the byte offset of an unclosed opening `"` or `'` quote on `line`.
@@ -227,6 +239,36 @@ fn highlight_trimmed_code(code_slice: &str) -> (usize, usize) {
     }
     let byte_start = trimmed_end.len() - trimmed.len();
     byte_range_to_char_span(code_slice, byte_start, trimmed.len())
+}
+
+/// Resolves a `(col_number, span_len)` diagnostic span from an explicit 1-based parser `column`.
+#[must_use]
+fn locate_psl_span_at_column(
+    sanitized_line: &str,
+    code_slice: &str,
+    kind: PslErrorKind,
+    column: usize,
+) -> (usize, usize) {
+    let effective_column = column.max(1);
+    match kind {
+        PslErrorKind::InvalidBlockHeader
+        | PslErrorKind::UnclosedBlock
+        | PslErrorKind::UnexpectedClosingBrace => (effective_column, 1),
+        PslErrorKind::InvalidEscapeSequence => (
+            effective_column,
+            escape_span_at_column(sanitized_line, effective_column),
+        ),
+        PslErrorKind::InvalidIdentifier
+        | PslErrorKind::LimitExceeded
+        | PslErrorKind::MissingDirectiveArgument
+        | PslErrorKind::UnexpectedRootDirective
+        | PslErrorKind::UnexpectedToken => token_span_at_column(code_slice, effective_column),
+        PslErrorKind::UnterminatedString => {
+            let total_chars = sanitized_line.chars().count();
+            let span_len = total_chars.saturating_sub(effective_column - 1).max(1);
+            (effective_column, span_len)
+        }
+    }
 }
 
 /// Advances `chars` by one PSL double-quoted character, resolving backslash escapes and sanitizing control characters.
@@ -401,6 +443,23 @@ fn token_matches_target(code_slice: &str, start: usize, end: usize, target: &str
         return quoted_value_matches(raw_value, target_value);
     }
     false
+}
+
+/// Computes `(column, span_len)` for the token starting at 1-based `column` within `code_slice`.
+#[must_use]
+fn token_span_at_column(code_slice: &str, column: usize) -> (usize, usize) {
+    let Some((byte_start, first_char)) = code_slice.char_indices().nth(column.saturating_sub(1))
+    else {
+        return (column, 1);
+    };
+    if first_char.is_whitespace() || matches!(first_char, '{' | '}') {
+        return (column, 1);
+    }
+    let (token_start, token_end) = scan_next_code_token(code_slice, byte_start);
+    let span_len = code_slice
+        .get(token_start..token_end)
+        .map_or(1, |slice| slice.chars().count().max(1));
+    (column, span_len)
 }
 
 /// Unescapes PSL backslash sequences in `inner`, sanitizes control characters, and compares the result to `target`.

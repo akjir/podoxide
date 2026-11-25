@@ -30,7 +30,7 @@ Horizontal whitespace separates tokens within a single line and is otherwise ins
 - **Allowed horizontal whitespace characters:**
   - ASCII Space (`U+0020`, `' '`)
   - ASCII Horizontal Tab (`U+0009`, `'\t'`)
-- Other Unicode whitespace characters outside of quoted strings MUST be rejected as invalid characters.
+- Other Unicode whitespace characters and Unicode control characters (`character.is_control()`) outside of quoted strings MUST be rejected with `UnexpectedToken`.
 
 ### 2.3 Newlines (Line Terminators)
 PSL is a line-oriented language. Directives and block headers are terminated by a newline.
@@ -64,10 +64,10 @@ An **Identifier** is the first token of a block header or directive.
 An **Argument** represents a parameter passed to a block header or a directive. An argument can be written in one of three forms:
 
 #### A. Bare Word (Unquoted String)
-- A contiguous sequence of one or more valid UTF-8 characters excluding horizontal whitespace (`' '`, `'\t'`), newlines (`\r`, `\n`), and reserved punctuation (`{`, `}`, `#`, `"`, `'`).
+- A contiguous sequence of one or more valid UTF-8 characters excluding horizontal whitespace (`' '`, `'\t'`), other Unicode whitespace, newlines (`\r`, `\n`), control characters (`character.is_control()`, such as `NUL` or `BEL`), and reserved punctuation (`{`, `}`, `#`, `"`, `'`). Any control character or non-ASCII whitespace encountered in a bare word MUST be rejected with `UnexpectedToken`.
 - Bare words allow domain-specific symbols without quoting, including `/`, `.`, `:`, `-`, `_`, `*`, `@`, and `=` (e.g., `example/db-server:latest`, `/var/lib/db/data`, `*db`, `@database`, `--userns=keep-id`).
 - A bare word is borrowed directly from the input buffer as a zero-copy `&str` slice.
-- **Assigned Quoted Value (`<prefix>="…"` / `<prefix>='…'`):** When a bare word contains at least one character before `=` and is immediately followed after `=` by a double-quoted (`"..."`) or single-quoted (`'...'`) string (e.g., `--health-cmd='redis-cli ping | grep -q PONG || exit 1'` or `--health-cmd="redis-cli ping | grep -q PONG || exit 1"`), the parser unquotes the value using Section 2.7.B or 2.7.C, validates the post-quote delimiter, and returns the concatenated `<prefix>=<value>` token as `Cow::Owned(String)`.
+- **Assigned Quoted Value (`<prefix>="…"` / `<prefix>='…'`):** When a bare word contains at least one character before `=` and is immediately followed after `=` by a double-quoted (`"..."`) or single-quoted (`'...'`) string (e.g., `--health-cmd='cache-cli ping | grep -q PONG || exit 1'` or `--health-cmd="cache-cli ping | grep -q PONG || exit 1"`), the parser unquotes the value using Section 2.7.B or 2.7.C, validates the post-quote delimiter, and returns the concatenated `<prefix>=<value>` token as `Cow::Owned(String)`.
 
 #### B. Double-Quoted String (`"..."`)
 - Begins and ends with `"` (`U+0022`).
@@ -121,7 +121,7 @@ A **Directive** is a single-line key-value or key-tuple instruction inside a blo
 
 - **Block-Only Scope:** A directive MUST reside inside a block (nesting depth $\ge 1$).
 - **Minimum Arity:** A directive MUST have an Identifier followed by at least one Argument separated by horizontal whitespace. A standalone identifier on a line without arguments and without `{` is a syntax error (`MissingDirectiveArgument`).
-- **Termination:** A directive is terminated by a newline (`LF` or `CRLF`) or `EOF` (if preceding a closing brace). Semicolons (`;`) are NOT used as statement terminators; a trailing `;` on an unquoted token is treated as part of that bare word.
+- **Termination:** A directive is terminated by a newline (`LF` or `CRLF`). If `EOF` is reached immediately after a directive inside an open block, the parser reports `UnclosedBlock`. Semicolons (`;`) are NOT used as statement terminators; a trailing `;` on an unquoted token is treated as part of that bare word.
 - **Ordering & Multiplicity:** The parser MUST preserve the exact top-to-bottom declaration order of blocks and directives. Repeated directives with the same identifier (e.g., multiple `publish`, `volume`, or `option` lines) are syntactically valid and appended in sequence.
 
 ## 4. Formal Grammar (EBNF)
@@ -135,16 +135,16 @@ root-block      = block ;
 (* Blocks *)
 block           = ws* identifier { ws+ argument } ws+ "{" ws* [ comment ] newline
                   { block-item }
-                  ws* "}" ( [ ws* [ comment ] newline ] | ws* [ comment ] eof )
+                  ws* "}" ws* [ comment ] ( newline | eof )
                 | ws* identifier { ws+ argument } ws+ "{" ws* "}"
-                  ( [ ws* [ comment ] newline ] | ws* [ comment ] eof ) ;
+                  ws* [ comment ] ( newline | eof ) ;
 
 block-item      = empty-line
                 | block
                 | directive ;
 
 (* Directives: Must contain at least one argument *)
-directive       = ws* identifier { ws+ argument }+ ws* [ comment ] ( newline | eof ) ;
+directive       = ws* identifier { ws+ argument }+ ws* [ comment ] newline ;
 
 (* Tokens *)
 identifier      = id-start { id-continue } ;
@@ -159,7 +159,7 @@ argument        = quoted-string
 assigned-quote  = bare-word "=" ( quoted-string | single-string ) ;
 
 bare-word       = bare-char { bare-char } ;
-bare-char       = ? any UTF-8 char except ' ', '\t', '\r', '\n', '{', '}', '#', '"', '\'' ? ;
+bare-char       = ? any UTF-8 char except whitespace, control chars, '{', '}', '#', '"', '\'' ? ;
 
 quoted-string   = '"' { quoted-char | escape-seq } '"' ;
 quoted-char     = ? any UTF-8 char except '"', '\\', '\r', '\n' ? ;
@@ -169,7 +169,7 @@ single-string   = "'" { single-char } "'" ;
 single-char     = ? any UTF-8 char except '\'', '\r', '\n' ? ;
 
 (* Whitespace & Comments *)
-empty-line      = ws* [ comment ] newline ;
+empty-line      = ws* [ comment ] ( newline | eof ) ;
 comment         = "#" { ? any UTF-8 char except '\r', '\n' ? } ;
 ws              = " " | "\t" ;
 newline         = "\n" | "\r\n" ;
@@ -189,14 +189,14 @@ To comply with `AGENTS.md` (`P-BOUND-ALLOC`, `P-NO-QUADRATIC`, `P-UTF8-LOOKAROUN
 
 ## 6. Mandatory Error Conditions
 
-The PSL parser MUST return a strongly typed error enum (including the 1-based line number) and MUST fail deterministically on any of the following inputs:
+The PSL parser MUST return a strongly typed error enum (including the 1-based line number and, when available, the 1-based column) and MUST fail deterministically on any of the following inputs:
 
 - **Root Directive (`UnexpectedRootDirective`):** A key-value directive (e.g., `editor vim`) appears at nesting depth `0` outside of any `{ ... }` block.
 - **Missing Argument or Brace (`MissingDirectiveArgument`):** A single identifier appears on a line without arguments and without an opening `{` (e.g., `general` at root level or `editor` inside a block).
 - **Quoted Identifier (`InvalidIdentifier`):** A block or directive name is quoted (e.g., `"general" {` or `"editor" vim`) or starts with an invalid character (e.g., `123block {` or `-flag val`).
 - **Missing Whitespace Before Brace (`InvalidBlockHeader`):** The opening `{` is attached directly to the identifier or argument (bare word, single-quoted, or double-quoted) without whitespace (e.g., `general{`, `pod app{`, `pod "app"{`, or `pod 'app'{`).
-- **Trailing Tokens After Brace (`UnexpectedToken`):** Non-comment tokens appear on the same line after `{` (except `}`) or after `}`.
-- **Unclosed Block (`UnclosedBlock`):** `EOF` is reached while nesting depth $> 0$.
+- **Trailing Tokens or Invalid Characters (`UnexpectedToken`):** Non-comment tokens appear on the same line after `{` (except `}`) or after `}`, or a standalone `\r`, non-ASCII whitespace, or control character (`character.is_control()`) appears outside quoted strings.
+- **Unclosed Block (`UnclosedBlock`):** `EOF` is reached while nesting depth $> 0$ (reports the innermost unclosed block's opening line and `{` column).
 - **Unmatched Closing Brace (`UnexpectedClosingBrace`):** `}` is encountered at nesting depth `0`.
 - **Unterminated Quote (`UnterminatedString`):** A `"` or `'` string reaches `\r`, `\n`, or `EOF` before its matching closing quote.
 - **Adjacent Quoted Token (`UnexpectedToken`):** A quote opens in the middle of a token (except immediately after `=` in a non-empty bare-word prefix) or closes in the middle of a token without separating whitespace (e.g., `foo"bar"`, `"foo"bar`, `="bar"`, `'--flag='val''`, or `"--flag="val""`).
@@ -223,10 +223,10 @@ recipes {
     path ./recipes
 
     groups {
-        all      missing_recipe
+        all      @stack
         stack    @database @web
-        database recipe_001_empty
-        web      frontend
+        database db-stack
+        web      app-stack
     }
 }
 ```
@@ -273,7 +273,7 @@ Whenever the user modifies `PSL_SPEC.md` or instructs you to change the PSL synt
 
 1. **Diff & Analyze Spec:** Read `PSL_SPEC.md` and identify the exact lexical, grammatical, or bound changes in Sections 2 through 6.
 2. **Update Tests First (TDD Red Phase):**
-   - Locate the PSL test suite (unit tests in `src/io/psl/` and integration tests in `tests/`).
+   - Locate the PSL test suite (unit tests in `src/io/psl/` and domain integration tests in `src/core/config.rs`, `src/core/recipe.rs`, and `src/error/`).
    - Add or update positive test cases for new valid syntax and negative test cases for new error conditions (`M-DELIM-INJECT-TESTS`, `M-EXTREME-BOUND-TESTS`, `M-FALLBACK-TESTS`).
    - Run `cargo test` to verify that the new/updated tests fail as expected against the old parser.
 3. **Update Parser Implementation (TDD Green Phase):**

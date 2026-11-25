@@ -17,8 +17,6 @@
 
 use std::borrow::Cow;
 
-use super::MAX_BLOCKS_PER_DOC;
-
 /// Named block containing arguments and nested directives or sub-blocks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PslBlock<'a> {
@@ -43,28 +41,6 @@ impl<'a> PslBlock<'a> {
             name,
             statements,
         }
-    }
-
-    /// Returns an iterator over all nested sub-blocks directly inside this block.
-    #[must_use = "iterators are lazy and do nothing unless consumed"]
-    pub fn blocks(&self) -> impl Iterator<Item = &PslBlock<'a>> {
-        self.statements
-            .iter()
-            .filter_map(|statement| match statement {
-                PslStatement::Block(block) => Some(block),
-                PslStatement::Directive(_) => None,
-            })
-    }
-
-    /// Returns an iterator over all directives directly inside this block.
-    #[must_use = "iterators are lazy and do nothing unless consumed"]
-    pub fn directives(&self) -> impl Iterator<Item = &PslDirective<'a>> {
-        self.statements
-            .iter()
-            .filter_map(|statement| match statement {
-                PslStatement::Block(_) => None,
-                PslStatement::Directive(directive) => Some(directive),
-            })
     }
 }
 
@@ -100,15 +76,6 @@ impl<'a> PslDocument<'a> {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Creates a PSL document with pre-allocated capacity for root blocks,
-    /// clamped to [`MAX_BLOCKS_PER_DOC`].
-    #[must_use]
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            blocks: Vec::with_capacity(capacity.min(MAX_BLOCKS_PER_DOC)),
-        }
-    }
 }
 
 /// Statement appearing inside a PSL block body.
@@ -122,12 +89,15 @@ pub enum PslStatement<'a> {
 mod tests {
     use std::borrow::Cow;
 
-    use crate::io::psl::MAX_BLOCKS_PER_DOC;
     use super::{PslBlock, PslDirective, PslDocument, PslStatement};
 
     #[test]
-    fn block_iterators_filter_blocks_and_directives() {
+    fn ast_constructors_preserve_fields_and_empty_defaults() {
         let directive = PslDirective::new("image", vec![Cow::Borrowed("alpine:latest")], 2);
+        assert_eq!(directive.name, "image");
+        assert_eq!(directive.arguments, vec![Cow::Borrowed("alpine:latest")]);
+        assert_eq!(directive.line, 2);
+
         let child_block = PslBlock::new("command", vec![Cow::Borrowed("migrate")], Vec::new(), 3);
         let parent_block = PslBlock::new(
             "pod",
@@ -138,28 +108,18 @@ mod tests {
             ],
             1,
         );
+        assert_eq!(parent_block.name, "pod");
+        assert_eq!(parent_block.line, 1);
+        assert_eq!(parent_block.statements.len(), 2);
+        assert_eq!(
+            parent_block.statements[0],
+            PslStatement::Directive(directive)
+        );
+        assert_eq!(parent_block.statements[1], PslStatement::Block(child_block));
 
-        let directives: Vec<_> = parent_block.directives().collect();
-        assert_eq!(directives, vec![&directive]);
-
-        let blocks: Vec<_> = parent_block.blocks().collect();
-        assert_eq!(blocks, vec![&child_block]);
-    }
-
-    #[test]
-    fn document_with_capacity_clamps_extreme_bounds() {
         let empty_document = PslDocument::new();
+        assert_eq!(empty_document, PslDocument::default());
         assert!(empty_document.blocks.is_empty());
         assert_eq!(empty_document.blocks.capacity(), 0);
-
-        let bounded_document = PslDocument::with_capacity(16);
-        assert!(bounded_document.blocks.capacity() >= 16);
-        assert!(bounded_document.blocks.capacity() <= MAX_BLOCKS_PER_DOC);
-
-        let oversized_document = PslDocument::with_capacity(MAX_BLOCKS_PER_DOC + 100);
-        assert_eq!(oversized_document.blocks.capacity(), MAX_BLOCKS_PER_DOC);
-
-        let max_usize_document = PslDocument::with_capacity(usize::MAX);
-        assert_eq!(max_usize_document.blocks.capacity(), MAX_BLOCKS_PER_DOC);
     }
 }

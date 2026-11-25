@@ -116,8 +116,11 @@ podoxide/
     │   │   └── podman.rs
     │   ├── psl/
     │   │   ├── ast.rs
+    │   │   ├── error_tests.rs
     │   │   ├── mod.rs
-    │   │   └── parser.rs
+    │   │   ├── parser.rs
+    │   │   ├── scanner.rs
+    │   │   └── tests.rs
     │   └── system/
     │       ├── env.rs
     │       ├── fs.rs
@@ -295,11 +298,14 @@ Executes external commands directly via `std::process::Command` without shell in
 
 Parses Podoxide configuration files (`pods.conf`) and declarative recipe files (`*.pod`) using a single-pass state machine.
 
-| File                   | Function |
-| :--------------------- | :------- |
-| `src/io/psl/mod.rs`    | Declares PSL resource bound constants, re-exports AST types, and exposes the `parse_psl` entry point. |
-| `src/io/psl/ast.rs`    | Defines the untyped intermediate AST structures (`PslBlock`, `PslDirective`, `PslDocument`, `PslStatement`). |
-| `src/io/psl/parser.rs` | Scans and parses `.pod` and `pods.conf` input in a single O(N) pass into an untyped `PslDocument` AST. |
+| File                       | Function |
+| :------------------------- | :------- |
+| `src/io/psl/mod.rs`        | Declares PSL resource bound constants, re-exports AST types, and exposes the `parse_psl` entry point. |
+| `src/io/psl/ast.rs`        | Defines the untyped intermediate AST structures (`PslBlock`, `PslDirective`, `PslDocument`, `PslStatement`). |
+| `src/io/psl/error_tests.rs` | Tests PSL resource bounds, syntax errors, 1-based column accuracy, and compiler-style diagnostics. |
+| `src/io/psl/parser.rs`     | Parses statement and block structure with pre-scan resource bounds into an untyped `PslDocument` AST. |
+| `src/io/psl/scanner.rs`    | Provides single-pass O(N) lexical scanning, quote and escape handling, UTF-8 cursor stepping, and 1-based column tracking. |
+| `src/io/psl/tests.rs`      | Tests canonical PSL documents, root templates, quoting modes, and assigned-quote edge cases. |
 
 ### Host System & Filesystem (`src/io/system/`)
 

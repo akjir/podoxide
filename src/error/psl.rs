@@ -24,6 +24,7 @@ use crate::error::span;
 /// Syntax or resource limit error encountered while parsing a PSL document.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PslError {
+    pub column: Option<usize>,
     pub diagnostic: Option<Box<DiagnosticError<'static>>>,
     pub kind: PslErrorKind,
     pub line: usize,
@@ -34,6 +35,18 @@ impl PslError {
     #[must_use]
     pub const fn new(kind: PslErrorKind, line: usize) -> Self {
         Self {
+            column: None,
+            diagnostic: None,
+            kind,
+            line: if line == 0 { 1 } else { line },
+        }
+    }
+
+    /// Creates a new PSL error with the given error kind, 1-based line number, and 1-based column.
+    #[must_use]
+    pub const fn with_column(kind: PslErrorKind, line: usize, column: usize) -> Self {
+        Self {
+            column: Some(if column == 0 { 1 } else { column }),
             diagnostic: None,
             kind,
             line: if line == 0 { 1 } else { line },
@@ -45,14 +58,16 @@ impl PslError {
     pub fn with_diagnostic(mut self, source: &str, file_path: &str) -> Self {
         let kind = self.kind;
         let line_number = self.line.max(1);
+        let column = self.column.map(|value| value.max(1));
         self.line = line_number;
+        self.column = column;
         let built = diagnostic::build_diagnostic_from_line(
             source,
             file_path,
             line_number,
             kind.annotation_text(),
             kind.help_text(),
-            |sanitized_line| span::locate_psl_error_span(sanitized_line, kind),
+            |sanitized_line| span::locate_psl_error_span(sanitized_line, kind, column),
         );
         self.diagnostic = Some(Box::new(built));
         self
@@ -276,6 +291,19 @@ mod tests {
         let brace_diagnostic = quoted_brace_header.diagnostic.as_ref().unwrap();
         assert_eq!(brace_diagnostic.col_number, 12);
         assert_eq!(brace_diagnostic.annotation_carets, "           ^");
+
+        // Explicit column overrides line-wide fallback for UnexpectedToken and InvalidBlockHeader
+        let trailing_token = PslError::with_column(PslErrorKind::UnexpectedToken, 1, 12)
+            .with_diagnostic("pod app {} trailing\n", "./test.pod");
+        let trailing_diagnostic = trailing_token.diagnostic.as_ref().unwrap();
+        assert_eq!(trailing_diagnostic.col_number, 12);
+        assert_eq!(trailing_diagnostic.annotation_carets, "           ^^^^^^^^");
+
+        let first_bad_brace = PslError::new(PslErrorKind::InvalidBlockHeader, 1)
+            .with_diagnostic("pod app{ other {\n", "./test.pod");
+        let first_brace_diagnostic = first_bad_brace.diagnostic.as_ref().unwrap();
+        assert_eq!(first_brace_diagnostic.col_number, 8);
+        assert_eq!(first_brace_diagnostic.annotation_carets, "       ^");
     }
 
     #[test]
@@ -284,15 +312,24 @@ mod tests {
             .with_diagnostic("general {\n}\n", "./pods.conf");
         let rendered = constructed.to_string();
         assert_eq!(constructed.line, 1);
+        assert_eq!(constructed.column, None);
         assert!(!rendered.contains("line 0:"));
         assert!(rendered.contains("line 1:"));
         assert!(rendered.contains("--> ./pods.conf:1:"));
 
+        let with_zero_column = PslError::with_column(PslErrorKind::UnexpectedToken, 0, 0)
+            .with_diagnostic("general {}\n", "./pods.conf");
+        assert_eq!(with_zero_column.line, 1);
+        assert_eq!(with_zero_column.column, Some(1));
+
         let manual = PslError {
+            column: Some(0),
             diagnostic: None,
             kind: PslErrorKind::LimitExceeded,
             line: 0,
         };
         assert!(manual.to_string().starts_with("line 1:"));
+        let manual_diagnostic = manual.with_diagnostic("general {}\n", "./pods.conf");
+        assert_eq!(manual_diagnostic.column, Some(1));
     }
 }

@@ -17,6 +17,12 @@
 
 pub mod ast;
 pub mod parser;
+mod scanner;
+
+#[cfg(test)]
+mod error_tests;
+#[cfg(test)]
+mod tests;
 
 use crate::error::PslError;
 pub use self::ast::{PslBlock, PslDirective, PslDocument, PslStatement};
