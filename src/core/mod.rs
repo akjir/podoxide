@@ -24,6 +24,7 @@ pub mod log;
 pub mod modes;
 pub mod pod;
 pub mod recipe;
+pub mod update;
 
 pub use self::config::{Config, PodsConfig, RecipesConfig};
 pub use self::constants::{APP_NAME, APP_VERSION};

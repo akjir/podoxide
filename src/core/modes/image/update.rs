@@ -15,14 +15,17 @@
 
 //! Handler for `pods image update <target...>`.
 
-use crate::core::container;
+use std::io;
+
 use crate::core::context::Context;
-use crate::core::modes::default::execute_lifecycle_action;
-use crate::core::pod;
+use crate::core::modes::default::update::execute_update_with;
+use crate::core::update::SummaryKind;
 use crate::error::PodError;
+use crate::io::exec::podman;
 
 /// Pulls the latest container images from configured registries for all containers in target
-/// recipes or explicitly targeted containers (`<recipe>/<container>`) without reloading running pods.
+/// recipes or explicitly targeted containers (`<recipe>/<container>`) without reloading running
+/// pods, printing a grouped `Update Summary:` on completion.
 ///
 /// # Workflow
 ///
@@ -32,13 +35,24 @@ use crate::error::PodError;
 /// 2. For pod/group targets: pull the latest image (`podman pull <image_ref>`) for each
 ///    container in `1..N` declaration order.
 /// 3. For container targets: pull the latest image only for the targeted containers.
+/// 4. Render the grouped `Update Summary:` section (`Updated`, `Failed`, `Up to date`, or
+///    `Simulated`) and concluding totals line.
 ///
 /// # Errors
 ///
 /// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
-/// cannot be read or validated, or `podman pull` fails.
+/// cannot be read or validated, or `podman pull` fails to spawn.
 pub fn handle(context: &Context) -> Result<(), PodError> {
-    execute_lifecycle_action(context, pod::pull, container::pull)
+    let mut stdout = io::stdout().lock();
+    let mut stderr = io::stderr().lock();
+    let mut pull_image = podman::pull_image;
+    execute_update_with(
+        context,
+        SummaryKind::ImagePull,
+        &mut pull_image,
+        &mut stdout,
+        &mut stderr,
+    )
 }
 
 #[cfg(test)]
@@ -47,7 +61,11 @@ mod tests {
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::context::{Context, ImageAction, Mode, ModeAction};
+    use crate::core::log;
+    use crate::core::modes::default::update::execute_update_with;
+    use crate::core::update::SummaryKind;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
+    use crate::io::exec::podman::PullOutcome;
     use super::handle;
 
     #[test]
@@ -75,12 +93,63 @@ mod tests {
         context.parameters = vec![String::from("@all")];
         assert!(handle(&context).is_ok());
 
+        let mut mock_pull = |image_ref: &str,
+                             prefix: &str,
+                             _simulate: bool,
+                             stdout: &mut Vec<u8>,
+                             _stderr: &mut Vec<u8>|
+         -> Result<PullOutcome, PodError> {
+            let outcome = if image_ref.contains("example-app") {
+                PullOutcome::Updated
+            } else {
+                PullOutcome::UpToDate
+            };
+            let suffix = if outcome == PullOutcome::Updated {
+                "Updated."
+            } else {
+                "Up to date."
+            };
+            log::write_print(stdout, &format!("{prefix}{suffix}"));
+            Ok(outcome)
+        };
+
+        let mut pod_out = Vec::new();
+        execute_update_with(
+            &context,
+            SummaryKind::ImagePull,
+            &mut mock_pull,
+            &mut pod_out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let pod_text = String::from_utf8(pod_out).unwrap();
+        assert!(pod_text.contains("Update Summary:\n"));
+        assert!(pod_text.contains(
+            "  Updated (1):\n    - example-stack (Example Web Stack): example-stack-app (docker.io/example/example-app:latest)\n"
+        ));
+        assert!(pod_text.contains("Checked 1 pod (2 images): 1 updated, 1 up to date, 0 failed.\n"));
+
         context.parameters = vec![
             String::from("recipe/1"),
             String::from("recipe/*db"),
             String::from("recipe/db"),
             String::from("recipe/example-stack-db"),
+            String::from("recipe/app"),
         ];
         assert!(handle(&context).is_ok());
+
+        let mut cnt_out = Vec::new();
+        execute_update_with(
+            &context,
+            SummaryKind::ImagePull,
+            &mut mock_pull,
+            &mut cnt_out,
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let cnt_text = String::from_utf8(cnt_out).unwrap();
+        assert!(cnt_text.contains("  Updated (1):\n    - example-stack-app (docker.io/example/example-app:latest)\n"));
+        assert!(cnt_text.contains("  Up to date (1):\n    - example-stack-db\n"));
+        assert!(cnt_text.contains("Checked 2 images: 1 updated, 1 up to date, 0 failed.\n"));
     }
 }

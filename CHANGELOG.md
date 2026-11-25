@@ -8,51 +8,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- Added initial Rust crate layout, core I/O and process modules, and documentation templates.
-- Added single-pass O(N) PSL scanner, parser, intermediate AST, and domain error types.
-- Added CLI argument scanner, flag validator, runtime context, and O(1) mode dispatcher with 3-letter mode aliases.
-- Added host environment verification for Linux OS, Podman 5.8.0+, and interactive root privilege confirmation.
-- Added structured diagnostic logging (`DEBUG`, `INFO`, `WARNING`, `ERROR`), standard output helper, and `--debug` state control.
-- Added PSL configuration loading, semantic validation, and host filesystem I/O helpers.
-- Added `init` mode (`pods init` and `pods init help`) for generating default `pods.conf` and `recipe.pod` template files with workspace directory logging.
-- Added default mode help output (`pods help` and parameterless `pods`).
-- Added PSL recipe loading, pod and container domain models, semantic validation, and container target resolution.
-- Added Podman pod and container lifecycle execution (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`, `pull`, and `update`), volume mount formatting, and shell-escaped `--simulate` command rendering.
-- Added configuration target expansion (`@group` and `<recipe>`) with first-appearance deduplication and wired CLI lifecycle handlers (`create`, `down`, `reload`, `remove`, `restart`, `start`, `stop`, `up`, `update`, and `image update`).
-- Added Rust-compiler-style (`rustc`) diagnostic error output (`--> file:line:col`, line gutter, caret span annotations, and `= help:` hints) for PSL syntax, configuration (`pods.conf`), and recipe (`*.pod`) errors.
-- Added `command` mode (`pods command` / `pods cmd`) with `exec`, `list`, and `help` actions for listing and executing maintenance commands defined in `.pod` recipes by name or 1-based numeric index.
-- Added `config` mode (`pods config` / `pods cfg`) with `show`, `edit`, and `help` actions for inspecting configuration settings, directory status, group hierarchy trees, and recipe validation summaries, and editing `pods.conf`.
-- Added `connect` mode (`pods connect` / `pods con`) with `shell` and `help` actions for opening interactive shell sessions (`bash` with `sh` fallback) inside running managed or unmanaged containers.
-- Added compile-time SemVer 2.0.0 Git build metadata (`v<version>+<count>.<hash>[.dev]`), the `pods version` default mode action, and unified version headers across CLI help outputs.
-- Added `image` mode (`pods image` / `pods img`) with `prune` (`--preview`, `--all`, `--force`), `update`, and `help` actions and human-readable byte size formatting and parsing helpers.
-- Added `logs` mode (`pods logs` / `pods log`) with `show`, `follow`, and `help` actions and `--since`, `--until`, `--tail`, and `--timestamps` flags for fetching or streaming pod and container logs.
-- Added `recipe` mode (`pods recipe` / `pods rec`) with `list` (`--all`), `show`, `edit`, and `help` actions for listing configured and unlinked `.pod` recipes, viewing numbered recipe source lines, and opening recipes in the configured editor.
-- Added the `pods status` default mode action (`--all`, `--full`) for querying `podman ps -a`, cross-referencing managed recipes, synthesizing `Not Found` container rows, and rendering aligned runtime status tables.
-- Added `<recipe>/<container>` container targeting (`<recipe>/<index>`, `<recipe>/*<suffix>`, `<recipe>/<short_name>`, and `<recipe>/<full_name>`) to all default mode actions (`create`, `down`, `reload`, `remove`, `restart`, `start`, `status`, `stop`, `up`, and `update`) and `pods image update`, plus the `TARGET NAME` column (`<recipe>/<index>`) after `NAME` in `pods status --full`.
-- Added `pods config inspect` (default `config` action) and `pods recipe inspect <recipe>` for validating `.pod` recipes via `Recipe::inspect`, reporting `[ERROR]` badges in `pods config inspect` and `pods recipe list`, and synthesizing `Recipe Error` rows in `pods status`.
-- Added support for bare-word `=` assigned quotes (`--flag='...'` and `--flag="..."`) in PSL directives and inner-quote validation (`is_valid_option_value`) for `option` directives in `pod` and `container` blocks.
+- Add a mode-driven CLI with 3-letter mode aliases, global configuration and dry-run options, unified help output, and build version reporting.
+- Add declarative PodScript Language (PSL) support for configuration and recipe files, including quoted flag assignments and semantic validation.
+- Add host environment checks for Linux, Podman 5.8.0 or newer, and interactive confirmation when running as root.
+- Add structured diagnostic logging with optional debug verbosity.
+- Add compiler-style diagnostic messages with source context, span highlights, and help hints for configuration and recipe errors.
+- Add pod and container lifecycle actions (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`, and `update`) with group expansion, volume mounts, and `--simulate` dry-run output.
+- Add individual container targeting across lifecycle actions, status, and image updates, including a target name column in full status output.
+- Add `status` reporting to display aligned runtime tables for managed and unmanaged containers, including missing container and recipe error states.
+- Add `init` mode to generate default configuration and recipe templates in the workspace.
+- Add `command` mode (`cmd`) to list and run recipe maintenance commands by name or index.
+- Add `config` mode (`cfg`) to inspect settings, group hierarchies, and recipe validation status, view configuration source, and edit configuration files.
+- Add `connect` mode (`con`) to open interactive shell sessions in running managed or unmanaged containers.
+- Add `image` mode (`img`) to pull recipe images and preview or prune dangling and unused images.
+- Add `logs` mode (`log`) to view or stream pod and container logs with time-range, tail, and timestamp filters.
+- Add `recipe` mode (`rec`) to list, inspect, view with line numbers, and edit recipe files.
+- Add a grouped update summary with outcome categories and totals after pod and image updates.
 
 ### Changed
 
-- Changed pod startup (`start`, `up`, `restart`, `reload`, and `update`) to start containers directly in deterministic `1..N` declaration order without executing `podman pod start`.
-- Changed `pods image prune` to check for prunable images before prompting, output `No images found to prune.` when none exist, and display the prunable image count and reclaimable disk space in the confirmation prompt.
-- Changed `pods config inspect` to report known and unreferenced recipe counts in `Directories:`, list unreferenced `.pod` recipe stems under `Unreferenced Recipes:`, and summarize missing, invalid, and unreferenced recipes in `Validation Summary:`.
-- Changed `pods config show` to print the raw `pods.conf` file with 1-based line numbers matching `pods recipe show <recipe>`.
-- Changed `src/io/exec/podman.rs` to provide the single central Podman execution and query API (`P-PODMAN-API`) and restricted direct process execution helpers in `src/io/exec/command.rs` to `src/io/`.
-- Changed `pods update` to inspect local image IDs (`podman image inspect -f '{{.Id}}'`) before and after `podman pull` and reload target pods or containers only when an image changed, outputting an up-to-date message otherwise.
-- Changed `pods update` and `pods image update` (`podman pull`) to suppress verbose Podman pull output, hide the terminal cursor while displaying an animated Braille spinner (`Trying to pull <image>...`), and restore the cursor before printing `Done.` or `Failed.`.
+- Start containers directly in recipe declaration order during pod startup actions instead of starting the pod as a whole.
+- Check for prunable images before prompting during `image prune` and display the image count and reclaimable space in the confirmation prompt.
+- Report known, missing, invalid, and unreferenced recipes in configuration inspection summaries.
+- Display raw configuration source with line numbers in `config show`, matching `recipe show`.
+- Reload pods or containers during updates only when a pulled image changes, reporting up-to-date targets without restarting them.
+- Replace verbose image pull output with a quiet animated progress spinner and clear per-image outcomes.
+- Indent container pull and reload output under pod headers and separate consecutive targets with blank lines during updates.
 
 ### Fixed
 
-- Fixed pod and container lifecycle commands aborting on the first non-zero `podman` exit status by logging a warning and continuing execution across all remaining containers and the pod.
-- Fixed `pods image prune` bypassing `pods.conf` loading so `general.simulate` (`true` or `false`) and `Simulate mode is active.` logging are respected.
-- Fixed `pods command exec` splitting `execute` directives on unquoted whitespace so single-quoted and double-quoted arguments containing spaces are preserved.
-- Fixed `pods init --simulate` writing template files to disk and added `--simulate` to `pods init help`, `USAGE.md`, and `.pods-completion.bash`.
-- Fixed cyclic `@<group>` reference diagnostics in `pods.conf` pointing to the `groups {` block header instead of the offending group directive line.
-- Fixed `option` directive token splitting in `pod` and `container` blocks breaking `--flag='value with spaces'` and `--flag 'value with spaces'` into separate `podman` arguments.
-- Fixed container creation lifecycle actions (`create`, `up`, `reload`, and `update` on `<recipe>/<container>` targets) failing when the parent pod does not exist by checking `podman pod exists` and creating the missing pod first.
+- Continue lifecycle execution across remaining containers and pods with a warning instead of aborting on the first command error.
+- Respect configured simulation mode settings during `image prune`.
+- Preserve quoted arguments containing spaces when executing recipe maintenance commands.
+- Prevent `init` dry-run simulation from writing template files to disk and document simulation support in `init` help and shell completion.
+- Point cyclic group reference diagnostics to the offending group definition line instead of the enclosing block header.
+- Preserve quoted values containing spaces in pod and container option directives.
+- Create missing parent pods automatically before creating individually targeted containers.
+- Prevent failed image pulls from reporting targets as up to date or triggering pod reloads.
 
 ### Removed
 
-- Removed the `detach` directive from `container` blocks in `.pod` recipes.
-- Removed the undocumented `-c` short flag from CLI argument parsing and `.pods-completion.bash`.
+- Remove the `detach` directive from recipe container definitions.
+- Remove the undocumented `-c` short flag from CLI parsing and shell completion.

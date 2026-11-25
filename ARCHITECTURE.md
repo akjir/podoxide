@@ -48,6 +48,7 @@ podoxide/
     │   ├── mod.rs
     │   ├── pod.rs
     │   ├── recipe.rs
+    │   ├── update.rs
     │   └── modes/
     │       ├── mod.rs
     │       ├── command/
@@ -149,8 +150,9 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and executes container lifecycle operations (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`, `pull`, `update`). |
 | `src/core/context.rs`   | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
 | `src/core/log.rs`       | Provides structured output, numbered-line printing (`write_numbered_lines`), and diagnostic logging (`debug`, `info`, `pod_error`, `print`, `write_*`) with debug state control. |
-| `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`) across containers. |
+| `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `pull`, `update`) across containers. |
 | `src/core/recipe.rs`    | Defines the `.pod` recipe model, loads and validates pod and container definitions (`Recipe::inspect`), and resolves target container specifications (`<recipe>/<spec>`). |
+| `src/core/update.rs`    | Defines update outcome models (`ContainerPullRecord`, `ContainerUpdateResult`, `PodUpdateResult`, `SummaryKind`, `SummaryScope`, `UpdateAction`, `UpdateSummary`), the indented reload writer (`IndentedWriter`), pull prefix formatting, and grouped `Update Summary:` rendering. |
 
 ## CLI Modes (`src/core/modes/`)
 
@@ -210,7 +212,7 @@ Executes primary pod lifecycle operations and displays container runtime status 
 | `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes or targeted containers, synthesizes `Not Found` and `Recipe Error` rows, and formats the runtime status table (including `TARGET NAME` in `--full` mode). |
 | `src/core/modes/default/stop.rs`    | Stops running target containers in reverse bottom-to-top order and stops the parent pod (or targeted containers) without removing them. |
 | `src/core/modes/default/up.rs`      | Loads and validates target recipes, then creates and starts pods and containers (or targeted containers) in top-to-bottom order (`create` + `start`). |
-| `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes (or targeted containers) and reloads them when an image was updated (`image update` + conditional `reload`). |
+| `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes (or targeted containers), reloads them when an image was updated and no pull failed, prints the grouped `Update Summary:`, and exposes shared update orchestration for `image update`. |
 | `src/core/modes/default/version.rs` | Formats and outputs the application version string for `pods version`. |
 
 ### Image Mode (`src/core/modes/image/`)
@@ -222,7 +224,7 @@ Pulls recipe container images and prunes dangling or unused Podman container ima
 | `src/core/modes/image/mod.rs`    | Parses `image` mode parameters, expands `@group` targets for `update`, and dispatches to `update`, `prune`, or `help`. |
 | `src/core/modes/image/help.rs`   | Formats and outputs the CLI help text for `pods image`. |
 | `src/core/modes/image/prune.rs`  | Previews reclaimable image space (`--preview`) or prunes dangling and unused images (`--all`, `--force`). |
-| `src/core/modes/image/update.rs` | Pulls the latest container images from configured registries for all containers in target recipes without reloading pods. |
+| `src/core/modes/image/update.rs` | Pulls the latest container images from configured registries for target recipes or targeted containers without reloading pods and prints the grouped `Update Summary:`. |
 
 ### Init Mode (`src/core/modes/init/`)
 
@@ -273,8 +275,8 @@ Executes external commands directly via `std::process::Command` without shell in
 | File                     | Function |
 | :----------------------- | :------- |
 | `src/io/exec/mod.rs`     | Declares and re-exports the central Podman API and editor execution helper. |
-| `src/io/exec/command.rs` | Provides internal (`pub(super)`) OS process runners (`exec_capture`, `exec_with`) and `exec_editor_with` for interactive file editing. |
-| `src/io/exec/podman.rs`  | Provides the central Podman CLI API for all pod, container, log, and image commands (`CreateContainer`, `CreatePod`, `ExecContainer`, `PodLogs`, lifecycle actions, version verification `5.8.0+`, and runtime inspection queries). |
+| `src/io/exec/command.rs` | Provides internal (`pub(super)`) OS process runners (`exec_capture`, `exec_spinner_with`, `exec_with`) and `exec_editor_with` for interactive file editing. |
+| `src/io/exec/podman.rs`  | Provides the central Podman CLI API for all pod, container, log, and image commands (`CreateContainer`, `CreatePod`, `ExecContainer`, `PodLogs`, `PullOutcome`, lifecycle actions, version verification `5.8.0+`, and runtime inspection queries). |
 
 ### PodScript Language (`src/io/psl/`)
 

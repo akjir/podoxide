@@ -407,7 +407,11 @@ mod tests {
             (&["reload", "recipe"], "podman pod rm example-stack\n"),
             (
                 &["update", "recipe"],
-                "podman pull docker.io/example/db-server:latest\n",
+                "Update Summary:\n  Simulated (1):\n    - example-stack (Example Web Stack)\n\nSimulated 1 pod (2 containers).\n",
+            ),
+            (
+                &["update", "recipe/db"],
+                "Update Summary:\n  Simulated (1):\n    - example-stack-db (docker.io/example/db-server:latest)\n\nSimulated 1 container.\n",
             ),
             (&["cmd", "list", "recipe"], "Commands for recipe 'recipe':\n"),
             (
@@ -431,7 +435,11 @@ mod tests {
             ),
             (
                 &["img", "update", "recipe"],
-                "podman pull docker.io/example/example-app:latest\n",
+                "Update Summary:\n  Simulated (1):\n    - example-stack (Example Web Stack)\n\nSimulated 1 pod (2 images).\n",
+            ),
+            (
+                &["img", "update", "recipe/db"],
+                "Update Summary:\n  Simulated (1):\n    - example-stack-db (docker.io/example/db-server:latest)\n\nSimulated 1 image.\n",
             ),
             (
                 &["log", "show", "recipe"],

@@ -25,10 +25,6 @@ use crate::core::log;
 use crate::error::PodError;
 use crate::utilities::{format, path, string};
 
-/// Completion suffix printed when a spinner command exits with status `0`.
-const SPINNER_DONE_SUMMARY: &str = "Done.";
-/// Completion suffix printed when a spinner command exits with a non-zero status.
-const SPINNER_FAILED_SUMMARY: &str = "Failed.";
 /// Braille spinner frames displayed while waiting for a background process to complete.
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// ANSI DECTCEM escape sequence that hides the terminal cursor while the spinner is active.
@@ -36,7 +32,9 @@ const SPINNER_HIDE_CURSOR: &str = "\x1b[?25l";
 /// Polling interval in milliseconds between spinner frame updates.
 const SPINNER_INTERVAL_MS: u64 = 80;
 /// Maximum byte length of the sanitized spinner prefix so prefix plus summary fits within [`log::MAX_LOG_MESSAGE_BYTES`].
-const SPINNER_MAX_PREFIX_BYTES: usize = log::MAX_LOG_MESSAGE_BYTES - SPINNER_FAILED_SUMMARY.len();
+const SPINNER_MAX_PREFIX_BYTES: usize = log::MAX_LOG_MESSAGE_BYTES - SPINNER_MAX_SUMMARY_BYTES;
+/// Maximum byte length of the sanitized spinner completion summary suffix.
+const SPINNER_MAX_SUMMARY_BYTES: usize = 16;
 /// ANSI DECTCEM escape sequence that restores terminal cursor visibility when the spinner finishes.
 const SPINNER_SHOW_CURSOR: &str = "\x1b[?25h";
 
@@ -46,7 +44,6 @@ pub(super) enum ExecMode {
     #[default]
     Captured,
     Interactive,
-    Spinner,
 }
 
 /// Execution options controlling output mode, output prefixing, and command simulation.
@@ -55,6 +52,13 @@ pub(super) struct ExecOptions<'a> {
     pub(super) mode: ExecMode,
     pub(super) prefix: &'a str,
     pub(super) simulate: bool,
+}
+
+/// Exit outcome of a background command executed via [`exec_spinner_with`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SpinnerStatus {
+    Failed,
+    Succeeded,
 }
 
 /// RAII guard that hides the terminal cursor on creation and restores it on drop.
@@ -131,6 +135,55 @@ pub(in crate::io) fn exec_capture(program: &str, arguments: &[&str]) -> Option<S
     String::from_utf8(output.stdout).ok()
 }
 
+/// Executes `program` with `arguments` while animating a Braille spinner prefixed by `prefix` on `stdout`, resolving the final completion label via `resolve_summary`.
+///
+/// # Errors
+///
+/// Returns [`PodError`] if spawning or polling the child process fails.
+pub(super) fn exec_spinner_with<S, W, E, F>(
+    program: &str,
+    arguments: &[S],
+    prefix: &str,
+    simulate: bool,
+    resolve_summary: F,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<(), PodError>
+where
+    S: AsRef<str>,
+    W: Write,
+    E: Write,
+    F: FnOnce(SpinnerStatus) -> &'static str,
+{
+    if simulate {
+        write_simulated_command(program, arguments, prefix, stdout);
+        return Ok(());
+    }
+    if log::is_debug_enabled() {
+        let formatted = format::format_command(program, arguments);
+        log::write_debug(stderr, &format!("Execute: {formatted}"));
+    }
+    let mut child = build_command(program, arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let sanitized_prefix = string::sanitize_text(prefix, SPINNER_MAX_PREFIX_BYTES);
+    let (exit_status, summary) = {
+        let cursor = SpinnerCursor::new(stdout);
+        let status = wait_with_spinner(&mut child, &sanitized_prefix, cursor.stdout)?;
+        let outcome = if status.success() {
+            SpinnerStatus::Succeeded
+        } else {
+            SpinnerStatus::Failed
+        };
+        (status, resolve_summary(outcome))
+    };
+    write_spinner_result(stdout, &sanitized_prefix, summary);
+    warn_on_exit_failure(exit_status, stderr);
+    Ok(())
+}
+
 /// Executes `program` with `arguments` using `options`, routing formatted output to `stdout` and `stderr`.
 ///
 /// # Errors
@@ -163,7 +216,6 @@ where
     match options.mode {
         ExecMode::Captured => run_captured(program, arguments, options.prefix, stdout, stderr),
         ExecMode::Interactive => run_interactive(program, arguments, stderr),
-        ExecMode::Spinner => run_spinner(program, arguments, options.prefix, stdout, stderr),
     }
 }
 
@@ -252,43 +304,17 @@ where
     Ok(())
 }
 
-/// Executes `program` with `arguments` while animating a Braille spinner prefixed by `prefix` on `stdout`.
-fn run_spinner<S, W, E>(
-    program: &str,
-    arguments: &[S],
-    prefix: &str,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> Result<(), PodError>
-where
-    S: AsRef<str>,
-    W: Write,
-    E: Write,
-{
-    let mut child = build_command(program, arguments)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let sanitized_prefix = string::sanitize_text(prefix, SPINNER_MAX_PREFIX_BYTES);
-    let status = wait_with_spinner(&mut child, &sanitized_prefix, stdout)?;
-    write_spinner_result(stdout, &sanitized_prefix, status);
-    warn_on_exit_failure(status, stderr);
-    Ok(())
-}
-
-/// Polls `child` until completion while hiding the terminal cursor and rendering spinner frames after `sanitized_prefix` on `stdout`.
+/// Polls `child` until completion while rendering spinner frames after `sanitized_prefix` on `stdout`.
 fn wait_with_spinner<W: Write>(
     child: &mut Child,
     sanitized_prefix: &str,
     stdout: &mut W,
 ) -> Result<ExitStatus, PodError> {
-    let cursor = SpinnerCursor::new(stdout);
     let interval = Duration::from_millis(SPINNER_INTERVAL_MS);
     let mut frames = SPINNER_FRAMES.iter().copied().cycle();
     loop {
         let frame = frames.next().unwrap_or("⠋");
-        write_spinner_frame(cursor.stdout, sanitized_prefix, frame);
+        write_spinner_frame(stdout, sanitized_prefix, frame);
         let poll_result = child.try_wait();
         if let Some(status) = poll_child_status(child, poll_result, interval)? {
             return Ok(status);
@@ -308,20 +334,38 @@ fn warn_on_exit_failure<E: Write>(status: ExitStatus, stderr: &mut E) {
     }
 }
 
+/// Writes `prefix` (when non-empty) and the shell-escaped simulated command line, preserving leading space indentation from `prefix`.
+fn write_simulated_command<S: AsRef<str>, W: Write>(
+    program: &str,
+    arguments: &[S],
+    prefix: &str,
+    stdout: &mut W,
+) {
+    let formatted = format::format_command(program, arguments);
+    if !prefix.is_empty() {
+        log::write_print(stdout, prefix);
+    }
+    let indent_len = prefix
+        .len()
+        .saturating_sub(prefix.trim_start_matches(' ').len());
+    let indent = &prefix[..indent_len];
+    if indent.is_empty() {
+        log::write_print(stdout, &formatted);
+    } else {
+        log::write_print(stdout, &format!("{indent}{formatted}"));
+    }
+}
+
 /// Writes a single carriage-returned spinner frame (`\r<prefix><frame>`) to `stdout` and flushes the stream.
 fn write_spinner_frame<W: Write>(stdout: &mut W, sanitized_prefix: &str, frame: &str) {
     let _ = write!(stdout, "\r{sanitized_prefix}{frame}");
     let _ = stdout.flush();
 }
 
-/// Writes the final spinner completion line (`Done.` or `Failed.`) to `stdout` and flushes the stream.
-fn write_spinner_result<W: Write>(stdout: &mut W, sanitized_prefix: &str, status: ExitStatus) {
-    let summary = if status.success() {
-        SPINNER_DONE_SUMMARY
-    } else {
-        SPINNER_FAILED_SUMMARY
-    };
-    let _ = writeln!(stdout, "\r{sanitized_prefix}{summary}");
+/// Writes the final sanitized spinner completion line (`\r<prefix><summary>\n`) to `stdout` and flushes the stream.
+fn write_spinner_result<W: Write>(stdout: &mut W, sanitized_prefix: &str, summary: &str) {
+    let sanitized_summary = string::sanitize_text(summary, SPINNER_MAX_SUMMARY_BYTES);
+    let _ = writeln!(stdout, "\r{sanitized_prefix}{sanitized_summary}");
     let _ = stdout.flush();
 }
 
@@ -336,9 +380,10 @@ mod tests {
     use crate::error::PodError;
     use crate::utilities::format;
     use super::{
-        ExecMode, ExecOptions, SPINNER_FAILED_SUMMARY, SPINNER_FRAMES, SPINNER_HIDE_CURSOR,
-        SPINNER_MAX_PREFIX_BYTES, SPINNER_SHOW_CURSOR, build_command, exec_capture,
-        exec_editor_with, exec_with, poll_child_status, warn_on_exit_failure,
+        ExecMode, ExecOptions, SPINNER_FRAMES, SPINNER_HIDE_CURSOR, SPINNER_MAX_PREFIX_BYTES,
+        SPINNER_MAX_SUMMARY_BYTES, SPINNER_SHOW_CURSOR, SpinnerStatus, build_command,
+        exec_capture, exec_editor_with, exec_spinner_with, exec_with, poll_child_status,
+        warn_on_exit_failure,
     };
 
     #[test]
@@ -607,15 +652,34 @@ mod tests {
             "WARNING: Command exited with code '1'!\n"
         );
 
+        let mut spinner_sim_stdout = Vec::new();
+        let mut spinner_sim_stderr = Vec::new();
+        exec_spinner_with(
+            "podman",
+            &["pull", "docker.io/library/nginx:stable-alpine"],
+            "  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine): ",
+            true,
+            |_| panic!("resolve_summary must not run in simulate mode"),
+            &mut spinner_sim_stdout,
+            &mut spinner_sim_stderr,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(spinner_sim_stdout).unwrap(),
+            "  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine): \n  podman pull docker.io/library/nginx:stable-alpine\n"
+        );
+        assert!(spinner_sim_stderr.is_empty());
+
         let mut spinner_stdout = Vec::new();
         let mut spinner_stderr = Vec::new();
-        exec_with(
+        exec_spinner_with(
             "sleep",
             &["0.1"],
-            &ExecOptions {
-                mode: ExecMode::Spinner,
-                prefix: "Trying to pull docker.io/library/nginx:stable-alpine... ",
-                simulate: false,
+            "  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine)... ",
+            false,
+            |status| {
+                assert_eq!(status, SpinnerStatus::Succeeded);
+                "Updated."
             },
             &mut spinner_stdout,
             &mut spinner_stderr,
@@ -624,29 +688,31 @@ mod tests {
         let spinner_text = String::from_utf8(spinner_stdout).unwrap();
         assert!(spinner_text.starts_with(
             &format!(
-                "{SPINNER_HIDE_CURSOR}\rTrying to pull docker.io/library/nginx:stable-alpine... {}",
+                "{SPINNER_HIDE_CURSOR}\r  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine)... {}",
                 SPINNER_FRAMES[0]
             )
         ));
-        assert!(spinner_text.contains(
-            &format!("\rTrying to pull docker.io/library/nginx:stable-alpine... {}", SPINNER_FRAMES[1])
-        ));
+        assert!(spinner_text.contains(&format!(
+            "\r  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine)... {}",
+            SPINNER_FRAMES[1]
+        )));
         assert!(spinner_text.ends_with(
             &format!(
-                "{SPINNER_SHOW_CURSOR}\rTrying to pull docker.io/library/nginx:stable-alpine... Done.\n"
+                "{SPINNER_SHOW_CURSOR}\r  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine)... Updated.\n"
             )
         ));
         assert!(spinner_stderr.is_empty());
 
         let mut spinner_fail_stdout = Vec::new();
         let mut spinner_fail_stderr = Vec::new();
-        exec_with(
+        exec_spinner_with(
             "false",
             &Vec::<String>::new(),
-            &ExecOptions {
-                mode: ExecMode::Spinner,
-                prefix: "Trying to pull\nbad\u{202E}... ",
-                simulate: false,
+            "Trying to pull\nbad\u{202E}... ",
+            false,
+            |status| {
+                assert_eq!(status, SpinnerStatus::Failed);
+                "Failed."
             },
             &mut spinner_fail_stdout,
             &mut spinner_fail_stderr,
@@ -669,14 +735,12 @@ mod tests {
         let mut oversized_spinner_stdout = Vec::new();
         let mut oversized_spinner_stderr = Vec::new();
         let oversized_prefix = "p".repeat(log::MAX_LOG_MESSAGE_BYTES + 1);
-        exec_with(
+        exec_spinner_with(
             "false",
             &Vec::<String>::new(),
-            &ExecOptions {
-                mode: ExecMode::Spinner,
-                prefix: &oversized_prefix,
-                simulate: false,
-            },
+            &oversized_prefix,
+            false,
+            |_| "0123456789abcdef_overflow",
             &mut oversized_spinner_stdout,
             &mut oversized_spinner_stderr,
         )
@@ -689,7 +753,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             final_spinner_line.len(),
-            SPINNER_MAX_PREFIX_BYTES + SPINNER_FAILED_SUMMARY.len()
+            SPINNER_MAX_PREFIX_BYTES + SPINNER_MAX_SUMMARY_BYTES
         );
         assert_eq!(final_spinner_line.len(), log::MAX_LOG_MESSAGE_BYTES);
 
@@ -700,7 +764,7 @@ mod tests {
             "WARNING: Command terminated by signal!\n"
         );
 
-        for mode in [ExecMode::Captured, ExecMode::Interactive, ExecMode::Spinner] {
+        for mode in [ExecMode::Captured, ExecMode::Interactive] {
             let io_error = exec_with(
                 "/nonexistent/podoxide_missing_bin",
                 &Vec::<String>::new(),
@@ -718,6 +782,17 @@ mod tests {
                 "expected PodError::Io for mode {mode:?}"
             );
         }
+        let spinner_io_error = exec_spinner_with(
+            "/nonexistent/podoxide_missing_bin",
+            &Vec::<String>::new(),
+            "",
+            false,
+            |_| "Failed.",
+            &mut Vec::new(),
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(spinner_io_error, PodError::Io(_)));
 
         let mut child = build_command("sleep", &["10"])
             .stdin(Stdio::null())

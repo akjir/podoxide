@@ -21,8 +21,9 @@ use std::path::Path;
 
 use crate::core::log;
 use crate::core::pod::Pod;
+use crate::core::update::{self, ContainerPullRecord, ContainerUpdateResult, UpdateAction};
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
-use crate::io::exec::podman::{self, CreateContainer};
+use crate::io::exec::podman::{self, CreateContainer, PullOutcome};
 use crate::utilities::collection::{
     MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value,
 };
@@ -234,18 +235,22 @@ pub fn is_valid_volume_mount(volume: &VolumeMount) -> bool {
         && (volume.options.is_empty() || is_valid_volume_options(&volume.options))
 }
 
-/// Pulls the latest image for `container` in Podman (`podman pull`).
+/// Pulls the latest image for `container` in Podman (`podman pull`) and returns its [`ContainerPullRecord`].
 ///
 /// # Errors
 ///
 /// Returns [`PodError`] if Podman execution fails.
-pub fn pull(container: &Container, pod: &Pod, simulate: bool) -> Result<(), PodError> {
+pub fn pull(
+    container: &Container,
+    pod: &Pod,
+    simulate: bool,
+) -> Result<ContainerPullRecord, PodError> {
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
-    pull_with(container, pod, simulate, &mut stdout, &mut stderr)
+    pull_with(container, pod, "", simulate, &mut stdout, &mut stderr)
 }
 
-/// Pulls the latest image for `container` in Podman (`podman pull`), writing output to `stdout` and `stderr`.
+/// Pulls the latest image for `container` in Podman (`podman pull`) with line `indent`, writing output to `stdout` and `stderr`.
 ///
 /// # Errors
 ///
@@ -253,16 +258,20 @@ pub fn pull(container: &Container, pod: &Pod, simulate: bool) -> Result<(), PodE
 pub fn pull_with<W: Write, E: Write>(
     container: &Container,
     pod: &Pod,
+    indent: &str,
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
-    validate_container_name(container)?;
-    container.validate()?;
-    validate_optional_token(&pod.registry, RecipeErrorKind::InvalidRegistry, pod.line)?;
-    log::write_print(stdout, &format!("Update container '{}' ...", container.name));
-    let image_reference = resolve_image_reference(container, pod);
-    podman::pull_image(&image_reference, "", simulate, stdout, stderr)
+) -> Result<ContainerPullRecord, PodError> {
+    pull_with_runner(
+        container,
+        pod,
+        indent,
+        simulate,
+        &mut podman::pull_image,
+        stdout,
+        stderr,
+    )
 }
 
 /// Stops, removes, recreates, and starts `container` inside `pod` (`down` + `up`).
@@ -496,7 +505,11 @@ pub fn up_with<W: Write, E: Write>(
 /// # Errors
 ///
 /// Returns [`PodError`] if pulling the image or reloading the container fails.
-pub fn update(container: &Container, pod: &Pod, simulate: bool) -> Result<(), PodError> {
+pub fn update(
+    container: &Container,
+    pod: &Pod,
+    simulate: bool,
+) -> Result<ContainerUpdateResult, PodError> {
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     update_with(container, pod, simulate, &mut stdout, &mut stderr)
@@ -513,43 +526,106 @@ pub fn update_with<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
-    if simulate {
-        container.validate_create(pod)?;
-        pull_with(container, pod, true, stdout, stderr)?;
-        return reload_with(container, pod, true, stdout, stderr);
-    }
-    let mut query_id = podman::query_image_id;
-    update_with_query(container, pod, false, &mut query_id, stdout, stderr)
+) -> Result<ContainerUpdateResult, PodError> {
+    update_with_runner(
+        container,
+        pod,
+        simulate,
+        &mut podman::pull_image,
+        stdout,
+        stderr,
+    )
 }
 
-/// Pulls the latest image for `container` and returns `true` when the local image ID changed or was newly downloaded.
+/// Pulls the latest image for `container` using `pull_image`, applying `indent` to progress output, and returns its [`ContainerPullRecord`].
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if container/pod validation or Podman execution fails.
-pub(crate) fn pull_and_check_with<W, E, Q>(
+/// Returns [`PodError`] if container/pod validation or image pull execution fails.
+pub(crate) fn pull_with_runner<W, E, P>(
     container: &Container,
     pod: &Pod,
+    indent: &str,
     simulate: bool,
-    query_id: &mut Q,
+    pull_image: &mut P,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<bool, PodError>
+) -> Result<ContainerPullRecord, PodError>
 where
     W: Write,
     E: Write,
-    Q: FnMut(&str) -> Option<String>,
+    P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
 {
     validate_container_name(container)?;
     container.validate()?;
     validate_optional_token(&pod.registry, RecipeErrorKind::InvalidRegistry, pod.line)?;
     let image_reference = resolve_image_reference(container, pod);
-    let before_id = query_id(&image_reference);
-    log::write_print(stdout, &format!("Update container '{}' ...", container.name));
-    podman::pull_image(&image_reference, "", simulate, stdout, stderr)?;
-    let after_id = query_id(&image_reference);
-    Ok(after_id.is_some() && before_id != after_id)
+    let prefix = update::format_pull_prefix(&container.name, &image_reference, indent, simulate);
+    let outcome = pull_image(&image_reference, &prefix, simulate, stdout, stderr)?;
+    Ok(ContainerPullRecord {
+        container_name: container.name.clone(),
+        image: image_reference.into_owned(),
+        outcome,
+    })
+}
+
+/// Pulls the latest image for `container` using `pull_image` and reloads the container only when the image was updated or simulated.
+///
+/// # Errors
+///
+/// Returns [`PodError`] if container/pod validation, pulling, or reloading fails.
+pub(crate) fn update_with_runner<W, E, P>(
+    container: &Container,
+    pod: &Pod,
+    simulate: bool,
+    pull_image: &mut P,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<ContainerUpdateResult, PodError>
+where
+    W: Write,
+    E: Write,
+    P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
+{
+    container.validate_create(pod)?;
+    let record = pull_with_runner(container, pod, "", simulate, pull_image, stdout, stderr)?;
+    let action = apply_update_action(container, pod, record.outcome, simulate, stdout, stderr)?;
+    Ok(ContainerUpdateResult { action, record })
+}
+
+/// Applies the post-pull lifecycle action (`reload`, up-to-date message, or failure notice) for `container`.
+fn apply_update_action<W: Write, E: Write>(
+    container: &Container,
+    pod: &Pod,
+    outcome: PullOutcome,
+    simulate: bool,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<UpdateAction, PodError> {
+    match outcome {
+        PullOutcome::Failed => {
+            log::write_print(
+                stdout,
+                &format!("Container '{}' update failed.", container.name),
+            );
+            Ok(UpdateAction::Failed)
+        }
+        PullOutcome::Simulated => {
+            reload_with(container, pod, true, stdout, stderr)?;
+            Ok(UpdateAction::Simulated)
+        }
+        PullOutcome::UpToDate => {
+            log::write_print(
+                stdout,
+                &format!("Container '{}' is up to date.", container.name),
+            );
+            Ok(UpdateAction::UpToDate)
+        }
+        PullOutcome::Updated => {
+            reload_with(container, pod, simulate, stdout, stderr)?;
+            Ok(UpdateAction::Reloaded)
+        }
+    }
 }
 
 /// Returns `name` when non-empty, or `"container"` as a fallback error token.
@@ -674,31 +750,6 @@ fn resolve_host_volume_path<'a>(
     Ok(Cow::Owned(join_pod_volume_path(pod_dir, clean_host)))
 }
 
-/// Pulls the latest image for `container` using `query_id` to detect image updates and reloads the container only when updated.
-fn update_with_query<W, E, Q>(
-    container: &Container,
-    pod: &Pod,
-    simulate: bool,
-    query_id: &mut Q,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> Result<(), PodError>
-where
-    W: Write,
-    E: Write,
-    Q: FnMut(&str) -> Option<String>,
-{
-    container.validate_create(pod)?;
-    if !pull_and_check_with(container, pod, simulate, query_id, stdout, stderr)? {
-        log::write_print(
-            stdout,
-            &format!("Container '{}' is up to date.", container.name),
-        );
-        return Ok(());
-    }
-    reload_with(container, pod, simulate, stdout, stderr)
-}
-
 /// Validates that `image` is non-empty and a valid single token without leading hyphens.
 fn validate_container_image(image: &str, line: usize, label: &str) -> Result<(), RecipeError> {
     if image.is_empty() {
@@ -794,16 +845,18 @@ mod tests {
     use std::io::{self, Write};
     use std::path::{Path, PathBuf};
 
-    use crate::core::log::MAX_LOG_MESSAGE_BYTES;
+    use crate::core::log::{self, MAX_LOG_MESSAGE_BYTES};
     use crate::core::pod::Pod;
+    use crate::core::update::UpdateAction;
     use crate::error::{PodError, RecipeErrorKind};
+    use crate::io::exec::podman::PullOutcome;
     use crate::utilities::collection::append_option_tokens;
     use super::{
         Container, VolumeMount, container_label, create, create_with, create_with_pod_check, down,
-        down_with, format_volume_mount, is_valid_volume_mount, pull, pull_and_check_with,
-        pull_with, reload, reload_with, remove, remove_with, resolve_container_name_value,
+        down_with, format_volume_mount, is_valid_volume_mount, pull, pull_with, pull_with_runner,
+        reload, reload_with, remove, remove_with, resolve_container_name_value,
         resolve_host_volume_path, resolve_image_reference, restart, restart_with, start,
-        start_with, stop, stop_with, up, up_with, update, update_with, update_with_query,
+        start_with, stop, stop_with, up, up_with, update, update_with, update_with_runner,
     };
 
     struct BrokenPipeWriter;
@@ -1024,7 +1077,11 @@ mod tests {
         start_with(&container, true, &mut stdout, &mut stderr).unwrap();
         stop_with(&container, true, &mut stdout, &mut stderr).unwrap();
         remove_with(&container, true, &mut stdout, &mut stderr).unwrap();
-        pull_with(&container, &pod, true, &mut stdout, &mut stderr).unwrap();
+        let pull_record =
+            pull_with(&container, &pod, "", true, &mut stdout, &mut stderr).unwrap();
+        assert_eq!(pull_record.outcome, PullOutcome::Simulated);
+        assert_eq!(pull_record.container_name, "commandos-1");
+        assert_eq!(pull_record.image, "bel.io/squad:1998");
 
         let output = String::from_utf8(stdout).unwrap();
         let lines: Vec<&str> = output.lines().collect();
@@ -1041,7 +1098,7 @@ mod tests {
                 "podman stop commandos-1",
                 "Remove container 'commandos-1': ",
                 "podman rm commandos-1",
-                "Update container 'commandos-1' ...",
+                "Trying to pull bel.io/squad:1998 (commandos-1): ",
                 "podman pull bel.io/squad:1998",
             ]
         );
@@ -1123,7 +1180,7 @@ mod tests {
 
         let mut broken_stdout = BrokenPipeWriter;
         let mut stderr = Vec::new();
-        assert!(pull_with(&container, &pod, true, &mut broken_stdout, &mut stderr).is_ok());
+        assert!(pull_with(&container, &pod, "", true, &mut broken_stdout, &mut stderr).is_ok());
 
         let mut injected = Container::new();
         injected.name = format!(
@@ -1134,7 +1191,7 @@ mod tests {
 
         let mut captured_stdout = Vec::new();
         let update_error =
-            pull_with(&injected, &pod, true, &mut captured_stdout, &mut stderr).unwrap_err();
+            pull_with(&injected, &pod, "", true, &mut captured_stdout, &mut stderr).unwrap_err();
         assert!(captured_stdout.is_empty());
         let formatted_error = update_error.to_string();
         assert!(!formatted_error.contains('\x1b'));
@@ -1142,62 +1199,110 @@ mod tests {
         assert_eq!(formatted_error.lines().count(), 1);
 
         // Conditional reload on container update:
-        // 1. Image ID unchanged (Some("id1") -> Some("id1")) skips reload and prints up-to-date message.
+        // 1. UpToDate skips reload and prints up-to-date message.
         let mut unchanged_out = Vec::new();
-        let mut same_id = |_: &str| Some(String::from("sha256:id1"));
-        update_with_query(
+        let mut up_to_date_pull = |_: &str,
+                                   prefix: &str,
+                                   _: bool,
+                                   out: &mut Vec<u8>,
+                                   _: &mut Vec<u8>|
+         -> Result<PullOutcome, PodError> {
+            log::write_print(out, &format!("{prefix}Up to date."));
+            Ok(PullOutcome::UpToDate)
+        };
+        let up_to_date_result = update_with_runner(
             &container,
             &pod,
             true,
-            &mut same_id,
+            &mut up_to_date_pull,
             &mut unchanged_out,
             &mut stderr,
         )
         .unwrap();
+        assert_eq!(up_to_date_result.action, UpdateAction::UpToDate);
         assert_eq!(
-            String::from_utf8(unchanged_out).unwrap().lines().collect::<Vec<_>>(),
+            String::from_utf8(unchanged_out)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
             vec![
-                "Update container 'app_1' ...",
-                "podman pull alpine:latest",
+                "Trying to pull alpine:latest (app_1): Up to date.",
                 "Container 'app_1' is up to date.",
             ]
         );
 
-        // 2. Image missing before and after pull (None -> None) returns false and skips reload.
-        let mut missing_out = Vec::new();
-        let mut no_id = |_: &str| None;
-        assert!(
-            !pull_and_check_with(
-                &container,
-                &pod,
-                true,
-                &mut no_id,
-                &mut missing_out,
-                &mut stderr,
-            )
-            .unwrap()
-        );
-
-        // 3. Image ID changes (Some("id1") -> Some("id2")) triggers reload.
-        let mut changed_out = Vec::new();
-        let mut call_count = 0usize;
-        let mut changing_id = |_: &str| {
-            call_count += 1;
-            if call_count == 1 {
-                Some(String::from("sha256:id1"))
-            } else {
-                Some(String::from("sha256:id2"))
-            }
+        // 2. Failed pull skips reload and prints failure notice (not up-to-date).
+        let mut failed_out = Vec::new();
+        let mut failed_pull = |_: &str,
+                               prefix: &str,
+                               _: bool,
+                               out: &mut Vec<u8>,
+                               _: &mut Vec<u8>|
+         -> Result<PullOutcome, PodError> {
+            log::write_print(out, &format!("{prefix}Failed."));
+            Ok(PullOutcome::Failed)
         };
-        update_with_query(
+        let failed_result = update_with_runner(
             &container,
             &pod,
             true,
-            &mut changing_id,
+            &mut failed_pull,
+            &mut failed_out,
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(failed_result.action, UpdateAction::Failed);
+        assert_eq!(
+            String::from_utf8(failed_out)
+                .unwrap()
+                .lines()
+                .collect::<Vec<_>>(),
+            vec![
+                "Trying to pull alpine:latest (app_1): Failed.",
+                "Container 'app_1' update failed.",
+            ]
+        );
+
+        // 3. pull_with_runner propagates PullOutcome directly.
+        let mut direct_out = Vec::new();
+        let pull_only = pull_with_runner(
+            &container,
+            &pod,
+            "  ",
+            true,
+            &mut failed_pull,
+            &mut direct_out,
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(pull_only.outcome, PullOutcome::Failed);
+        assert!(
+            String::from_utf8(direct_out)
+                .unwrap()
+                .starts_with("  Trying to pull alpine:latest (app_1): ")
+        );
+
+        // 4. Updated image triggers reload.
+        let mut changed_out = Vec::new();
+        let mut updated_pull = |_: &str,
+                                prefix: &str,
+                                _: bool,
+                                out: &mut Vec<u8>,
+                                _: &mut Vec<u8>|
+         -> Result<PullOutcome, PodError> {
+            log::write_print(out, &format!("{prefix}Updated."));
+            Ok(PullOutcome::Updated)
+        };
+        let changed_result = update_with_runner(
+            &container,
+            &pod,
+            true,
+            &mut updated_pull,
             &mut changed_out,
             &mut stderr,
         )
         .unwrap();
+        assert_eq!(changed_result.action, UpdateAction::Reloaded);
         let changed_lines: Vec<&str> = std::str::from_utf8(&changed_out).unwrap().lines().collect();
         assert!(changed_lines.contains(&"Stop container 'app_1': "));
         assert!(changed_lines.contains(&"Create container 'app_1': "));
@@ -1276,7 +1381,7 @@ mod tests {
                 Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::InvalidContainerName
             ));
             assert!(matches!(
-                pull_with(&target, &pod, true, &mut Vec::new(), &mut Vec::new()),
+                pull_with(&target, &pod, "", true, &mut Vec::new(), &mut Vec::new()),
                 Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::InvalidContainerName
             ));
             assert!(matches!(
@@ -1335,7 +1440,14 @@ mod tests {
             Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::InvalidRegistry
         ));
         assert!(matches!(
-            pull_with(&base, &bad_pod_registry, true, &mut Vec::new(), &mut Vec::new()),
+            pull_with(
+                &base,
+                &bad_pod_registry,
+                "",
+                true,
+                &mut Vec::new(),
+                &mut Vec::new()
+            ),
             Err(PodError::Recipe(error)) if error.kind == RecipeErrorKind::InvalidRegistry
         ));
         assert!(matches!(

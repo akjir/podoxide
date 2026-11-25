@@ -294,7 +294,7 @@ pods [OPTIONS] <action> [TARGETS...]
 | `status [target...]`  | Display a formatted status table of managed containers and report invalid recipes with `Recipe Error`.       |
 | `stop <target...>`    | Stop a running pod and its containers in reverse bottom-to-top order without removing them.                  |
 | `up <target...>`      | Create and start the pod and its containers in deterministic top-to-bottom order (`create` + `start`).       |
-| `update <target...>`  | Pull the latest container images and reload the pod (or targeted container) if an image was updated.          |
+| `update <target...>`  | Pull the latest container images, reload the pod (or targeted container) if an image was updated and no pull failed, and print a grouped `Update Summary:`. |
 | `version`             | Display the application version with Git build metadata and exit.                                            |
 
 ### Options
@@ -617,7 +617,7 @@ pods image [OPTIONS] [ACTION] [TARGETS...]
 | :------------------- | :-------------------------------------------------------------------------------------------------------------------------------- |
 | `help`               | Display command-line help for `image` mode (default when called without arguments).                                               |
 | `prune`              | Remove unused dangling container images (or all unused images when `--all` is passed).                                            |
-| `update <target...>` | Download and pull the latest container images defined in the target recipes (`<recipe>`, `@<group>`, or `<recipe>/<container>`) without executing `reload`. |
+| `update <target...>` | Download and pull the latest container images defined in the target recipes (`<recipe>`, `@<group>`, or `<recipe>/<container>`) without executing `reload` and print a grouped `Update Summary:`. |
 
 ### Options
 

@@ -99,7 +99,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 }
 
 /// Parses and validates all `<recipe>/<container>` parameters and checks configuration membership.
-fn collect_container_specs(context: &Context) -> Result<Vec<(&str, &str)>, PodError> {
+pub(crate) fn collect_container_specs(context: &Context) -> Result<Vec<(&str, &str)>, PodError> {
     let capacity = bounded_capacity(context.parameters.len(), MAX_COLLECTION_PREALLOC);
     let mut specs = Vec::with_capacity(capacity);
     for parameter in &context.parameters {
@@ -113,6 +113,38 @@ fn collect_container_specs(context: &Context) -> Result<Vec<(&str, &str)>, PodEr
         specs.push((recipe_name, container_spec));
     }
     Ok(specs)
+}
+
+/// Validates that `context.parameters` contain no container target slashes and expands `@<group>` and `<recipe>` targets.
+pub(crate) fn expand_pod_targets(context: &Context) -> Result<Vec<String>, PodError> {
+    for parameter in &context.parameters {
+        if parameter.contains('/') {
+            return Err(PodError::from(CliError::with_argument(
+                CliErrorKind::InvalidTarget,
+                parameter,
+            )));
+        }
+    }
+    context.config.expand_targets(&context.parameters)
+}
+
+/// Loads target recipes, resolves each container specification, and deduplicates `(recipe, container_name)` pairs in first-appearance order.
+pub(crate) fn resolve_container_targets<'a>(
+    config: &Config,
+    specs: &[(&'a str, &'a str)],
+) -> Result<ResolvedTargets<'a>, PodError> {
+    let capacity = bounded_capacity(specs.len(), MAX_COLLECTION_PREALLOC);
+    let mut recipes = BTreeMap::new();
+    let mut resolved = Vec::with_capacity(capacity);
+    let mut seen = BTreeSet::new();
+    for &(recipe_name, container_spec) in specs {
+        let recipe = load_or_get_recipe(&mut recipes, config, recipe_name)?;
+        let container = recipe.resolve_container(container_spec)?;
+        if seen.insert((recipe_name, container.line)) {
+            resolved.push((recipe_name, container.name.clone()));
+        }
+    }
+    Ok((recipes, resolved))
 }
 
 /// Resolves, deduplicates, and executes `container_action` across explicit `<recipe>/<container>` targets.
@@ -140,15 +172,7 @@ fn execute_pod_targets(
     context: &Context,
     pod_action: fn(&Recipe, bool) -> Result<(), PodError>,
 ) -> Result<(), PodError> {
-    for parameter in &context.parameters {
-        if parameter.contains('/') {
-            return Err(PodError::from(CliError::with_argument(
-                CliErrorKind::InvalidTarget,
-                parameter,
-            )));
-        }
-    }
-    let targets = context.config.expand_targets(&context.parameters)?;
+    let targets = expand_pod_targets(context)?;
     for target in &targets {
         let recipe = Recipe::inspect(&context.config, target)?;
         pod_action(&recipe, context.config.simulate)?;
@@ -186,25 +210,6 @@ fn parse_container_target(target: &str) -> Result<(&str, &str), PodError> {
         )));
     }
     Ok((recipe_name, container_spec))
-}
-
-/// Loads target recipes, resolves each container specification, and deduplicates `(recipe, container_name)` pairs in first-appearance order.
-fn resolve_container_targets<'a>(
-    config: &Config,
-    specs: &[(&'a str, &'a str)],
-) -> Result<ResolvedTargets<'a>, PodError> {
-    let capacity = bounded_capacity(specs.len(), MAX_COLLECTION_PREALLOC);
-    let mut recipes = BTreeMap::new();
-    let mut resolved = Vec::with_capacity(capacity);
-    let mut seen = BTreeSet::new();
-    for &(recipe_name, container_spec) in specs {
-        let recipe = load_or_get_recipe(&mut recipes, config, recipe_name)?;
-        let container = recipe.resolve_container(container_spec)?;
-        if seen.insert((recipe_name, container.line)) {
-            resolved.push((recipe_name, container.name.clone()));
-        }
-    }
-    Ok((recipes, resolved))
 }
 
 #[cfg(test)]

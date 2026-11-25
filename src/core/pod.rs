@@ -23,9 +23,14 @@ use std::path::PathBuf;
 use crate::core::container;
 use crate::core::log;
 use crate::core::recipe::Recipe;
+use crate::core::update::{
+    ContainerPullRecord, IndentedWriter, POD_INDENT, PodUpdateResult, UpdateAction,
+};
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
-use crate::io::exec::podman::{self, CreatePod};
-use crate::utilities::collection::is_valid_option_value;
+use crate::io::exec::podman::{self, CreatePod, PullOutcome};
+use crate::utilities::collection::{
+    MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value,
+};
 use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_token};
 
 /// Pod configuration and custom command definitions from the `pod` block of a `.pod` recipe.
@@ -248,7 +253,7 @@ pub fn down_with<W: Write, E: Write>(
 /// # Errors
 ///
 /// Returns [`PodError`] if pulling any container image fails.
-pub fn pull(recipe: &Recipe, simulate: bool) -> Result<(), PodError> {
+pub fn pull(recipe: &Recipe, simulate: bool) -> Result<PodUpdateResult, PodError> {
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     pull_with(recipe, simulate, &mut stdout, &mut stderr)
@@ -264,16 +269,8 @@ pub fn pull_with<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
-    validate_recipe_pull(recipe)?;
-    log::write_print(
-        stdout,
-        &format!("Update pod '{}' ('{}') ...", recipe.pod.name, recipe.pod.id),
-    );
-    for item in &recipe.containers {
-        container::pull_with(item, &recipe.pod, simulate, stdout, stderr)?;
-    }
-    Ok(())
+) -> Result<PodUpdateResult, PodError> {
+    pull_with_runner(recipe, simulate, &mut podman::pull_image, stdout, stderr)
 }
 
 /// Stops and removes `recipe.containers` and `recipe.pod`, then recreates `recipe.pod` and creates and starts `recipe.containers` (`down` + `up`).
@@ -447,7 +444,7 @@ pub fn up_with<W: Write, E: Write>(
 /// # Errors
 ///
 /// Returns [`PodError`] if pulling images or reloading the pod fails.
-pub fn update(recipe: &Recipe, simulate: bool) -> Result<(), PodError> {
+pub fn update(recipe: &Recipe, simulate: bool) -> Result<PodUpdateResult, PodError> {
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     update_with(recipe, simulate, &mut stdout, &mut stderr)
@@ -463,69 +460,167 @@ pub fn update_with<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
-    if simulate {
-        validate_recipe_pull(recipe)?;
-        validate_recipe_create(recipe)?;
-        pull_with(recipe, true, stdout, stderr)?;
-        return reload_with(recipe, true, stdout, stderr);
-    }
-    let mut query_id = podman::query_image_id;
-    update_with_query(recipe, false, &mut query_id, stdout, stderr)
+) -> Result<PodUpdateResult, PodError> {
+    update_with_runner(recipe, simulate, &mut podman::pull_image, stdout, stderr)
 }
 
-/// Pulls the latest images for all `recipe.containers` in `1..N` order and returns `true` when at least one image changed.
-fn pull_containers_and_check<W, E, Q>(
+/// Pulls the latest images for all `recipe.containers` in `1..N` order using `pull_image` without reloading the pod.
+///
+/// # Errors
+///
+/// Returns [`PodError`] if validation or image pull execution fails.
+pub(crate) fn pull_with_runner<W, E, P>(
     recipe: &Recipe,
     simulate: bool,
-    query_id: &mut Q,
+    pull_image: &mut P,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<bool, PodError>
+) -> Result<PodUpdateResult, PodError>
 where
     W: Write,
     E: Write,
-    Q: FnMut(&str) -> Option<String>,
+    P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
+{
+    validate_recipe_pull(recipe)?;
+    let containers = pull_containers_with(recipe, simulate, pull_image, stdout, stderr)?;
+    let action = derive_pull_action(&containers);
+    Ok(PodUpdateResult {
+        action,
+        containers,
+        pod_id: recipe.pod.id.clone(),
+        pod_name: recipe.pod.name.clone(),
+    })
+}
+
+/// Pulls the latest images for `recipe.containers` using `pull_image` and reloads the pod only when at least one image changed and no pull failed.
+///
+/// # Errors
+///
+/// Returns [`PodError`] if validation, pulling, or reloading fails.
+pub(crate) fn update_with_runner<W, E, P>(
+    recipe: &Recipe,
+    simulate: bool,
+    pull_image: &mut P,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<PodUpdateResult, PodError>
+where
+    W: Write,
+    E: Write,
+    P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
+{
+    validate_recipe_pull(recipe)?;
+    validate_recipe_create(recipe)?;
+    let containers = pull_containers_with(recipe, simulate, pull_image, stdout, stderr)?;
+    let action = apply_pod_update_action(recipe, &containers, simulate, stdout, stderr)?;
+    Ok(PodUpdateResult {
+        action,
+        containers,
+        pod_id: recipe.pod.id.clone(),
+        pod_name: recipe.pod.name.clone(),
+    })
+}
+
+/// Executes the post-pull pod lifecycle action (indented reload, up-to-date message, or failure notice).
+fn apply_pod_update_action<W: Write, E: Write>(
+    recipe: &Recipe,
+    containers: &[ContainerPullRecord],
+    simulate: bool,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<UpdateAction, PodError> {
+    match derive_pull_action(containers) {
+        UpdateAction::Failed => {
+            log::write_print(
+                stdout,
+                &format!(
+                    "{POD_INDENT}Pod '{}' ('{}') update failed.",
+                    recipe.pod.name, recipe.pod.id
+                ),
+            );
+            Ok(UpdateAction::Failed)
+        }
+        UpdateAction::Reloaded => {
+            let mut indented = IndentedWriter::new(stdout, POD_INDENT);
+            reload_with(recipe, simulate, &mut indented, stderr)?;
+            Ok(UpdateAction::Reloaded)
+        }
+        UpdateAction::Simulated => {
+            let mut indented = IndentedWriter::new(stdout, POD_INDENT);
+            reload_with(recipe, true, &mut indented, stderr)?;
+            Ok(UpdateAction::Simulated)
+        }
+        UpdateAction::UpToDate => {
+            log::write_print(
+                stdout,
+                &format!(
+                    "{POD_INDENT}Pod '{}' ('{}') is up to date.",
+                    recipe.pod.name, recipe.pod.id
+                ),
+            );
+            Ok(UpdateAction::UpToDate)
+        }
+    }
+}
+
+/// Derives the pod-level [`UpdateAction`] from per-container pull outcomes.
+#[must_use]
+fn derive_pull_action(containers: &[ContainerPullRecord]) -> UpdateAction {
+    let mut any_simulated = false;
+    let mut any_failed = false;
+    let mut any_updated = false;
+    for record in containers {
+        match record.outcome {
+            PullOutcome::Failed => any_failed = true,
+            PullOutcome::Simulated => any_simulated = true,
+            PullOutcome::UpToDate => {}
+            PullOutcome::Updated => any_updated = true,
+        }
+    }
+    if any_simulated {
+        return UpdateAction::Simulated;
+    }
+    if any_failed {
+        return UpdateAction::Failed;
+    }
+    if any_updated {
+        return UpdateAction::Reloaded;
+    }
+    UpdateAction::UpToDate
+}
+
+/// Prints the pod header and pulls all `recipe.containers` in `1..N` order using `pull_image`.
+fn pull_containers_with<W, E, P>(
+    recipe: &Recipe,
+    simulate: bool,
+    pull_image: &mut P,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<Vec<ContainerPullRecord>, PodError>
+where
+    W: Write,
+    E: Write,
+    P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
 {
     log::write_print(
         stdout,
         &format!("Update pod '{}' ('{}') ...", recipe.pod.name, recipe.pod.id),
     );
-    let mut any_updated = false;
+    let capacity = bounded_capacity(recipe.containers.len(), MAX_COLLECTION_PREALLOC);
+    let mut records = Vec::with_capacity(capacity);
     for item in &recipe.containers {
-        if container::pull_and_check_with(item, &recipe.pod, simulate, query_id, stdout, stderr)? {
-            any_updated = true;
-        }
-    }
-    Ok(any_updated)
-}
-
-/// Pulls the latest images for `recipe.containers` using `query_id` and reloads the pod only when at least one image was updated.
-fn update_with_query<W, E, Q>(
-    recipe: &Recipe,
-    simulate: bool,
-    query_id: &mut Q,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> Result<(), PodError>
-where
-    W: Write,
-    E: Write,
-    Q: FnMut(&str) -> Option<String>,
-{
-    validate_recipe_pull(recipe)?;
-    validate_recipe_create(recipe)?;
-    if !pull_containers_and_check(recipe, simulate, query_id, stdout, stderr)? {
-        log::write_print(
+        let record = container::pull_with_runner(
+            item,
+            &recipe.pod,
+            POD_INDENT,
+            simulate,
+            pull_image,
             stdout,
-            &format!(
-                "Pod '{}' ('{}') is up to date.",
-                recipe.pod.name, recipe.pod.id
-            ),
-        );
-        return Ok(());
+            stderr,
+        )?;
+        records.push(record);
     }
-    reload_with(recipe, simulate, stdout, stderr)
+    Ok(records)
 }
 
 /// Validates that `pod.id` is a well-formed non-empty Podman pod name.
@@ -594,13 +689,15 @@ mod tests {
     use std::str::FromStr;
 
     use crate::core::container::VolumeMount;
-    use crate::core::log::MAX_LOG_MESSAGE_BYTES;
+    use crate::core::log::{self, MAX_LOG_MESSAGE_BYTES};
     use crate::core::recipe::Recipe;
+    use crate::core::update::UpdateAction;
     use crate::error::{PodError, RecipeErrorKind};
+    use crate::io::exec::podman::PullOutcome;
     use super::{
         Pod, PodCommand, create, create_with, down, down_with, pull, pull_with, reload,
         reload_with, remove, remove_with, restart, restart_with, start, start_with, stop,
-        stop_with, up, up_with, update, update_with, update_with_query,
+        stop_with, up, up_with, update, update_with, update_with_runner,
     };
 
     struct BrokenPipeWriter;
@@ -827,18 +924,20 @@ mod tests {
         );
 
         let mut pull_out = Vec::new();
-        pull_with(&recipe, true, &mut pull_out, &mut stderr).unwrap();
+        let pull_result = pull_with(&recipe, true, &mut pull_out, &mut stderr).unwrap();
+        assert_eq!(pull_result.action, UpdateAction::Simulated);
+        assert_eq!(pull_result.containers.len(), 3);
         let pull_lines: Vec<&str> = std::str::from_utf8(&pull_out).unwrap().lines().collect();
         assert_eq!(
             pull_lines,
             vec![
                 "Update pod 'Order Stack' ('order') ...",
-                "Update container 'order-1' ...",
-                "podman pull obey.io/order:1",
-                "Update container 'order-two' ...",
-                "podman pull obey.io/order:2",
-                "Update container 'three' ...",
-                "podman pull custom.io/order:3",
+                "  Trying to pull obey.io/order:1 (order-1): ",
+                "  podman pull obey.io/order:1",
+                "  Trying to pull obey.io/order:2 (order-two): ",
+                "  podman pull obey.io/order:2",
+                "  Trying to pull custom.io/order:3 (three): ",
+                "  podman pull custom.io/order:3",
             ]
         );
 
@@ -852,25 +951,35 @@ mod tests {
         assert_eq!(reload_lines[28], "Start container 'three': ");
 
         let mut update_out = Vec::new();
-        update_with(&recipe, true, &mut update_out, &mut stderr).unwrap();
+        let update_result = update_with(&recipe, true, &mut update_out, &mut stderr).unwrap();
+        assert_eq!(update_result.action, UpdateAction::Simulated);
         let update_lines: Vec<&str> = std::str::from_utf8(&update_out).unwrap().lines().collect();
         assert_eq!(update_lines.len(), 37);
         assert_eq!(update_lines[0], "Update pod 'Order Stack' ('order') ...");
-        assert_eq!(update_lines[7], "Stop container 'three': ");
-        assert_eq!(update_lines[35], "Start container 'three': ");
+        assert_eq!(update_lines[7], "  Stop container 'three': ");
+        assert_eq!(update_lines[35], "  Start container 'three': ");
         assert!(stderr.is_empty());
 
-        // When no container images change, update_with_query pulls all containers, skips reload, and prints up-to-date message.
+        // When no container images change, update_with_runner pulls all containers, skips reload, and prints indented up-to-date message.
         let mut up_to_date_out = Vec::new();
-        let mut unchanged_query = |_: &str| Some(String::from("sha256:same"));
-        update_with_query(
+        let mut unchanged_pull = |_: &str,
+                                  prefix: &str,
+                                  _: bool,
+                                  out: &mut Vec<u8>,
+                                  _: &mut Vec<u8>|
+         -> Result<PullOutcome, PodError> {
+            log::write_print(out, &format!("{prefix}Up to date."));
+            Ok(PullOutcome::UpToDate)
+        };
+        let up_to_date_result = update_with_runner(
             &recipe,
             true,
-            &mut unchanged_query,
+            &mut unchanged_pull,
             &mut up_to_date_out,
             &mut stderr,
         )
         .unwrap();
+        assert_eq!(up_to_date_result.action, UpdateAction::UpToDate);
         let up_to_date_lines: Vec<&str> = std::str::from_utf8(&up_to_date_out)
             .unwrap()
             .lines()
@@ -879,47 +988,92 @@ mod tests {
             up_to_date_lines,
             vec![
                 "Update pod 'Order Stack' ('order') ...",
-                "Update container 'order-1' ...",
-                "podman pull obey.io/order:1",
-                "Update container 'order-two' ...",
-                "podman pull obey.io/order:2",
-                "Update container 'three' ...",
-                "podman pull custom.io/order:3",
-                "Pod 'Order Stack' ('order') is up to date.",
+                "  Trying to pull obey.io/order:1 (order-1): Up to date.",
+                "  Trying to pull obey.io/order:2 (order-two): Up to date.",
+                "  Trying to pull custom.io/order:3 (three): Up to date.",
+                "  Pod 'Order Stack' ('order') is up to date.",
             ]
         );
 
-        // When at least one container image changes, update_with_query pulls all containers in 1..N order and reloads the pod.
+        // When at least one container image changes and none fail, update_with_runner pulls all containers in 1..N order and reloads the pod.
         let mut partial_update_out = Vec::new();
-        let mut second_calls = 0usize;
-        let mut partial_query = |image_ref: &str| {
+        let mut partial_pull = |image_ref: &str,
+                                prefix: &str,
+                                _: bool,
+                                out: &mut Vec<u8>,
+                                _: &mut Vec<u8>|
+         -> Result<PullOutcome, PodError> {
             if image_ref == "obey.io/order:2" {
-                second_calls += 1;
-                if second_calls == 1 {
-                    Some(String::from("sha256:old"))
-                } else {
-                    Some(String::from("sha256:new"))
-                }
+                log::write_print(out, &format!("{prefix}Updated."));
+                Ok(PullOutcome::Updated)
             } else {
-                Some(String::from("sha256:same"))
+                log::write_print(out, &format!("{prefix}Up to date."));
+                Ok(PullOutcome::UpToDate)
             }
         };
-        update_with_query(
+        let partial_result = update_with_runner(
             &recipe,
             true,
-            &mut partial_query,
+            &mut partial_pull,
             &mut partial_update_out,
             &mut stderr,
         )
         .unwrap();
+        assert_eq!(partial_result.action, UpdateAction::Reloaded);
         let partial_lines: Vec<&str> = std::str::from_utf8(&partial_update_out)
             .unwrap()
             .lines()
             .collect();
-        assert_eq!(partial_lines.len(), 37);
-        assert_eq!(partial_lines[5], "Update container 'three' ...");
-        assert_eq!(partial_lines[7], "Stop container 'three': ");
-        assert_eq!(partial_lines[35], "Start container 'three': ");
+        assert_eq!(partial_lines.len(), 34);
+        assert_eq!(
+            partial_lines[3],
+            "  Trying to pull custom.io/order:3 (three): Up to date."
+        );
+        assert_eq!(partial_lines[4], "  Stop container 'three': ");
+        assert_eq!(partial_lines[32], "  Start container 'three': ");
+
+        // When any container pull fails (even if another updated), update_with_runner skips reload and prints failure notice.
+        let mut failed_update_out = Vec::new();
+        let mut mixed_failure_pull = |image_ref: &str,
+                                      prefix: &str,
+                                      _: bool,
+                                      out: &mut Vec<u8>,
+                                      _: &mut Vec<u8>|
+         -> Result<PullOutcome, PodError> {
+            if image_ref == "obey.io/order:2" {
+                log::write_print(out, &format!("{prefix}Updated."));
+                Ok(PullOutcome::Updated)
+            } else if image_ref == "custom.io/order:3" {
+                log::write_print(out, &format!("{prefix}Failed."));
+                Ok(PullOutcome::Failed)
+            } else {
+                log::write_print(out, &format!("{prefix}Up to date."));
+                Ok(PullOutcome::UpToDate)
+            }
+        };
+        let failed_result = update_with_runner(
+            &recipe,
+            true,
+            &mut mixed_failure_pull,
+            &mut failed_update_out,
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(failed_result.action, UpdateAction::Failed);
+        let failed_lines: Vec<&str> = std::str::from_utf8(&failed_update_out)
+            .unwrap()
+            .lines()
+            .collect();
+        assert_eq!(
+            failed_lines,
+            vec![
+                "Update pod 'Order Stack' ('order') ...",
+                "  Trying to pull obey.io/order:1 (order-1): Up to date.",
+                "  Trying to pull obey.io/order:2 (order-two): Updated.",
+                "  Trying to pull custom.io/order:3 (three): Failed.",
+                "  Pod 'Order Stack' ('order') update failed.",
+            ]
+        );
 
         // Exercise standard stream wrappers in simulate mode.
         assert!(create(&recipe, true).is_ok());

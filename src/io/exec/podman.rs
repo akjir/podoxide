@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 use std::io::{self, Write};
 
 use crate::error::PodError;
-use crate::io::exec::command::{self, ExecMode, ExecOptions};
+use crate::io::exec::command::{self, ExecMode, ExecOptions, SpinnerStatus};
 use crate::utilities::collection::{self, MAX_COLLECTION_PREALLOC};
 use crate::utilities::{path, string};
 
@@ -100,6 +100,28 @@ pub struct PodLogs<'a> {
     pub tail: Option<&'a str>,
     pub timestamps: bool,
     pub until: Option<&'a str>,
+}
+
+/// Outcome of executing `podman pull` for a container image.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PullOutcome {
+    Failed,
+    Simulated,
+    UpToDate,
+    Updated,
+}
+
+impl PullOutcome {
+    /// Returns the terminal spinner completion suffix for live `podman pull` output.
+    #[must_use]
+    const fn spinner_suffix(self) -> &'static str {
+        match self {
+            Self::Failed => "Failed.",
+            Self::Simulated => "Simulated.",
+            Self::UpToDate => "Up to date.",
+            Self::Updated => "Updated.",
+        }
+    }
 }
 
 /// Executes `podman --version` and evaluates whether the installed Podman CLI is version 5.8.0 or higher.
@@ -276,7 +298,7 @@ pub fn prune_images<W: Write, E: Write>(
     )
 }
 
-/// Executes `podman pull <image_reference>` while displaying a Braille spinner until completion.
+/// Executes `podman pull <image_reference>` while displaying a Braille spinner and inspecting the local image ID before and after to report [`PullOutcome`].
 ///
 /// # Errors
 ///
@@ -287,26 +309,48 @@ pub fn pull_image<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<PullOutcome, PodError> {
     ensure_valid(
         string::is_valid_token(image_reference),
         "invalid image reference",
     )?;
-    let pull_prefix = if simulate {
-        Cow::Borrowed(prefix)
+    if simulate {
+        command::exec_spinner_with(
+            PODMAN_BIN,
+            &["pull", image_reference],
+            prefix,
+            true,
+            |_| PullOutcome::Simulated.spinner_suffix(),
+            stdout,
+            stderr,
+        )?;
+        return Ok(PullOutcome::Simulated);
+    }
+    let pull_prefix = if prefix.is_empty() {
+        Cow::Owned(format!("Trying to pull {image_reference}... "))
     } else {
-        Cow::Owned(format!("{prefix}Trying to pull {image_reference}... "))
+        Cow::Borrowed(prefix)
     };
-    run_podman_with(
+    let before_id = query_image_id(image_reference);
+    let mut outcome = PullOutcome::Failed;
+    command::exec_spinner_with(
+        PODMAN_BIN,
         &["pull", image_reference],
-        &ExecOptions {
-            mode: ExecMode::Spinner,
-            prefix: &pull_prefix,
-            simulate,
+        &pull_prefix,
+        false,
+        |status| {
+            let after_id = if status == SpinnerStatus::Succeeded {
+                query_image_id(image_reference)
+            } else {
+                None
+            };
+            outcome = resolve_pull_outcome(status, before_id.as_deref(), after_id.as_deref());
+            outcome.spinner_suffix()
         },
         stdout,
         stderr,
-    )
+    )?;
+    Ok(outcome)
 }
 
 /// Executes `podman image inspect -f '{{.Id}}' <image_reference>` and returns the local image ID.
@@ -796,6 +840,22 @@ where
     }
 }
 
+/// Evaluates [`PullOutcome`] from the spinner exit status and before/after local image IDs.
+#[must_use]
+fn resolve_pull_outcome(
+    status: SpinnerStatus,
+    before_id: Option<&str>,
+    after_id: Option<&str>,
+) -> PullOutcome {
+    if status == SpinnerStatus::Failed {
+        return PullOutcome::Failed;
+    }
+    match after_id {
+        Some(after) if before_id != Some(after) => PullOutcome::Updated,
+        _ => PullOutcome::UpToDate,
+    }
+}
+
 /// Executes `podman` with `arguments` and returns captured standard output when exit status is `0`.
 #[must_use]
 fn run_podman_capture(arguments: &[&str]) -> Option<String> {
@@ -939,16 +999,17 @@ mod tests {
     use std::io;
 
     use crate::error::PodError;
+    use crate::io::exec::command::SpinnerStatus;
     use super::{
         CreateContainer, CreatePod, ExecContainer, IMAGES_FORMAT, MAX_INSPECT_RECORDS,
-        MAX_VERSION_LINES, MAX_VERSION_OUTPUT_BYTES, PodLogs, SHELL_FALLBACK_COMMAND,
+        MAX_VERSION_LINES, MAX_VERSION_OUTPUT_BYTES, PodLogs, PullOutcome, SHELL_FALLBACK_COMMAND,
         build_container_create_args, build_container_exec_args, build_pod_create_args,
         build_pod_logs_args, check_version, collect_in_use_images_with, container_running,
         create_container, create_pod, exec_container, is_running_container_status,
         is_supported_version, logs_pod, parse_image_id_output, parse_in_use_output, pod_exists,
         prune_images, pull_image, query_image_id, query_image_id_with, query_images,
         query_images_with, query_in_use_images, query_ps_status, remove_container, remove_pod,
-        start_container, stop_container, stop_pod,
+        resolve_pull_outcome, start_container, stop_container, stop_pod,
     };
 
     #[test]
@@ -1453,7 +1514,34 @@ mod tests {
             &mut stderr,
         )
         .unwrap();
-        pull_image("docker.io/alpine:latest", "", true, &mut stdout, &mut stderr).unwrap();
+        assert_eq!(
+            pull_image("docker.io/alpine:latest", "", true, &mut stdout, &mut stderr).unwrap(),
+            PullOutcome::Simulated
+        );
+        assert_eq!(PullOutcome::Failed.spinner_suffix(), "Failed.");
+        assert_eq!(PullOutcome::Simulated.spinner_suffix(), "Simulated.");
+        assert_eq!(PullOutcome::UpToDate.spinner_suffix(), "Up to date.");
+        assert_eq!(PullOutcome::Updated.spinner_suffix(), "Updated.");
+        assert_eq!(
+            resolve_pull_outcome(SpinnerStatus::Failed, Some("old"), Some("new")),
+            PullOutcome::Failed
+        );
+        assert_eq!(
+            resolve_pull_outcome(SpinnerStatus::Succeeded, None, Some("new")),
+            PullOutcome::Updated
+        );
+        assert_eq!(
+            resolve_pull_outcome(SpinnerStatus::Succeeded, Some("old"), Some("new")),
+            PullOutcome::Updated
+        );
+        assert_eq!(
+            resolve_pull_outcome(SpinnerStatus::Succeeded, Some("same"), Some("same")),
+            PullOutcome::UpToDate
+        );
+        assert_eq!(
+            resolve_pull_outcome(SpinnerStatus::Succeeded, None, None),
+            PullOutcome::UpToDate
+        );
         prune_images(false, "Prune: ", true, &mut stdout, &mut stderr).unwrap();
         prune_images(true, "Prune all: ", true, &mut stdout, &mut stderr).unwrap();
         exec_container(
@@ -1488,14 +1576,17 @@ mod tests {
 
         let mut pull_live_stdout = Vec::new();
         let mut pull_live_stderr = Vec::new();
-        pull_image(
-            "127.0.0.1:1/podoxide_missing:999999",
-            "",
-            false,
-            &mut pull_live_stdout,
-            &mut pull_live_stderr,
-        )
-        .unwrap();
+        assert_eq!(
+            pull_image(
+                "127.0.0.1:1/podoxide_missing:999999",
+                "",
+                false,
+                &mut pull_live_stdout,
+                &mut pull_live_stderr,
+            )
+            .unwrap(),
+            PullOutcome::Failed
+        );
         let pull_live_text = String::from_utf8(pull_live_stdout).unwrap();
         assert!(pull_live_text.starts_with(
             "\x1b[?25l\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... "
@@ -1508,6 +1599,24 @@ mod tests {
                 .unwrap()
                 .starts_with("WARNING: Command exited with code '")
         );
+
+        let mut custom_prefix_stdout = Vec::new();
+        let mut custom_prefix_stderr = Vec::new();
+        assert_eq!(
+            pull_image(
+                "127.0.0.1:1/podoxide_missing:999999",
+                "  Pull 'proxy-nginx' (127.0.0.1:1/podoxide_missing:999999)... ",
+                false,
+                &mut custom_prefix_stdout,
+                &mut custom_prefix_stderr,
+            )
+            .unwrap(),
+            PullOutcome::Failed
+        );
+        let custom_prefix_text = String::from_utf8(custom_prefix_stdout).unwrap();
+        assert!(custom_prefix_text.ends_with(
+            "\x1b[?25h\r  Pull 'proxy-nginx' (127.0.0.1:1/podoxide_missing:999999)... Failed.\n"
+        ));
     }
 
     #[test]
