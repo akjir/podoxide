@@ -570,9 +570,7 @@ fn build_container_create_args(request: &CreateContainer<'_>) -> Vec<String> {
 
 /// Builds the `podman exec -it` argument vector from `request`.
 #[must_use]
-fn build_container_exec_args<'a, S: AsRef<str>>(
-    request: &'a ExecContainer<'a, S>,
-) -> Vec<&'a str> {
+fn build_container_exec_args<'a, S: AsRef<str>>(request: &'a ExecContainer<'a, S>) -> Vec<&'a str> {
     let capacity = collection::bounded_capacity(
         BASE_CONTAINER_EXEC_ARG_COUNT.saturating_add(request.command.len()),
         MAX_COLLECTION_PREALLOC,
@@ -941,9 +939,7 @@ fn validate_create_pod(request: &CreatePod<'_>) -> Result<(), PodError> {
 }
 
 /// Validates all fields of `request` before building `podman exec -it` arguments.
-fn validate_exec_container<S: AsRef<str>>(
-    request: &ExecContainer<'_, S>,
-) -> Result<(), PodError> {
+fn validate_exec_container<S: AsRef<str>>(request: &ExecContainer<'_, S>) -> Result<(), PodError> {
     ensure_valid(
         string::is_valid_pod_or_container_name(request.container_name),
         "invalid container name",
@@ -1131,7 +1127,13 @@ mod tests {
             assert_invalid_lifecycle_name(bad_name, &mut stdout, &mut stderr);
         }
 
-        for bad_image in ["", "--all-tags", "-q", "alpine:latest --tls-verify=false", "alpine\n"] {
+        for bad_image in [
+            "",
+            "--all-tags",
+            "-q",
+            "alpine:latest --tls-verify=false",
+            "alpine\n",
+        ] {
             let result = pull_image(bad_image, "", true, &mut stdout, &mut stderr);
             assert!(
                 matches!(
@@ -1515,7 +1517,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            pull_image("docker.io/alpine:latest", "", true, &mut stdout, &mut stderr).unwrap(),
+            pull_image(
+                "docker.io/alpine:latest",
+                "",
+                true,
+                &mut stdout,
+                &mut stderr
+            )
+            .unwrap(),
             PullOutcome::Simulated
         );
         assert_eq!(PullOutcome::Failed.spinner_suffix(), "Failed.");
@@ -1588,9 +1597,10 @@ mod tests {
             PullOutcome::Failed
         );
         let pull_live_text = String::from_utf8(pull_live_stdout).unwrap();
-        assert!(pull_live_text.starts_with(
-            "\x1b[?25l\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... "
-        ));
+        assert!(
+            pull_live_text
+                .starts_with("\x1b[?25l\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... ")
+        );
         assert!(pull_live_text.ends_with(
             "\x1b[?25h\rTrying to pull 127.0.0.1:1/podoxide_missing:999999... Failed.\n"
         ));
@@ -1628,9 +1638,7 @@ mod tests {
                 Some("ps") => Some(String::from(
                     "c1\n--bad-flag\n..\n/\n*\nUpper\nbad..id\n\nc2\n",
                 )),
-                Some("inspect") => Some(String::from(
-                    "  long2  \n  long2  \n--bad\ntwo words\n\n",
-                )),
+                Some("inspect") => Some(String::from("  long2  \n  long2  \n--bad\ntwo words\n\n")),
                 Some("images") => Some(String::from("img_line\n")),
                 _ => None,
             }
@@ -1639,7 +1647,10 @@ mod tests {
         let in_use = collect_in_use_images_with(&mut capture);
         assert!(in_use.contains("long2"));
         assert_eq!(in_use.len(), 1);
-        assert_eq!(query_images_with(false, &mut capture).unwrap(), "img_line\n");
+        assert_eq!(
+            query_images_with(false, &mut capture).unwrap(),
+            "img_line\n"
+        );
         assert_eq!(query_images_with(true, &mut capture).unwrap(), "img_line\n");
 
         assert_eq!(captured_calls[0], vec!["ps", "-aq"]);
@@ -1657,10 +1668,7 @@ mod tests {
                 IMAGES_FORMAT,
             ]
         );
-        assert_eq!(
-            captured_calls[3],
-            vec!["images", "--format", IMAGES_FORMAT]
-        );
+        assert_eq!(captured_calls[3], vec!["images", "--format", IMAGES_FORMAT]);
 
         assert!(collect_in_use_images_with(&mut |_: &[&str]| None).is_empty());
         assert!(
@@ -1716,15 +1724,16 @@ mod tests {
             .is_empty()
         );
 
-        let bounded_in_use = collect_in_use_images_with(&mut |arguments: &[&str]| {
-            match arguments.first().copied() {
-                Some("ps") => Some(oversized_ps.clone()),
-                Some("inspect") => {
-                    assert_eq!(arguments.len(), MAX_INSPECT_RECORDS + 3);
-                    Some(oversized_inspect.clone())
-                }
-                _ => None,
+        let bounded_in_use = collect_in_use_images_with(&mut |arguments: &[&str]| match arguments
+            .first()
+            .copied()
+        {
+            Some("ps") => Some(oversized_ps.clone()),
+            Some("inspect") => {
+                assert_eq!(arguments.len(), MAX_INSPECT_RECORDS + 3);
+                Some(oversized_inspect.clone())
             }
+            _ => None,
         });
         assert_eq!(bounded_in_use.len(), MAX_INSPECT_RECORDS);
 
@@ -1757,16 +1766,18 @@ mod tests {
         assert_eq!(inspect_calls.len(), 1);
         assert_eq!(
             inspect_calls[0],
-            vec!["image", "inspect", "-f", "{{.Id}}", "docker.io/alpine:latest"]
+            vec![
+                "image",
+                "inspect",
+                "-f",
+                "{{.Id}}",
+                "docker.io/alpine:latest"
+            ]
         );
         assert!(query_image_id_with("alpine:latest", &mut |_: &[&str]| None).is_none());
     }
 
-    fn assert_invalid_lifecycle_name(
-        bad_name: &str,
-        stdout: &mut Vec<u8>,
-        stderr: &mut Vec<u8>,
-    ) {
+    fn assert_invalid_lifecycle_name(bad_name: &str, stdout: &mut Vec<u8>, stderr: &mut Vec<u8>) {
         for result in [
             remove_container(bad_name, "", true, stdout, stderr),
             remove_pod(bad_name, "", true, stdout, stderr),

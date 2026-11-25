@@ -7,6 +7,8 @@
 	"settings": {
 		"editor.insertSpaces": true,
 		"editor.tabSize": 4,
+		"files.insertFinalNewline": true,
+		"files.trimTrailingWhitespace": true,
 		"outline.collapseItems": "alwaysCollapse"
 	}
 }

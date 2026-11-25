@@ -82,8 +82,7 @@ pub(super) fn execute_logs_with<W: Write, E: Write>(
 ) -> Result<(), PodError> {
     let target = extract_target_parameter(context)?;
     let (recipe_name, container_spec) = parse_target(target)?;
-    let (pod_id, container_name) =
-        load_and_resolve_target(context, recipe_name, container_spec)?;
+    let (pod_id, container_name) = load_and_resolve_target(context, recipe_name, container_spec)?;
     validate_log_flags(&context.flags)?;
     podman::logs_pod(
         &PodLogs {
@@ -240,8 +239,7 @@ container {
         local_context.flags = flags;
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        let error =
-            execute_logs_with(&local_context, false, &mut stdout, &mut stderr).unwrap_err();
+        let error = execute_logs_with(&local_context, false, &mut stdout, &mut stderr).unwrap_err();
         match error {
             PodError::Cli(cli_error) => {
                 assert_eq!(cli_error.kind, CliErrorKind::InvalidFlagValue);

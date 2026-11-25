@@ -111,10 +111,7 @@ mod tests {
         write_help(&mut buffer);
         let output = String::from_utf8(buffer).unwrap();
 
-        assert!(output.contains(&format!(
-            "{}\n",
-            format_version_header(Some("Image Mode"))
-        )));
+        assert!(output.contains(&format!("{}\n", format_version_header(Some("Image Mode")))));
         assert!(output.contains("Manage orphaned and dangling container images.\n"));
         assert!(output.contains("Usage: pods image [OPTIONS] ACTION [TARGETS]\n"));
         assert!(output.contains("ACTIONS:\n"));
@@ -122,18 +119,22 @@ mod tests {
         assert!(output.contains("  prune              prune dangling or all unused images\n"));
         assert!(output.contains("  help               display this help text\n"));
         assert!(output.contains("OPTIONS:\n"));
-        assert!(output.contains(
-            "  --all              prune all unused images, not just dangling ones\n"
-        ));
+        assert!(
+            output
+                .contains("  --all              prune all unused images, not just dangling ones\n")
+        );
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
         assert!(output.contains("  --force            skip confirmation prompt\n"));
-        assert!(output.contains(
-            "  --preview          preview images and space that would be deleted\n"
-        ));
-        assert!(output.contains(
-            "  --simulate         preview generated commands without executing them\n"
-        ));
+        assert!(
+            output
+                .contains("  --preview          preview images and space that would be deleted\n")
+        );
+        assert!(
+            output.contains(
+                "  --simulate         preview generated commands without executing them\n"
+            )
+        );
         assert!(output.contains("TARGETS:\n"));
         assert!(output.contains(
             "  *                  names of recipes, @groups, or <recipe>/<container> targets (update only)\n"

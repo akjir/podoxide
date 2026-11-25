@@ -58,10 +58,7 @@ mod tests {
     use super::{handle, show_with};
 
     fn create_temp_test_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!(
-            "podoxide_config_show_{}_{suffix}",
-            process::id()
-        ));
+        let dir = env::temp_dir().join(format!("podoxide_config_show_{}_{suffix}", process::id()));
         let _ = std_fs::remove_dir_all(&dir);
         std_fs::create_dir_all(&dir).unwrap();
         dir

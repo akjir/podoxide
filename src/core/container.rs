@@ -24,12 +24,8 @@ use crate::core::pod::Pod;
 use crate::core::update::{self, ContainerPullRecord, ContainerUpdateResult, UpdateAction};
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::podman::{self, CreateContainer, PullOutcome};
-use crate::utilities::collection::{
-    MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value,
-};
-use crate::utilities::path::{
-    is_valid_directory, is_valid_directory_path, is_valid_volume_options,
-};
+use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value};
+use crate::utilities::path::{is_valid_directory, is_valid_directory_path, is_valid_volume_options};
 use crate::utilities::string::{
     contains_control_or_bidi, is_valid_pod_or_container_name, is_valid_text, is_valid_token,
     normalize_name,
@@ -631,11 +627,7 @@ fn apply_update_action<W: Write, E: Write>(
 /// Returns `name` when non-empty, or `"container"` as a fallback error token.
 #[must_use]
 const fn container_label(name: &str) -> &str {
-    if name.is_empty() {
-        "container"
-    } else {
-        name
-    }
+    if name.is_empty() { "container" } else { name }
 }
 
 /// Validates `container` and `pod`, ensures `pod` exists via `pod_exists` (creating it when missing), and executes `podman create`.
@@ -1059,7 +1051,10 @@ mod tests {
             String::from("Duchamp-6"),
         ];
 
-        assert_eq!(resolve_image_reference(&container, &pod), "bel.io/squad:1998");
+        assert_eq!(
+            resolve_image_reference(&container, &pod),
+            "bel.io/squad:1998"
+        );
         container.registry = String::from("bestRegEver.io");
         assert_eq!(
             resolve_image_reference(&container, &pod),
@@ -1077,8 +1072,7 @@ mod tests {
         start_with(&container, true, &mut stdout, &mut stderr).unwrap();
         stop_with(&container, true, &mut stdout, &mut stderr).unwrap();
         remove_with(&container, true, &mut stdout, &mut stderr).unwrap();
-        let pull_record =
-            pull_with(&container, &pod, "", true, &mut stdout, &mut stderr).unwrap();
+        let pull_record = pull_with(&container, &pod, "", true, &mut stdout, &mut stderr).unwrap();
         assert_eq!(pull_record.outcome, PullOutcome::Simulated);
         assert_eq!(pull_record.container_name, "commandos-1");
         assert_eq!(pull_record.image, "bel.io/squad:1998");
@@ -1148,7 +1142,14 @@ mod tests {
             options: String::from("ro"),
         }];
         let mut spaced_out = Vec::new();
-        reload_with(&spaced_container, &spaced_pod, true, &mut spaced_out, &mut stderr).unwrap();
+        reload_with(
+            &spaced_container,
+            &spaced_pod,
+            true,
+            &mut spaced_out,
+            &mut stderr,
+        )
+        .unwrap();
         assert!(
             String::from_utf8(spaced_out)
                 .unwrap()
@@ -1183,10 +1184,7 @@ mod tests {
         assert!(pull_with(&container, &pod, "", true, &mut broken_stdout, &mut stderr).is_ok());
 
         let mut injected = Container::new();
-        injected.name = format!(
-            "bad\x1b[31m\n\u{202E}{}",
-            "a".repeat(MAX_LOG_MESSAGE_BYTES)
-        );
+        injected.name = format!("bad\x1b[31m\n\u{202E}{}", "a".repeat(MAX_LOG_MESSAGE_BYTES));
         injected.image = String::from("alpine:latest");
 
         let mut captured_stdout = Vec::new();
@@ -1533,7 +1531,12 @@ mod tests {
         );
 
         let cases = [
-            ("", "/container/dir/anonymous", "", "/container/dir/anonymous"),
+            (
+                "",
+                "/container/dir/anonymous",
+                "",
+                "/container/dir/anonymous",
+            ),
             (
                 "named_volume",
                 "/container/dir/named",
@@ -1617,11 +1620,7 @@ mod tests {
             host_dir: String::from("./data"),
             options: String::from("ro"),
         };
-        for invalid_pod_path in [
-            Path::new(""),
-            Path::new("/pods:ro"),
-            Path::new("../escape"),
-        ] {
+        for invalid_pod_path in [Path::new(""), Path::new("/pods:ro"), Path::new("../escape")] {
             let error =
                 format_volume_mount(&relative_volume, invalid_pod_path, 9, "app").unwrap_err();
             assert_eq!(error.kind, RecipeErrorKind::InvalidVolume);

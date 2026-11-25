@@ -842,12 +842,9 @@ fn pod_error_at_line(line: usize, kind: RecipeErrorKind, token: impl AsRef<str>)
 fn read_validated_file(path: &Path) -> Result<String, PodError> {
     match fs::read_file(path) {
         Ok(content) => Ok(content),
-        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Err(
-            PodError::from(RecipeError::without_line(
-                RecipeErrorKind::NotFound,
-                sanitize_path_token(path),
-            )),
-        ),
+        Err(PodError::Io(error)) if error.kind() == io::ErrorKind::NotFound => Err(PodError::from(
+            RecipeError::without_line(RecipeErrorKind::NotFound, sanitize_path_token(path)),
+        )),
         Err(error) => Err(error),
     }
 }
@@ -1006,11 +1003,7 @@ fn validate_load_target(recipes_dir: &Path, recipe_name: &str) -> Result<(), Pod
 }
 
 /// Validates a single [`PodCommand`] entry inside `pod.commands`.
-fn validate_pod_command(
-    key: &str,
-    command: &PodCommand,
-    line: usize,
-) -> Result<(), RecipeError> {
+fn validate_pod_command(key: &str, command: &PodCommand, line: usize) -> Result<(), RecipeError> {
     if !is_valid_identifier(key) || key != command.name {
         return Err(pod_error_at_line(
             line,
@@ -1074,11 +1067,7 @@ fn validate_pod_commands(
 }
 
 /// Validates pod fields (`id`, `name`, `description`, `registry`, `commands`, `publish`, `options`, and `path`) during [`validate_recipe_inner`].
-fn validate_pod_fields(
-    pod: &mut Pod,
-    config: &Config,
-    file_name: &str,
-) -> Result<(), RecipeError> {
+fn validate_pod_fields(pod: &mut Pod, config: &Config, file_name: &str) -> Result<(), RecipeError> {
     if contains_control_or_bidi(&pod.id) {
         return Err(pod_error_at_line(
             pod.line,
@@ -1378,8 +1367,9 @@ mod tests {
             Err(PodError::Io(_))
         ));
 
-        let non_utf8_recipe_path =
-            PathBuf::from(OsString::from_vec(vec![b'/', b't', 0xFF, b'.', b'p', b'o', b'd']));
+        let non_utf8_recipe_path = PathBuf::from(OsString::from_vec(vec![
+            b'/', b't', 0xFF, b'.', b'p', b'o', b'd',
+        ]));
         for invalid_read_path in [
             temp_dir.as_path(),
             Path::new(""),
@@ -1528,7 +1518,16 @@ container {
         assert_eq!(loaded.resolve_container_name("db").unwrap(), "si_po-db");
         assert_eq!(loaded.resolve_container_name("3").unwrap(), "si_po-3");
 
-        for unknown in ["", "   ", "0", "+1", "4", "*missing", "missing", "bad\nname"] {
+        for unknown in [
+            "",
+            "   ",
+            "0",
+            "+1",
+            "4",
+            "*missing",
+            "missing",
+            "bad\nname",
+        ] {
             let error = loaded.resolve_container_name(unknown).unwrap_err();
             assert_eq!(error.kind, RecipeErrorKind::ContainerNotFound);
         }
@@ -1702,7 +1701,9 @@ container *web {
         assert_eq!(sync_command.user.as_deref(), Some("1000"));
         assert_eq!(sync_command.execute, "/srv/www/cli db:sync-indices");
         assert_eq!(
-            recipe.resolve_container_name(&sync_command.container).unwrap(),
+            recipe
+                .resolve_container_name(&sync_command.container)
+                .unwrap(),
             "stack-web"
         );
 
@@ -1760,7 +1761,10 @@ container *app {
             "pod a b {\n    name Test\n}\n",
             RecipeErrorKind::InvalidArgumentCount,
         );
-        assert_recipe_error("pod -bad {\n    name Test\n}\n", RecipeErrorKind::InvalidPodId);
+        assert_recipe_error(
+            "pod -bad {\n    name Test\n}\n",
+            RecipeErrorKind::InvalidPodId,
+        );
         assert_recipe_error(
             "pod \"bad\\nname\" {\n    name Test\n}\n",
             RecipeErrorKind::InvalidPodId,

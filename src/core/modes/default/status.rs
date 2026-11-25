@@ -312,12 +312,8 @@ where
 {
     let (expected, invalid_recipes) = resolve_expected_containers(context)?;
     let ps_output = query_podman_status(query_status)?;
-    let display_rows = build_display_rows(
-        &ps_output,
-        &expected,
-        &invalid_recipes,
-        context.flags.all,
-    );
+    let display_rows =
+        build_display_rows(&ps_output, &expected, &invalid_recipes, context.flags.all);
     if display_rows.is_empty() {
         log::write_print(stdout, "No containers found.");
         return Ok(());
@@ -643,8 +639,7 @@ container \"*app-1\" {
 
         // Unknown container in a configured recipe fails before querying podman.
         context.parameters = vec![String::from("recipe_017_container_naming/nonexistent")];
-        let mut never_capture =
-            || -> Option<String> { panic!("podman ps should not be called") };
+        let mut never_capture = || -> Option<String> { panic!("podman ps should not be called") };
         let error = execute_with(&context, &mut never_capture, &mut Vec::new()).unwrap_err();
         match error {
             PodError::Recipe(recipe_error) => {
@@ -792,8 +787,7 @@ container \"*app-1\" {
                 target_name: String::from("recipe/1"),
             },
         );
-        let filtered_after_limit =
-            build_display_rows(&oversized_ps, &single_expected, &[], false);
+        let filtered_after_limit = build_display_rows(&oversized_ps, &single_expected, &[], false);
         assert_eq!(filtered_after_limit.len(), 1);
         assert_eq!(filtered_after_limit[0].status, "Not Found");
 
@@ -896,10 +890,18 @@ Recipes 'invalid_recipe' and 'missing_recipe' have errors! Run 'pods recipe insp
         assert!(all_full_output.contains("unmanaged_container         -"));
         assert!(all_full_output.contains("invalid_recipe              invalid_recipe"));
         assert!(all_full_output.contains("missing_recipe              missing_recipe"));
-        assert!(all_full_output.contains("test_pod-1                  recipe_017_container_naming/1"));
-        assert!(all_full_output.contains("test_pod-my-db              recipe_017_container_naming/2"));
-        assert!(all_full_output.contains("totally_custom              recipe_017_container_naming/3"));
-        assert!(all_full_output.contains("test_simple_cnt_pod-app-1   recipe_011_simple_container/1"));
+        assert!(
+            all_full_output.contains("test_pod-1                  recipe_017_container_naming/1")
+        );
+        assert!(
+            all_full_output.contains("test_pod-my-db              recipe_017_container_naming/2")
+        );
+        assert!(
+            all_full_output.contains("totally_custom              recipe_017_container_naming/3")
+        );
+        assert!(
+            all_full_output.contains("test_simple_cnt_pod-app-1   recipe_011_simple_container/1")
+        );
 
         let _ = std_fs::remove_dir_all(&temp_dir);
     }

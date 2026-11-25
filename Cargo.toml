@@ -2,7 +2,15 @@
 name = "podoxide"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "Deterministic Linux CLI tool in pure standard Rust to manage Podman pods and containers via declarative PSL recipes"
 license = "GPL-3.0-or-later"
+repository = "https://github.com/akjir/podoxide"
+homepage = "https://github.com/akjir/podoxide"
+readme = "README.md"
+keywords = ["podman", "containers", "pods", "cli", "linux"]
+categories = ["command-line-utilities", "virtualization"]
+exclude = [".agents/", ".test/", ".github/", "podoxide.code-workspace"]
 
 [lib]
 name = "podoxide"
@@ -15,6 +23,21 @@ path = "src/main.rs"
 [dependencies]
 
 [dev-dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+cloned_instead_of_copied = "warn"
+dbg_macro = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+manual_let_else = "warn"
+needless_continue = "warn"
+redundant_else = "warn"
+semicolon_if_nothing_returned = "warn"
+todo = "warn"
+unimplemented = "warn"
 
 [profile.release]
 opt-level = 3

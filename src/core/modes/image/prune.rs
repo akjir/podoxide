@@ -288,9 +288,7 @@ mod tests {
     use crate::core::context::Context;
     use crate::error::PodError;
     use crate::io::system::env::MAX_CONFIRMATION_BYTES;
-    use super::{
-        MAX_PREVIEW_RECORDS, PREVIEW_SEPARATOR, execute_with, handle, scan_prunable_images,
-    };
+    use super::{MAX_PREVIEW_RECORDS, PREVIEW_SEPARATOR, execute_with, handle, scan_prunable_images};
 
     struct BrokenPipeWriter;
 

@@ -26,8 +26,8 @@ pub mod recipe;
 
 use crate::core::context::Context;
 pub use crate::core::context::{
-    CommandAction, ConfigAction, ConnectAction, DefaultAction, ImageAction, InitAction,
-    LogsAction, Mode, ModeAction, RecipeAction,
+    CommandAction, ConfigAction, ConnectAction, DefaultAction, ImageAction, InitAction, LogsAction,
+    Mode, ModeAction, RecipeAction,
 };
 use crate::error::PodError;
 

@@ -322,12 +322,16 @@ impl UpdateSummary {
         containers: &[ContainerPullRecord],
     ) {
         match action {
-            UpdateAction::Failed => self
-                .failed
-                .push(format_pod_detail_entry(label, containers, PullOutcome::Failed)),
-            UpdateAction::Reloaded => self
-                .changed
-                .push(format_pod_detail_entry(label, containers, PullOutcome::Updated)),
+            UpdateAction::Failed => self.failed.push(format_pod_detail_entry(
+                label,
+                containers,
+                PullOutcome::Failed,
+            )),
+            UpdateAction::Reloaded => self.changed.push(format_pod_detail_entry(
+                label,
+                containers,
+                PullOutcome::Updated,
+            )),
             UpdateAction::Simulated => self.simulated.push(label.to_owned()),
             UpdateAction::UpToDate => self.up_to_date.push(label.to_owned()),
         }
@@ -351,12 +355,18 @@ impl UpdateSummary {
             return;
         }
         if any_updated {
-            self.changed
-                .push(format_pod_detail_entry(label, containers, PullOutcome::Updated));
+            self.changed.push(format_pod_detail_entry(
+                label,
+                containers,
+                PullOutcome::Updated,
+            ));
         }
         if any_failed {
-            self.failed
-                .push(format_pod_detail_entry(label, containers, PullOutcome::Failed));
+            self.failed.push(format_pod_detail_entry(
+                label,
+                containers,
+                PullOutcome::Failed,
+            ));
         }
         if !any_updated && !any_failed {
             self.up_to_date.push(label.to_owned());
@@ -565,7 +575,8 @@ mod tests {
     #[test]
     fn update_summary_renders_pod_and_container_outcomes_for_update_and_image_pull() {
         let mut empty_out = Vec::new();
-        UpdateSummary::new(SummaryKind::LifecycleUpdate, SummaryScope::Pod).write_to(&mut empty_out);
+        UpdateSummary::new(SummaryKind::LifecycleUpdate, SummaryScope::Pod)
+            .write_to(&mut empty_out);
         assert!(empty_out.is_empty());
 
         let db_same = pull_record(
@@ -673,16 +684,19 @@ mod tests {
         img_pod_summary.write_to(&mut img_pod_out);
         let img_pod_text = String::from_utf8(img_pod_out).unwrap();
         assert!(
-            img_pod_text
-                .contains("  Updated (1):\n    - example-stack (Example Web Stack): example-stack-db")
+            img_pod_text.contains(
+                "  Updated (1):\n    - example-stack (Example Web Stack): example-stack-db"
+            )
         );
         assert!(
-            img_pod_text
-                .contains("  Failed (1):\n    - example-stack (Example Web Stack): example-stack-app")
+            img_pod_text.contains(
+                "  Failed (1):\n    - example-stack (Example Web Stack): example-stack-app"
+            )
         );
         assert!(img_pod_text.contains("  Up to date (1):\n    - cache (Redis Cache)\n"));
         assert!(
-            img_pod_text.contains("Checked 2 pods (3 images): 1 updated, 1 up to date, 1 failed.\n")
+            img_pod_text
+                .contains("Checked 2 pods (3 images): 1 updated, 1 up to date, 1 failed.\n")
         );
 
         let mut img_cnt_summary =
@@ -755,7 +769,11 @@ mod tests {
         for index in 0..(MAX_SUMMARY_ENTRIES + 10) {
             bounded.record_container(
                 UpdateAction::UpToDate,
-                &pull_record(&format!("cnt-{index}"), "docker.io/alpine:latest", PullOutcome::UpToDate),
+                &pull_record(
+                    &format!("cnt-{index}"),
+                    "docker.io/alpine:latest",
+                    PullOutcome::UpToDate,
+                ),
             );
         }
         assert_eq!(bounded.up_to_date.count, MAX_SUMMARY_ENTRIES + 10);

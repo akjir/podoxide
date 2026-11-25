@@ -269,10 +269,7 @@ container *simple {
 ";
 
     fn create_temp_test_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!(
-            "podoxide_recipe_list_{}_{suffix}",
-            process::id()
-        ));
+        let dir = env::temp_dir().join(format!("podoxide_recipe_list_{}_{suffix}", process::id()));
         let _ = std_fs::remove_dir_all(&dir);
         std_fs::create_dir_all(&dir).unwrap();
         dir
@@ -308,12 +305,12 @@ container *simple {
         list_with(&context, &mut stdout).unwrap();
         let output = String::from_utf8(stdout).unwrap();
         assert!(output.contains("Recipes:\n"));
-        assert!(output.contains(
-            "  1) recipe_011_simple_container (Simple Container)         [OK]\n"
-        ));
-        assert!(output.contains(
-            "  2) recipe_022_description (Super Pod): Super Pod is great [OK]\n"
-        ));
+        assert!(
+            output.contains("  1) recipe_011_simple_container (Simple Container)         [OK]\n")
+        );
+        assert!(
+            output.contains("  2) recipe_022_description (Super Pod): Super Pod is great [OK]\n")
+        );
         assert!(!output.contains("Unlinked Recipe Files:"));
         assert!(!output.contains("[UNREFERENCED]"));
         assert!(!output.contains("pods recipe inspect"));
@@ -354,7 +351,9 @@ container *simple {
         let all_output = String::from_utf8(all_stdout).unwrap();
         assert!(!all_output.contains("Recipes:"));
         assert!(all_output.starts_with("Unlinked Recipe Files:\n"));
-        assert!(all_output.contains("  1) orphan.pod                             [UNREFERENCED]\n"));
+        assert!(
+            all_output.contains("  1) orphan.pod                             [UNREFERENCED]\n")
+        );
 
         std_fs::remove_file(temp_dir.join("orphan.pod")).unwrap();
         let mut empty_all_stdout = Vec::new();
@@ -411,12 +410,8 @@ container *simple {
         assert!(
             default_output.contains("  2) missing_recipe                         [NOT FOUND]\n")
         );
-        assert!(
-            default_output.contains("  3) recipe_001_empty                       [ERROR]\n")
-        );
-        assert!(
-            default_output.contains("  4) recipe_002_invalid                     [ERROR]\n")
-        );
+        assert!(default_output.contains("  3) recipe_001_empty                       [ERROR]\n"));
+        assert!(default_output.contains("  4) recipe_002_invalid                     [ERROR]\n"));
         assert!(!default_output.contains("Unlinked Recipe Files:"));
         assert!(default_output.contains(
             "\nRecipes 'recipe_001_empty' and 'recipe_002_invalid' have errors! Run 'pods recipe inspect <recipe>' for details.\n"
@@ -432,10 +427,18 @@ container *simple {
         assert!(all_output.contains("   3) recipe_001_empty                      [ERROR]\n"));
         assert!(all_output.contains("   4) recipe_002_invalid                    [ERROR]\n"));
         assert!(all_output.contains("Unlinked Recipe Files:\n"));
-        assert!(all_output.contains("   5) extra_01.pod                          [UNREFERENCED]\n"));
-        assert!(all_output.contains("   9) extra_05.pod                          [UNREFERENCED]\n"));
-        assert!(all_output.contains("  10) extra_06.pod                          [UNREFERENCED]\n"));
-        assert!(all_output.contains("  12) extra_08.pod                          [UNREFERENCED]\n"));
+        assert!(
+            all_output.contains("   5) extra_01.pod                          [UNREFERENCED]\n")
+        );
+        assert!(
+            all_output.contains("   9) extra_05.pod                          [UNREFERENCED]\n")
+        );
+        assert!(
+            all_output.contains("  10) extra_06.pod                          [UNREFERENCED]\n")
+        );
+        assert!(
+            all_output.contains("  12) extra_08.pod                          [UNREFERENCED]\n")
+        );
         assert!(all_output.contains(
             "\nRecipes 'recipe_001_empty' and 'recipe_002_invalid' have errors! Run 'pods recipe inspect <recipe>' for details.\n"
         ));

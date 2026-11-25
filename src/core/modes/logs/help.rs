@@ -120,36 +120,36 @@ mod tests {
         write_help(&mut buffer);
         let output = String::from_utf8(buffer).unwrap();
 
-        assert!(output.contains(&format!(
-            "{}\n",
-            format_version_header(Some("Logs Mode"))
-        )));
+        assert!(output.contains(&format!("{}\n", format_version_header(Some("Logs Mode")))));
         assert!(output.contains("Show or follow logs for a recipe's pod or container.\n"));
         assert!(output.contains("Usage: pods logs [OPTIONS] [<action>] <recipe>[/container]\n"));
         assert!(output.contains("ACTIONS:\n"));
-        assert!(output.contains(
-            "  show               fetch and display logs, then exit (default)\n"
-        ));
+        assert!(
+            output.contains("  show               fetch and display logs, then exit (default)\n")
+        );
         assert!(output.contains("  follow             fetch and follow logs\n"));
         assert!(output.contains("  help               display this help\n"));
         assert!(output.contains("OPTIONS:\n"));
-        assert!(output.contains(
-            "  --tail=<n>         output the specified number of lines at the end\n"
-        ));
+        assert!(
+            output
+                .contains("  --tail=<n>         output the specified number of lines at the end\n")
+        );
         assert!(output.contains("  --since=<time>     show logs since timestamp\n"));
         assert!(output.contains("  --until=<time>     show logs until timestamp\n"));
-        assert!(output.contains(
-            "  --timestamps       show timestamps in the log output\n"
-        ));
+        assert!(output.contains("  --timestamps       show timestamps in the log output\n"));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(output.contains(
-            "  --simulate         preview generated commands without executing them\n"
-        ));
+        assert!(
+            output.contains(
+                "  --simulate         preview generated commands without executing them\n"
+            )
+        );
         assert!(output.contains("TARGET:\n"));
-        assert!(output.contains(
-            "  <recipe>             show logs for all containers in the recipe's pod\n"
-        ));
+        assert!(
+            output.contains(
+                "  <recipe>             show logs for all containers in the recipe's pod\n"
+            )
+        );
         assert!(output.contains(
             "  <recipe>/<container> filter logs to a specific container (index, relative, absolute)\n"
         ));

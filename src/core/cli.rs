@@ -91,7 +91,10 @@ fn apply_flag_value(
             flags.until = Some(parse_log_flag_value(raw_value)?);
             Ok(())
         }
-        _ => Err(CliError::with_argument(CliErrorKind::UnknownFlag, flag_name)),
+        _ => Err(CliError::with_argument(
+            CliErrorKind::UnknownFlag,
+            flag_name,
+        )),
     }
 }
 
@@ -126,10 +129,7 @@ where
 }
 
 /// Verifies that `positionals` contains at most `max_count` arguments.
-fn ensure_no_extra_arguments(
-    positionals: &[String],
-    max_count: usize,
-) -> Result<(), CliError> {
+fn ensure_no_extra_arguments(positionals: &[String], max_count: usize) -> Result<(), CliError> {
     if let Some(extra) = positionals.get(max_count) {
         return Err(CliError::with_argument(
             CliErrorKind::TooManyArguments,
@@ -162,9 +162,7 @@ fn parse_command_exec(mut positionals: Vec<String>) -> Result<(ModeAction, Vec<S
 }
 
 /// Parses implicit `pods command <recipe> [<command|index>]` arguments into `list` or `exec`.
-fn parse_command_implicit(
-    positionals: Vec<String>,
-) -> Result<(ModeAction, Vec<String>), CliError> {
+fn parse_command_implicit(positionals: Vec<String>) -> Result<(ModeAction, Vec<String>), CliError> {
     let Some(recipe) = positionals.first() else {
         return Err(CliError::new(CliErrorKind::MissingTarget));
     };
@@ -285,11 +283,7 @@ fn parse_default_positionals(
 }
 
 /// Parses a `--flag=value` argument token, rejecting `=value` on boolean flags.
-fn parse_equals_flag(
-    flags: &mut Flags,
-    flag_name: &str,
-    raw_value: &str,
-) -> Result<(), CliError> {
+fn parse_equals_flag(flags: &mut Flags, flag_name: &str, raw_value: &str) -> Result<(), CliError> {
     match flag_name {
         "--config" | "--since" | "--tail" | "--until" => {
             apply_flag_value(flags, flag_name, Cow::Borrowed(raw_value))
@@ -299,7 +293,10 @@ fn parse_equals_flag(
             CliErrorKind::InvalidFlagValue,
             flag_name,
         )),
-        _ => Err(CliError::with_argument(CliErrorKind::UnknownFlag, flag_name)),
+        _ => Err(CliError::with_argument(
+            CliErrorKind::UnknownFlag,
+            flag_name,
+        )),
     }
 }
 
@@ -343,7 +340,12 @@ where
         "--preview" => flags.preview = true,
         "--simulate" => flags.simulate = true,
         "--timestamps" => flags.timestamps = true,
-        _ => return Err(CliError::with_argument(CliErrorKind::UnknownFlag, flag_name)),
+        _ => {
+            return Err(CliError::with_argument(
+                CliErrorKind::UnknownFlag,
+                flag_name,
+            ));
+        }
     }
     Ok(())
 }
@@ -374,9 +376,7 @@ fn parse_image_positionals(
 }
 
 /// Parses positional arguments for `init` mode.
-fn parse_init_positionals(
-    positionals: Vec<String>,
-) -> Result<(ModeAction, Vec<String>), CliError> {
+fn parse_init_positionals(positionals: Vec<String>) -> Result<(ModeAction, Vec<String>), CliError> {
     let Some(first) = positionals.first() else {
         return Ok((ModeAction::Init(InitAction::Create), Vec::new()));
     };
@@ -397,9 +397,7 @@ fn parse_log_flag_value(raw_value: Cow<'_, str>) -> Result<String, CliError> {
 }
 
 /// Parses positional arguments for `logs` (`log`) mode.
-fn parse_logs_positionals(
-    positionals: Vec<String>,
-) -> Result<(ModeAction, Vec<String>), CliError> {
+fn parse_logs_positionals(positionals: Vec<String>) -> Result<(ModeAction, Vec<String>), CliError> {
     let Some(first) = positionals.first() else {
         return Ok((ModeAction::Logs(LogsAction::Help), Vec::new()));
     };
@@ -527,10 +525,7 @@ where
 }
 
 /// Scans all raw CLI arguments in a single pass, populating `flags` and returning positional arguments.
-fn scan_raw_arguments<I, T>(
-    flags: &mut Flags,
-    arguments: I,
-) -> Result<Vec<String>, CliError>
+fn scan_raw_arguments<I, T>(flags: &mut Flags, arguments: I) -> Result<Vec<String>, CliError>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
@@ -668,9 +663,7 @@ mod tests {
     };
     use crate::error::CliErrorKind;
     use crate::utilities::path::{resolve_config_name, resolve_config_path};
-    use super::{
-        MAX_CLI_ARGS, apply_flag_value, parse_args, parse_command_implicit, parse_mode_action,
-    };
+    use super::{MAX_CLI_ARGS, apply_flag_value, parse_args, parse_command_implicit, parse_mode_action};
 
     #[test]
     fn argument_count_bounds_and_invalid_utf8() {
@@ -709,7 +702,11 @@ mod tests {
         let mut flag_utf8_context = Context::new();
         let flag_utf8_error = parse_args(
             &mut flag_utf8_context,
-            [OsString::from("--config"), invalid_flag_utf8, OsString::from("status")],
+            [
+                OsString::from("--config"),
+                invalid_flag_utf8,
+                OsString::from("status"),
+            ],
         )
         .unwrap_err();
         assert_eq!(flag_utf8_error.kind, CliErrorKind::InvalidUtf8);
@@ -728,9 +725,11 @@ mod tests {
 
         if !invalid_config.starts_with('-') {
             let mut separated_context = Context::new();
-            let separated_error =
-                parse_args(&mut separated_context, ["--config", invalid_config, "status"])
-                    .unwrap_err();
+            let separated_error = parse_args(
+                &mut separated_context,
+                ["--config", invalid_config, "status"],
+            )
+            .unwrap_err();
             assert_eq!(
                 separated_error.kind,
                 CliErrorKind::InvalidFlagValue,
@@ -781,10 +780,7 @@ mod tests {
         let mut hidden_context = Context::new();
         parse_args(&mut hidden_context, ["--config=.hidden", "status"]).unwrap();
         assert_eq!(hidden_context.config.name, ".hidden");
-        assert_eq!(
-            hidden_context.config.path,
-            PathBuf::from("./.hidden.conf")
-        );
+        assert_eq!(hidden_context.config.path, PathBuf::from("./.hidden.conf"));
 
         for invalid_path in [".", "..", "/", "./", "../", "configs/", "   "] {
             let mut context = Context::new();
@@ -986,8 +982,8 @@ mod tests {
 
         for missing_flag in ["--config", "--tail", "--since", "--until"] {
             let mut missing_context = Context::new();
-            let error =
-                parse_args(&mut missing_context, ["logs", "example-app", missing_flag]).unwrap_err();
+            let error = parse_args(&mut missing_context, ["logs", "example-app", missing_flag])
+                .unwrap_err();
             assert_eq!(error.kind, CliErrorKind::MissingFlagValue);
         }
 
@@ -1065,7 +1061,10 @@ mod tests {
             command_alias_exec.action,
             ModeAction::Command(CommandAction::Exec)
         );
-        assert_eq!(command_alias_exec.parameters, vec!["example-app", "migrate"]);
+        assert_eq!(
+            command_alias_exec.parameters,
+            vec!["example-app", "migrate"]
+        );
 
         let mut command_default_help = Context::new();
         parse_args(&mut command_default_help, ["command"]).unwrap();
@@ -1080,7 +1079,11 @@ mod tests {
         let mut command_implicit_list = Context::new();
         parse_args(&mut command_implicit_list, ["cmd", "example-app"]).unwrap();
         let mut command_explicit_list = Context::new();
-        parse_args(&mut command_explicit_list, ["command", "list", "example-app"]).unwrap();
+        parse_args(
+            &mut command_explicit_list,
+            ["command", "list", "example-app"],
+        )
+        .unwrap();
         assert_eq!(command_implicit_list, command_explicit_list);
         assert_eq!(
             command_implicit_list.action,
@@ -1155,7 +1158,10 @@ mod tests {
         .unwrap();
         assert_eq!(image_alias_prune, image_prune);
         assert_eq!(image_alias_prune.mode, Mode::Image);
-        assert_eq!(image_alias_prune.action, ModeAction::Image(ImageAction::Prune));
+        assert_eq!(
+            image_alias_prune.action,
+            ModeAction::Image(ImageAction::Prune)
+        );
         assert!(image_alias_prune.requires_config());
 
         let mut image_default_help = Context::new();
@@ -1239,7 +1245,10 @@ mod tests {
         parse_args(&mut recipe_list, ["recipe", "list", "--all"]).unwrap();
         assert_eq!(recipe_alias_list, recipe_list);
         assert_eq!(recipe_alias_list.mode, Mode::Recipe);
-        assert_eq!(recipe_alias_list.action, ModeAction::Recipe(RecipeAction::List));
+        assert_eq!(
+            recipe_alias_list.action,
+            ModeAction::Recipe(RecipeAction::List)
+        );
 
         let mut recipe_help = Context::new();
         parse_args(&mut recipe_help, ["recipe", "help"]).unwrap();
@@ -1426,8 +1435,7 @@ mod tests {
         assert_eq!(extra_error.kind, CliErrorKind::TooManyArguments);
 
         let mut version_extra = Context::new();
-        let version_extra_error =
-            parse_args(&mut version_extra, ["version", "extra"]).unwrap_err();
+        let version_extra_error = parse_args(&mut version_extra, ["version", "extra"]).unwrap_err();
         assert_eq!(version_extra_error.kind, CliErrorKind::TooManyArguments);
 
         let mut status_help_flag = Context::new();

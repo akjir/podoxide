@@ -226,9 +226,7 @@ mod tests {
     use crate::core::pod;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
     use crate::io::system::fs;
-    use super::{
-        collect_container_specs, execute_lifecycle_action, handle, resolve_container_targets,
-    };
+    use super::{collect_container_specs, execute_lifecycle_action, handle, resolve_container_targets};
 
     const ALPHA_RECIPE_PSL: &str = "\
 pod alpha_pod {
@@ -252,10 +250,8 @@ container *app {
 
     #[test]
     fn execute_lifecycle_action_distinguishes_group_and_recipe_sharing_name() {
-        let temp_dir = env::temp_dir().join(format!(
-            "podoxide_default_same_name_{}",
-            process::id()
-        ));
+        let temp_dir =
+            env::temp_dir().join(format!("podoxide_default_same_name_{}", process::id()));
         let _ = std_fs::remove_dir_all(&temp_dir);
         let recipes_dir = temp_dir.join("recipes");
         std_fs::create_dir_all(&recipes_dir).unwrap();
@@ -295,8 +291,7 @@ recipes {
         assert!(execute_lifecycle_action(&context, pod::up, container::up).is_ok());
 
         context.parameters = vec![String::from("@alpha")];
-        let missing_beta =
-            execute_lifecycle_action(&context, pod::up, container::up).unwrap_err();
+        let missing_beta = execute_lifecycle_action(&context, pod::up, container::up).unwrap_err();
         match missing_beta {
             PodError::Recipe(recipe_error) => {
                 assert_eq!(recipe_error.kind, RecipeErrorKind::NotFound);

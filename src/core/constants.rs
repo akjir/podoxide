@@ -28,6 +28,25 @@ mod tests {
     #[test]
     fn global_application_constants_match_expected_format() {
         assert_eq!(APP_NAME, "Podoxide");
-        assert!(APP_VERSION.starts_with(&format!("v{}+", env!("CARGO_PKG_VERSION"))));
+        let base_version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        if let Some(metadata) = APP_VERSION.strip_prefix(&format!("{base_version}+")) {
+            let clean_metadata = metadata.strip_suffix(".dev").unwrap_or(metadata);
+            let (count, hash) = clean_metadata
+                .split_once('.')
+                .expect("expected '<count>.<hash>' build metadata");
+            assert!(
+                !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()),
+                "expected numeric commit count in {APP_VERSION:?}"
+            );
+            assert!(
+                !hash.is_empty() && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "expected hexadecimal commit hash in {APP_VERSION:?}"
+            );
+        } else {
+            assert_eq!(
+                APP_VERSION, base_version,
+                "expected clean base version outside Git checkout, got {APP_VERSION:?}"
+            );
+        }
     }
 }

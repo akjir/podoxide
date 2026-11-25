@@ -349,7 +349,12 @@ impl DiagnosticError<'_> {
         write_sanitized_token(formatter, &self.file_path)?;
         writeln!(formatter, ":{}:{}", self.line_number, self.col_number)?;
         writeln!(formatter, "{:>width$} |", "", width = line_len)?;
-        write!(formatter, "{:>width$} | ", self.line_number, width = line_len)?;
+        write!(
+            formatter,
+            "{:>width$} | ",
+            self.line_number,
+            width = line_len
+        )?;
         write_sanitized_token(formatter, &self.line_snippet)?;
         formatter.write_char('\n')?;
         write!(formatter, "{:>width$} | ", "", width = line_len)?;
@@ -730,7 +735,9 @@ impl RecipeErrorKind {
     #[must_use]
     pub const fn annotation_text(self) -> &'static str {
         match self {
-            Self::ContainerNotFound => "target container does not match any container in this recipe",
+            Self::ContainerNotFound => {
+                "target container does not match any container in this recipe"
+            }
             Self::ContainerNotRunning => "resolved container is not currently running in Podman",
             Self::DuplicateBlock => "block is already defined in this recipe",
             Self::DuplicateDirective => "directive may only appear once in this block",
@@ -1427,7 +1434,10 @@ mod tests {
             (CliErrorKind::MissingTarget, "missing required target"),
             (CliErrorKind::TargetNotFound, "target does not exist"),
             (CliErrorKind::TooManyArguments, "too many positional"),
-            (CliErrorKind::UnexpectedFlag, "not valid for the selected mode"),
+            (
+                CliErrorKind::UnexpectedFlag,
+                "not valid for the selected mode",
+            ),
             (CliErrorKind::UnknownAction, "unknown mode or action"),
             (CliErrorKind::UnknownFlag, "unknown command-line flag"),
         ];
@@ -1448,7 +1458,10 @@ mod tests {
             (ConfigErrorKind::DuplicateBlock, "duplicate block"),
             (ConfigErrorKind::DuplicateDirective, "duplicate directive"),
             (ConfigErrorKind::EmptyGroupsBlock, "no recipe groups"),
-            (ConfigErrorKind::InvalidArgumentCount, "invalid number of arguments"),
+            (
+                ConfigErrorKind::InvalidArgumentCount,
+                "invalid number of arguments",
+            ),
             (ConfigErrorKind::InvalidBoolean, "invalid boolean"),
             (ConfigErrorKind::InvalidGroupTarget, "invalid target"),
             (ConfigErrorKind::InvalidPath, "invalid path"),
@@ -1535,12 +1548,9 @@ mod tests {
         assert_eq!(empty_single_diagnostic.annotation_carets, "         ^^");
 
         // Escaped double-quoted token matching ("bad\ndesc" -> sanitized "bad desc")
-        let escaped_token = RecipeError::with_token(
-            RecipeErrorKind::InvalidDescription,
-            1,
-            "bad\ndesc",
-        )
-        .with_diagnostic("    description \"bad\\ndesc\" # comment\n", "./recipe.pod");
+        let escaped_token =
+            RecipeError::with_token(RecipeErrorKind::InvalidDescription, 1, "bad\ndesc")
+                .with_diagnostic("    description \"bad\\ndesc\" # comment\n", "./recipe.pod");
         let escaped_diagnostic = escaped_token.diagnostic.as_ref().unwrap();
         assert_eq!(escaped_diagnostic.col_number, 17);
         assert_eq!(
@@ -1553,7 +1563,10 @@ mod tests {
             .with_diagnostic("    command command {\n", "./recipe.pod");
         let collision_diagnostic = collision.diagnostic.as_ref().unwrap();
         assert_eq!(collision_diagnostic.col_number, 13);
-        assert_eq!(collision_diagnostic.annotation_carets, "            ^^^^^^^");
+        assert_eq!(
+            collision_diagnostic.annotation_carets,
+            "            ^^^^^^^"
+        );
 
         // Duplicate group directive ("alpha beta alpha") highlights leading directive token
         let duplicate_group =
@@ -1700,11 +1713,7 @@ mod tests {
                 "missing directive argument",
                 "    editor\n",
             ),
-            (
-                PslErrorKind::UnclosedBlock,
-                "unclosed block",
-                "general {\n",
-            ),
+            (PslErrorKind::UnclosedBlock, "unclosed block", "general {\n"),
             (
                 PslErrorKind::UnexpectedClosingBrace,
                 "unexpected closing brace",
@@ -1746,7 +1755,10 @@ mod tests {
 
         // Single-quoted literal backslash preceding invalid double-quoted escape
         let single_then_bad_escape = PslError::new(PslErrorKind::InvalidEscapeSequence, 1)
-            .with_diagnostic("    command 'C:\\path\\ok' \"bad\\xescape\"\n", "./test.pod");
+            .with_diagnostic(
+                "    command 'C:\\path\\ok' \"bad\\xescape\"\n",
+                "./test.pod",
+            );
         let escape_diagnostic = single_then_bad_escape.diagnostic.as_ref().unwrap();
         assert_eq!(escape_diagnostic.col_number, 30);
         assert_eq!(
@@ -1826,14 +1838,8 @@ mod tests {
                 "no 'container' blocks",
             ),
             (RecipeErrorKind::MissingPodBlock, "missing 'pod' block"),
-            (
-                RecipeErrorKind::MissingPodName,
-                "missing 'name' directive",
-            ),
-            (
-                RecipeErrorKind::MissingPodPath,
-                "missing 'path' directive",
-            ),
+            (RecipeErrorKind::MissingPodName, "missing 'name' directive"),
+            (RecipeErrorKind::MissingPodPath, "missing 'path' directive"),
             (
                 RecipeErrorKind::MissingPodRegistry,
                 "missing 'registry' directive",

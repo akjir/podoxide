@@ -36,10 +36,7 @@ const UNREFERENCED_PREFIX_CHARS: usize = 4;
 
 /// Entry in the rendered group hierarchy output queue.
 enum GroupOutputLine {
-    Status {
-        line: String,
-        status: &'static str,
-    },
+    Status { line: String, status: &'static str },
     Text(String),
 }
 
@@ -372,10 +369,7 @@ fn write_directories_section<W: Write>(
     let absolute_recipes_path = fs::get_absolute_path(&config.recipes.path);
     let recipes_line = format!("  {:<14}{}", "Recipes:", absolute_recipes_path.display());
 
-    let max_directory_line_length = pods_line
-        .chars()
-        .count()
-        .max(recipes_line.chars().count());
+    let max_directory_line_length = pods_line.chars().count().max(recipes_line.chars().count());
     let directory_target_column =
         DEFAULT_TARGET_COLUMN.max(max_directory_line_length.saturating_add(1));
 
@@ -437,10 +431,7 @@ fn write_missing_recipes_summary<W: Write>(missing_recipes: &BTreeSet<&str>, std
     if missing_recipes.len() == 1
         && let Some(&single) = missing_recipes.iter().next()
     {
-        log::write_print(
-            stdout,
-            &format!("- Recipe file for '{single}' not found!"),
-        );
+        log::write_print(stdout, &format!("- Recipe file for '{single}' not found!"));
         return;
     }
     let capacity = bounded_capacity(missing_recipes.len(), MAX_COLLECTION_PREALLOC);
@@ -780,11 +771,15 @@ recipes {
         assert!(output.contains("[OK, 2 known and 2 unreferenced recipes found]\n"));
         assert!(output.contains("  • all\n"));
         assert!(output.contains("    └── missing_recipe"));
-        assert!(output.contains("  • cycle_a\n    └── @cycle_b\n        └── @cycle_a\n            └── [MISSING GROUP]\n"));
+        assert!(output.contains(
+            "  • cycle_a\n    └── @cycle_b\n        └── @cycle_a\n            └── [MISSING GROUP]\n"
+        ));
         assert!(output.contains("  • database\n"));
         assert!(output.contains("    ├── recipe_001_empty"));
         assert!(output.contains("[ERROR]\n"));
-        assert!(output.contains("  • meta\n    └── @stack\n        ├── @missing_mid\n        │   └── [MISSING GROUP]\n"));
+        assert!(output.contains(
+            "  • meta\n    └── @stack\n        ├── @missing_mid\n        │   └── [MISSING GROUP]\n"
+        ));
         assert!(output.contains("        ├── @database\n        │   ├── recipe_001_empty"));
         assert!(output.contains("  • stack\n"));
         assert!(output.contains("    ├── @missing_mid\n    │   └── [MISSING GROUP]\n"));

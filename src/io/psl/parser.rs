@@ -1139,11 +1139,15 @@ pod_utf8 arg_äöü {
             Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
         );
         assert_eq!(
-            parse_psl("general {\n    option '--health-cmd='redis-cli ping | grep -q PONG || exit 1''\n}\n"),
+            parse_psl(
+                "general {\n    option '--health-cmd='redis-cli ping | grep -q PONG || exit 1''\n}\n"
+            ),
             Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
         );
         assert_eq!(
-            parse_psl("general {\n    option \"--health-cmd=\"redis-cli ping | grep -q PONG || exit 1\"\"\n}\n"),
+            parse_psl(
+                "general {\n    option \"--health-cmd=\"redis-cli ping | grep -q PONG || exit 1\"\"\n}\n"
+            ),
             Err(PslError::new(PslErrorKind::UnexpectedToken, 2))
         );
         assert_eq!(

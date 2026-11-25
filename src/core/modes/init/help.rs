@@ -76,9 +76,11 @@ mod tests {
         assert!(output.contains("OPTIONS:\n"));
         assert!(!output.contains("--config"));
         assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(output.contains(
-            "  --simulate         preview generated commands without executing them\n"
-        ));
+        assert!(
+            output.contains(
+                "  --simulate         preview generated commands without executing them\n"
+            )
+        );
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains(
             "  create             initialize default configuration and recipe (default)\n"

@@ -1,0 +1,9 @@
+edition = "2024"
+style_edition = "2024"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+newline_style = "Unix"
+# Preserve AGENTS.md section 2 rule 4 strict ASCII import order (crate::, self::, super::).
+reorder_imports = false
+reorder_modules = true

@@ -193,7 +193,10 @@ mod tests {
 
         for (arguments, expected_stdout) in bypass_cases {
             let (success, stdout, stderr) = run_cli_in_dir(working_dir, arguments, b"");
-            assert!(success, "expected bypass {arguments:?} to succeed: {stderr}");
+            assert!(
+                success,
+                "expected bypass {arguments:?} to succeed: {stderr}"
+            );
             assert!(
                 stdout.contains(expected_stdout),
                 "expected {expected_stdout:?} in stdout for {arguments:?}, got {stdout:?}"
@@ -245,8 +248,7 @@ mod tests {
                 "expected empty stdout for failed {arguments:?}, got {stdout:?}"
             );
             assert_eq!(
-                stderr,
-                "ERROR: Config error: configuration file not found: './pods.conf'\n",
+                stderr, "ERROR: Config error: configuration file not found: './pods.conf'\n",
                 "unexpected stderr for {arguments:?}"
             );
         }
@@ -299,7 +301,10 @@ mod tests {
 
         for (rec_args, expected_stdout) in [
             (&["rec", "list"][..], "Recipes:\n"),
-            (&["rec", "inspect", "recipe"][..], "Recipe 'recipe' is valid.\n"),
+            (
+                &["rec", "inspect", "recipe"][..],
+                "Recipe 'recipe' is valid.\n",
+            ),
             (&["rec", "show", "recipe"][..], "  6: pod example-stack {\n"),
             (&["rec", "edit", "recipe"][..], ""),
             (&["status"][..], "example-stack-app"),
@@ -413,7 +418,10 @@ mod tests {
                 &["update", "recipe/db"],
                 "Update Summary:\n  Simulated (1):\n    - example-stack-db (docker.io/example/db-server:latest)\n\nSimulated 1 container.\n",
             ),
-            (&["cmd", "list", "recipe"], "Commands for recipe 'recipe':\n"),
+            (
+                &["cmd", "list", "recipe"],
+                "Commands for recipe 'recipe':\n",
+            ),
             (
                 &["cmd", "exec", "recipe", "migrate"],
                 "podman exec -it -u dbuser example-stack-db db-cli -U dbuser -d app -f /migrations/run.sql\n",
@@ -425,10 +433,7 @@ mod tests {
                 &["con", "recipe/db"],
                 "podman exec -it example-stack-db sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'\n",
             ),
-            (
-                &["img", "prune"],
-                "Prune images: \npodman image prune -f\n",
-            ),
+            (&["img", "prune"], "Prune images: \npodman image prune -f\n"),
             (
                 &["img", "prune", "--all"],
                 "Prune images: \npodman image prune -f -a\n",
@@ -510,9 +515,10 @@ mod tests {
             "subprocess failed: {stderr_output}"
         );
         let canonical_working_dir = fs::canonicalize(&working_dir).unwrap();
-        assert!(stderr_output.contains(
-            "ERROR: Config error: configuration file not found: './pods.conf'"
-        ));
+        assert!(
+            stderr_output
+                .contains("ERROR: Config error: configuration file not found: './pods.conf'")
+        );
         assert!(stderr_output.contains(&format!(
             "INFO: Initializing workspace '{}'.",
             canonical_working_dir.display()
@@ -676,15 +682,8 @@ mod tests {
 
         let mut yes_input = Cursor::new(b"yes\n".to_vec());
         assert!(
-            verify_environment_with(
-                true,
-                true,
-                true,
-                &mut yes_input,
-                &mut stdout,
-                &mut stderr
-            )
-            .is_ok()
+            verify_environment_with(true, true, true, &mut yes_input, &mut stdout, &mut stderr)
+                .is_ok()
         );
 
         let mut no_input = Cursor::new(b"no\n".to_vec());

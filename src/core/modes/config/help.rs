@@ -79,9 +79,11 @@ mod tests {
         assert!(output.contains("OPTIONS:\n"));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(output.contains(
-            "  --simulate         preview generated commands without executing them\n"
-        ));
+        assert!(
+            output.contains(
+                "  --simulate         preview generated commands without executing them\n"
+            )
+        );
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains("  help               display this help and exit\n"));
         assert!(output.contains("  edit               edit config\n"));

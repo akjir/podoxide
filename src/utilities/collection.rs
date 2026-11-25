@@ -285,7 +285,13 @@ mod tests {
         );
         assert_eq!(
             env_args,
-            vec!["--env", "FOO=bar baz", "--env", "BAR=baz qux", "--trimmed-single"]
+            vec![
+                "--env",
+                "FOO=bar baz",
+                "--env",
+                "BAR=baz qux",
+                "--trimmed-single"
+            ]
         );
     }
 

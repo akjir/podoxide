@@ -85,10 +85,11 @@ mod tests {
         let mut context = Context::new();
         context.config.editor = String::from("vim");
         context.config.recipes.path = PathBuf::from("./tests/pods/recipes");
-        context.config.recipes.groups.insert(
-            String::from("all"),
-            vec![String::from("recipe_002_no_pod")],
-        );
+        context
+            .config
+            .recipes
+            .groups
+            .insert(String::from("all"), vec![String::from("recipe_002_no_pod")]);
         context.config.simulate = true;
         context.parameters = vec![String::from("recipe_002_no_pod")];
         context

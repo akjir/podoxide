@@ -120,22 +120,25 @@ mod tests {
         assert!(output.contains(
             "  exec               execute a command defined in a recipe (default when COMMAND is provided)\n"
         ));
-        assert!(output.contains(
-            "  list               list all valid commands for a recipe (default)\n"
-        ));
+        assert!(
+            output
+                .contains("  list               list all valid commands for a recipe (default)\n")
+        );
         assert!(output.contains("  help               display this help text\n"));
         assert!(output.contains("OPTIONS:\n"));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(output.contains(
-            "  --simulate         preview generated commands without executing them\n"
-        ));
+        assert!(
+            output.contains(
+                "  --simulate         preview generated commands without executing them\n"
+            )
+        );
         assert!(output.contains("RECIPE:\n"));
         assert!(output.contains("  *                  name of the recipe\n"));
         assert!(output.contains("COMMAND|INDEX:\n"));
-        assert!(output.contains(
-            "  *                  command by name defined in recipe to execute\n"
-        ));
+        assert!(
+            output.contains("  *                  command by name defined in recipe to execute\n")
+        );
         assert!(output.contains(
             "  <number>           command by numeric index defined in recipe to execute\n"
         ));

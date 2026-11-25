@@ -104,7 +104,8 @@ pub fn get_absolute_path(path: &Path) -> PathBuf {
 /// exceeds [`MAX_DIRECTORY_ENTRIES`].
 pub fn list_directory(path: &Path, extension: Option<&str>) -> Result<Vec<String>, PodError> {
     let working_path = resolve_working_path(path);
-    let read_dir = fs::read_dir(working_path.as_ref()).map_err(|error| io_path_error(path, error))?;
+    let read_dir =
+        fs::read_dir(working_path.as_ref()).map_err(|error| io_path_error(path, error))?;
     let mut entries = Vec::with_capacity(INITIAL_DIRECTORY_CAPACITY.min(MAX_DIRECTORY_ENTRIES));
     for (scanned_count, entry_result) in read_dir.enumerate() {
         if scanned_count >= MAX_DIRECTORY_ENTRIES {
@@ -129,7 +130,9 @@ pub fn read_file(path: &Path) -> Result<String, PodError> {
         fs::metadata(working_path.as_ref()).map_err(|error| io_path_error(path, error))?;
     ensure_regular_file(path, &path_metadata)?;
     let file = File::open(working_path.as_ref()).map_err(|error| io_path_error(path, error))?;
-    let metadata = file.metadata().map_err(|error| io_path_error(path, error))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| io_path_error(path, error))?;
     ensure_regular_file(path, &metadata)?;
     if metadata.len() > MAX_FILE_BYTES as u64 {
         return Err(PodError::from(PslError::new(

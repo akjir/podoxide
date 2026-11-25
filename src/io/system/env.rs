@@ -147,7 +147,13 @@ mod tests {
         let mut crlf_err = Vec::new();
         assert!(confirm_elevated_execution(&mut crlf_yes, &mut crlf_out, &mut crlf_err).is_ok());
 
-        for rejected in [&b"no\n"[..], &b"y\n"[..], &b"YES\n"[..], &b"\n"[..], &b""[..]] {
+        for rejected in [
+            &b"no\n"[..],
+            &b"y\n"[..],
+            &b"YES\n"[..],
+            &b"\n"[..],
+            &b""[..],
+        ] {
             let mut reader = Cursor::new(rejected.to_vec());
             let mut out = Vec::new();
             let mut err = Vec::new();
@@ -162,7 +168,11 @@ mod tests {
         let mut oversized_out = Vec::new();
         let mut oversized_err = Vec::new();
         assert_eq!(
-            confirm_elevated_execution(&mut oversized_reader, &mut oversized_out, &mut oversized_err),
+            confirm_elevated_execution(
+                &mut oversized_reader,
+                &mut oversized_out,
+                &mut oversized_err
+            ),
             Err(SystemError::AbortedExecution)
         );
     }

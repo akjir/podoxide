@@ -133,9 +133,9 @@ mod tests {
 
     use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
     use super::{
-        MAX_LOG_MESSAGE_BYTES, debug, info, is_debug_enabled, pod_error, print,
-        set_debug_enabled, write_debug, write_error, write_info, write_numbered_lines,
-        write_pod_error, write_print, write_warning,
+        MAX_LOG_MESSAGE_BYTES, debug, info, is_debug_enabled, pod_error, print, set_debug_enabled,
+        write_debug, write_error, write_info, write_numbered_lines, write_pod_error, write_print,
+        write_warning,
     };
 
     struct FailingWriter;

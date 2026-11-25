@@ -103,8 +103,7 @@ pub const fn is_identifier_start(byte: u8) -> bool {
 #[inline]
 #[must_use]
 pub const fn is_safe_shell_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric()
-        || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'=' | b'@')
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/' | b':' | b'=' | b'@')
 }
 
 /// Evaluates whether `target` is a valid `@<group>` reference or recipe stem identifier.
@@ -201,7 +200,9 @@ pub fn parse_ascii_u32(segment: &str) -> Option<u32> {
 #[inline]
 #[must_use]
 pub const fn sanitize_char(character: char) -> char {
-    if character.is_control() || is_bidi_control(character) {
+    if matches!(character, '\u{0000}'..='\u{001F}' | '\u{007F}'..='\u{009F}')
+        || is_bidi_control(character)
+    {
         return ' ';
     }
     character

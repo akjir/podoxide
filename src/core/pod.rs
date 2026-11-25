@@ -28,9 +28,7 @@ use crate::core::update::{
 };
 use crate::error::{PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::podman::{self, CreatePod, PullOutcome};
-use crate::utilities::collection::{
-    MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value,
-};
+use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity, is_valid_option_value};
 use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_token};
 
 /// Pod configuration and custom command definitions from the `pod` block of a `.pod` recipe.
@@ -853,10 +851,7 @@ mod tests {
         let mut ensure_out = Vec::new();
         pod.ensure_created_with(true, |_| false, &mut ensure_out, &mut stderr)
             .unwrap();
-        assert_eq!(
-            std::str::from_utf8(&ensure_out).unwrap().lines().count(),
-            2
-        );
+        assert_eq!(std::str::from_utf8(&ensure_out).unwrap().lines().count(), 2);
         pod.ensure_created_with(
             true,
             |_| panic!("pod_exists should not be called once pod is marked created"),
@@ -864,10 +859,7 @@ mod tests {
             &mut stderr,
         )
         .unwrap();
-        assert_eq!(
-            std::str::from_utf8(&ensure_out).unwrap().lines().count(),
-            2
-        );
+        assert_eq!(std::str::from_utf8(&ensure_out).unwrap().lines().count(), 2);
 
         // When pod_exists returns true on a fresh Pod, ensure_created_with skips pod creation and caches the state.
         pod.remove_with(true, &mut stdout, &mut stderr).unwrap();
@@ -1154,9 +1146,7 @@ mod tests {
         let down_out_text = String::from_utf8(down_stdout).unwrap();
         assert!(down_out_text.contains("Stop container 'podoxide_missing_pod_999999-2': "));
         assert!(down_out_text.contains("Stop container 'podoxide_missing_pod_999999-1': "));
-        assert!(
-            down_out_text.contains("Stop pod 'Order Stack' ('podoxide_missing_pod_999999'): ")
-        );
+        assert!(down_out_text.contains("Stop pod 'Order Stack' ('podoxide_missing_pod_999999'): "));
         assert!(down_out_text.contains("Remove container 'podoxide_missing_pod_999999-2': "));
         assert!(down_out_text.contains("Remove container 'podoxide_missing_pod_999999-1': "));
         assert!(
@@ -1294,10 +1284,25 @@ mod tests {
         let mut broken_stdout = BrokenPipeWriter;
         let mut stderr = Vec::new();
 
-        assert!(recipe.pod.create_with(true, &mut broken_stdout, &mut stderr).is_ok());
+        assert!(
+            recipe
+                .pod
+                .create_with(true, &mut broken_stdout, &mut stderr)
+                .is_ok()
+        );
         assert!(start_with(&recipe, true, &mut broken_stdout, &mut stderr).is_ok());
-        assert!(recipe.pod.stop_with(true, &mut broken_stdout, &mut stderr).is_ok());
-        assert!(recipe.pod.remove_with(true, &mut broken_stdout, &mut stderr).is_ok());
+        assert!(
+            recipe
+                .pod
+                .stop_with(true, &mut broken_stdout, &mut stderr)
+                .is_ok()
+        );
+        assert!(
+            recipe
+                .pod
+                .remove_with(true, &mut broken_stdout, &mut stderr)
+                .is_ok()
+        );
         assert!(pull_with(&recipe, true, &mut broken_stdout, &mut stderr).is_ok());
         assert!(update_with(&recipe, true, &mut broken_stdout, &mut stderr).is_ok());
 
@@ -1344,7 +1349,13 @@ mod tests {
             assert!(stdout.is_empty());
         }
 
-        for invalid_option in ["", "   ", "--flag\nspoof", "--flag\u{202E}spoof", "--flag\0spoof"] {
+        for invalid_option in [
+            "",
+            "   ",
+            "--flag\nspoof",
+            "--flag\u{202E}spoof",
+            "--flag\0spoof",
+        ] {
             let mut bad_pod = base_pod.clone();
             bad_pod.line = 13;
             bad_pod.options = vec![String::from(invalid_option)];

@@ -285,8 +285,8 @@ Commands for recipe 'recipe_006_commands':
     #[test]
     fn list_with_rejects_missing_and_unregistered_targets() {
         let mut context = Context::new();
-        context.config = Config::from_str("recipes {\n    groups {\n        all recipe\n    }\n}")
-            .unwrap();
+        context.config =
+            Config::from_str("recipes {\n    groups {\n        all recipe\n    }\n}").unwrap();
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();

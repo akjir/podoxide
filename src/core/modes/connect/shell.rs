@@ -21,9 +21,7 @@ use crate::core::context::Context;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::podman::{self, ExecContainer, SHELL_FALLBACK_COMMAND};
-use crate::utilities::string::{
-    is_valid_pod_or_container_name, is_valid_target_segment, is_valid_text,
-};
+use crate::utilities::string::{is_valid_pod_or_container_name, is_valid_target_segment, is_valid_text};
 
 /// Output prefix printed before simulating or executing the interactive shell command.
 const CONNECT_PREFIX: &str = "Execute connect command: ";
@@ -58,12 +56,7 @@ const DEFAULT_CONTAINER_INDEX: &str = "1";
 pub fn handle(context: &Context) -> Result<(), PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
-    execute_with(
-        context,
-        podman::container_running,
-        &mut stdout,
-        &mut stderr,
-    )
+    execute_with(context, podman::container_running, &mut stdout, &mut stderr)
 }
 
 /// Resolves the target container from `context`, checks runtime status via `is_running`, and runs `podman exec -it`.
@@ -345,8 +338,7 @@ container {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
 
-        let missing_error =
-            execute_with(&context, |_| true, &mut stdout, &mut stderr).unwrap_err();
+        let missing_error = execute_with(&context, |_| true, &mut stdout, &mut stderr).unwrap_err();
         match missing_error {
             PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::MissingTarget),
             other => panic!("expected PodError::Cli(MissingTarget), got {other:?}"),

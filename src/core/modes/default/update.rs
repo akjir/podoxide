@@ -199,8 +199,9 @@ where
 {
     match kind {
         SummaryKind::ImagePull => {
-            let record =
-                container::pull_with_runner(container, pod, "", simulate, pull_image, stdout, stderr)?;
+            let record = container::pull_with_runner(
+                container, pod, "", simulate, pull_image, stdout, stderr,
+            )?;
             Ok(ContainerUpdateResult {
                 action: UpdateAction::UpToDate,
                 record,
@@ -265,10 +266,8 @@ container *app {
 ";
 
     fn create_update_workspace(suffix: &str) -> (PathBuf, Config) {
-        let temp_dir = env::temp_dir().join(format!(
-            "podoxide_update_test_{}_{suffix}",
-            process::id()
-        ));
+        let temp_dir =
+            env::temp_dir().join(format!("podoxide_update_test_{}_{suffix}", process::id()));
         let _ = std_fs::remove_dir_all(&temp_dir);
         let recipes_dir = temp_dir.join("recipes");
         std_fs::create_dir_all(&recipes_dir).unwrap();
@@ -468,12 +467,15 @@ recipes {
         }
 
         // Invalid later recipe aborts upfront before pulling earlier recipes.
-        fs::write_file(&context.config.recipes.path.join("broken.pod"), "invalid {{{ psl").unwrap();
-        context
-            .config
-            .recipes
-            .groups
-            .insert(String::from("partial_bad"), vec![String::from("stack"), String::from("broken")]);
+        fs::write_file(
+            &context.config.recipes.path.join("broken.pod"),
+            "invalid {{{ psl",
+        )
+        .unwrap();
+        context.config.recipes.groups.insert(
+            String::from("partial_bad"),
+            vec![String::from("stack"), String::from("broken")],
+        );
         context.parameters = vec![String::from("@partial_bad")];
         let recipe_err = execute_update_with(
             &context,

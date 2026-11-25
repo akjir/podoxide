@@ -24,16 +24,12 @@ use crate::core::log;
 use crate::error::{ConfigError, ConfigErrorKind, PodError};
 use crate::io::psl::{PslBlock, PslDirective, PslDocument, PslStatement, parse_psl};
 use crate::io::system::fs;
-use crate::utilities::collection::{
-    MAX_COLLECTION_PREALLOC, bounded_capacity, dedup_preserve_order,
-};
+use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity, dedup_preserve_order};
 use crate::utilities::path::{
     extract_config_stem, has_parent_dir, is_valid_directory_path, is_valid_editor_value,
     sanitize_path_token,
 };
-use crate::utilities::string::{
-    is_valid_group_target, is_valid_identifier, is_valid_recipe_identifier,
-};
+use crate::utilities::string::{is_valid_group_target, is_valid_identifier, is_valid_recipe_identifier};
 
 /// Default configuration name when `--config` is not specified.
 pub const DEFAULT_CONFIG_NAME: &str = "pods";
@@ -504,13 +500,7 @@ fn expand_group_target<'a>(
     }
     visiting.insert(group_name);
     for entry in entries {
-        expand_single_group_entry(
-            config,
-            entry.as_str(),
-            visiting,
-            expanded_groups,
-            collected,
-        )?;
+        expand_single_group_entry(config, entry.as_str(), visiting, expanded_groups, collected)?;
     }
     visiting.remove(group_name);
     expanded_groups.insert(group_name);
@@ -640,7 +630,10 @@ fn parse_general_block(config: &mut Config, block: &PslBlock<'_>) -> Result<(), 
 }
 
 /// Parses and validates the `groups` sub-block inside `recipes`, ensuring it is non-empty and acyclic.
-fn parse_groups_block(recipes: &mut RecipesConfig, block: &PslBlock<'_>) -> Result<(), ConfigError> {
+fn parse_groups_block(
+    recipes: &mut RecipesConfig,
+    block: &PslBlock<'_>,
+) -> Result<(), ConfigError> {
     ensure_no_block_arguments(block)?;
     if block.statements.is_empty() {
         return Err(ConfigError::new(
@@ -678,7 +671,10 @@ fn parse_pods_block(pods: &mut PodsConfig, block: &PslBlock<'_>) -> Result<(), C
 }
 
 /// Parses all statements inside the `recipes` block and verifies that a `groups` sub-block is present.
-fn parse_recipes_block(recipes: &mut RecipesConfig, block: &PslBlock<'_>) -> Result<(), ConfigError> {
+fn parse_recipes_block(
+    recipes: &mut RecipesConfig,
+    block: &PslBlock<'_>,
+) -> Result<(), ConfigError> {
     let mut seen_items = 0_u8;
     for statement in &block.statements {
         apply_recipes_statement(recipes, statement, &mut seen_items)?;
@@ -764,7 +760,10 @@ fn verify_group_acyclic<'a>(
     let Some(targets) = groups.get(group_name) else {
         return Ok(());
     };
-    let line = group_lines.get(group_name).copied().unwrap_or(fallback_line);
+    let line = group_lines
+        .get(group_name)
+        .copied()
+        .unwrap_or(fallback_line);
     visiting.insert(group_name);
     verify_group_targets(targets, groups, group_lines, visiting, verified, line)?;
     visiting.remove(group_name);
@@ -1159,10 +1158,7 @@ recipes {
                 let diagnostic = config_error.diagnostic.as_ref().unwrap();
                 assert_eq!(diagnostic.line_number, 7);
                 assert_eq!(diagnostic.col_number, 20);
-                assert_eq!(
-                    diagnostic.annotation_carets,
-                    "                   ^^^^^^"
-                );
+                assert_eq!(diagnostic.annotation_carets, "                   ^^^^^^");
             }
             other => panic!("expected InvalidGroupTarget, got {other:?}"),
         }
@@ -1176,7 +1172,10 @@ recipes {
         assert_eq!(root_config.editor, "vim");
         assert!(root_config.simulate);
         assert_eq!(root_config.pods.path, PathBuf::from("./pods"));
-        assert_eq!(root_config.recipes.path, PathBuf::from(DEFAULT_RECIPES_PATH));
+        assert_eq!(
+            root_config.recipes.path,
+            PathBuf::from(DEFAULT_RECIPES_PATH)
+        );
         assert_eq!(
             root_config.recipes.groups.get("all"),
             Some(&vec![String::from("recipe")])
@@ -1215,11 +1214,17 @@ recipes {
         assert_eq!(loaded.recipes.groups.len(), 2);
         assert_eq!(
             loaded.recipes.groups.get("backend"),
-            Some(&vec![String::from("db-server"), String::from("cache-server")])
+            Some(&vec![
+                String::from("db-server"),
+                String::from("cache-server")
+            ])
         );
         assert_eq!(
             loaded.recipes.groups.get("all"),
-            Some(&vec![String::from("@backend"), String::from("web-frontend")])
+            Some(&vec![
+                String::from("@backend"),
+                String::from("web-frontend")
+            ])
         );
 
         let missing_path = temp_dir.join("missing.conf");
@@ -1272,7 +1277,10 @@ recipes {
             config.recipes.groups.get("default"),
             Some(&vec![String::from("example-app")])
         );
-        assert_eq!(RecipesConfig::new().path, PathBuf::from(DEFAULT_RECIPES_PATH));
+        assert_eq!(
+            RecipesConfig::new().path,
+            PathBuf::from(DEFAULT_RECIPES_PATH)
+        );
     }
 
     #[test]
@@ -1331,8 +1339,7 @@ recipes {
         let invalid_utf8_os_string = OsString::from_vec(vec![
             b'/', b't', b'm', b'p', b'/', 0xff, 0xfe, b'.', b'c', b'o', b'n', b'f',
         ]);
-        let invalid_utf8_error =
-            Config::read_file(Path::new(&invalid_utf8_os_string)).unwrap_err();
+        let invalid_utf8_error = Config::read_file(Path::new(&invalid_utf8_os_string)).unwrap_err();
         match invalid_utf8_error {
             PodError::Config(config_error) => {
                 assert_eq!(config_error.kind, ConfigErrorKind::InvalidPath);
@@ -1386,9 +1393,8 @@ recipes {
             "@-bad",
             "\"app\\\\evil\"",
         ] {
-            let input = format!(
-                "recipes {{\n    groups {{\n        all {malicious_target}\n    }}\n}}"
-            );
+            let input =
+                format!("recipes {{\n    groups {{\n        all {malicious_target}\n    }}\n}}");
             assert_config_error(&input, ConfigErrorKind::InvalidGroupTarget);
         }
 
@@ -1655,7 +1661,8 @@ recipes {
             "\"space target\"",
             "\"newline\\ntarget\"",
         ] {
-            let input = format!("recipes {{\n    groups {{\n        all {invalid_target}\n    }}\n}}");
+            let input =
+                format!("recipes {{\n    groups {{\n        all {invalid_target}\n    }}\n}}");
             assert_config_error(&input, ConfigErrorKind::InvalidGroupTarget);
         }
 

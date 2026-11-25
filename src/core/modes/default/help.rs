@@ -54,10 +54,7 @@ fn write_actions_section<W: Write>(writer: &mut W) {
         writer,
         "  restart            stop and start an existing pod",
     );
-    log::write_print(
-        writer,
-        "  start              start an existing stopped pod",
-    );
+    log::write_print(writer, "  start              start an existing stopped pod");
     log::write_print(
         writer,
         "  status             display status of pods and containers",
@@ -171,22 +168,24 @@ mod tests {
         assert!(output.contains(
             "  connect (con)      connect to a running container with an interactive shell\n"
         ));
-        assert!(output.contains(
-            "  image (img)        manage orphaned and dangling container images\n"
-        ));
-        assert!(output.contains(
-            "  init               initialize default configuration and recipe\n"
-        ));
-        assert!(output.contains(
-            "  logs (log)         show or follow logs for a pod or container\n"
-        ));
+        assert!(
+            output.contains("  image (img)        manage orphaned and dangling container images\n")
+        );
+        assert!(
+            output.contains("  init               initialize default configuration and recipe\n")
+        );
+        assert!(
+            output.contains("  logs (log)         show or follow logs for a pod or container\n")
+        );
         assert!(output.contains("  recipe (rec)       inspect and edit recipes\n"));
         assert!(output.contains("OPTIONS:\n"));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(output.contains(
-            "  --simulate         preview generated commands without executing them\n"
-        ));
+        assert!(
+            output.contains(
+                "  --simulate         preview generated commands without executing them\n"
+            )
+        );
         assert!(output.contains(
             "  --all              include all unmanaged podman containers (status only)\n"
         ));
@@ -195,9 +194,7 @@ mod tests {
         ));
         assert!(output.contains("Valid in default mode only:\n"));
         assert!(output.contains("ACTIONS:\n"));
-        assert!(output.contains(
-            "  create             create a new pod without starting it\n"
-        ));
+        assert!(output.contains("  create             create a new pod without starting it\n"));
         assert!(output.contains("  down               stop and remove a running pod\n"));
         assert!(output.contains("  help               display this help and exit\n"));
         assert!(output.contains("  reload             remove and recreate a pod\n"));

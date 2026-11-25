@@ -121,9 +121,11 @@ mod tests {
         assert!(output.contains("OPTIONS:\n"));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(output.contains(
-            "  --simulate         preview generated commands without executing them\n"
-        ));
+        assert!(
+            output.contains(
+                "  --simulate         preview generated commands without executing them\n"
+            )
+        );
         assert!(output.contains("TARGET:\n"));
         assert!(output.contains(
             "  <recipe>             connect to the container (if the recipe has exactly 1 container)\n"
@@ -131,9 +133,11 @@ mod tests {
         assert!(output.contains(
             "  <recipe>/<container> connect to a specific container (index, relative, absolute)\n"
         ));
-        assert!(output.contains(
-            "  <absolute_name>      connect directly to an absolute container name\n"
-        ));
+        assert!(
+            output.contains(
+                "  <absolute_name>      connect directly to an absolute container name\n"
+            )
+        );
 
         let context = Context::new();
         assert!(handle(&context).is_ok());

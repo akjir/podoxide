@@ -514,10 +514,10 @@ container absolute_db {
         trailing_escaped_space.name = String::from("trailing_escaped_space");
         trailing_escaped_space.container = String::from("*db");
         trailing_escaped_space.execute = String::from("script.sh arg\\ ");
-        recipe
-            .pod
-            .commands
-            .insert(String::from("trailing_escaped_space"), trailing_escaped_space);
+        recipe.pod.commands.insert(
+            String::from("trailing_escaped_space"),
+            trailing_escaped_space,
+        );
 
         let mut container = Container::new();
         container.name = String::from("*db");

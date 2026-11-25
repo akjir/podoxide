@@ -381,9 +381,8 @@ mod tests {
     use crate::utilities::format;
     use super::{
         ExecMode, ExecOptions, SPINNER_FRAMES, SPINNER_HIDE_CURSOR, SPINNER_MAX_PREFIX_BYTES,
-        SPINNER_MAX_SUMMARY_BYTES, SPINNER_SHOW_CURSOR, SpinnerStatus, build_command,
-        exec_capture, exec_editor_with, exec_spinner_with, exec_with, poll_child_status,
-        warn_on_exit_failure,
+        SPINNER_MAX_SUMMARY_BYTES, SPINNER_SHOW_CURSOR, SpinnerStatus, build_command, exec_capture,
+        exec_editor_with, exec_spinner_with, exec_with, poll_child_status, warn_on_exit_failure,
     };
 
     #[test]
@@ -453,14 +452,9 @@ mod tests {
             "./.conf",
             "pods\n.conf",
         ] {
-            let error = exec_editor_with(
-                "vim",
-                invalid_path,
-                true,
-                &mut Vec::new(),
-                &mut Vec::new(),
-            )
-            .unwrap_err();
+            let error =
+                exec_editor_with("vim", invalid_path, true, &mut Vec::new(), &mut Vec::new())
+                    .unwrap_err();
             assert!(
                 matches!(error, PodError::Io(ref io_err) if io_err.kind() == io::ErrorKind::InvalidInput),
                 "expected InvalidInput for file_path {invalid_path:?}"
@@ -719,13 +713,13 @@ mod tests {
         )
         .unwrap();
         let spinner_fail_text = String::from_utf8(spinner_fail_stdout).unwrap();
-        assert!(spinner_fail_text.starts_with(
-            &format!("{SPINNER_HIDE_CURSOR}\rTrying to pull bad ... {}", SPINNER_FRAMES[0])
-        ));
-        assert!(
-            spinner_fail_text
-                .ends_with(&format!("{SPINNER_SHOW_CURSOR}\rTrying to pull bad ... Failed.\n"))
-        );
+        assert!(spinner_fail_text.starts_with(&format!(
+            "{SPINNER_HIDE_CURSOR}\rTrying to pull bad ... {}",
+            SPINNER_FRAMES[0]
+        )));
+        assert!(spinner_fail_text.ends_with(&format!(
+            "{SPINNER_SHOW_CURSOR}\rTrying to pull bad ... Failed.\n"
+        )));
         assert!(!spinner_fail_text.contains('\u{202E}'));
         assert_eq!(
             String::from_utf8(spinner_fail_stderr).unwrap(),

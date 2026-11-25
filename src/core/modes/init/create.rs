@@ -268,11 +268,9 @@ mod tests {
             PodError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
             other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
         }
-        assert!(
-            recipe_dir_err
-                .to_string()
-                .contains("Cannot create file 'recipe.pod': a directory with the same name already exists!")
-        );
+        assert!(recipe_dir_err.to_string().contains(
+            "Cannot create file 'recipe.pod': a directory with the same name already exists!"
+        ));
         assert!(!fs::file_exists(&config_path));
         assert!(stderr.is_empty());
         std_fs::remove_dir_all(&recipe_path).unwrap();
@@ -285,11 +283,9 @@ mod tests {
             PodError::Io(error) => assert_eq!(error.kind(), io::ErrorKind::AlreadyExists),
             other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
         }
-        assert!(
-            config_dir_err
-                .to_string()
-                .contains("Cannot create file 'pods.conf': a directory with the same name already exists!")
-        );
+        assert!(config_dir_err.to_string().contains(
+            "Cannot create file 'pods.conf': a directory with the same name already exists!"
+        ));
         assert!(!fs::file_exists(&recipe_path));
         assert!(stderr.is_empty());
 
@@ -398,7 +394,9 @@ mod tests {
 
         // Missing parent directory on config_path must not leave recipe.pod orphaned
         let missing_parent_config = temp_dir.join("missing_dir").join("pods.conf");
-        assert!(create_files(&dangling_recipe, &missing_parent_config, false, &mut stderr).is_err());
+        assert!(
+            create_files(&dangling_recipe, &missing_parent_config, false, &mut stderr).is_err()
+        );
         assert!(!fs::file_exists(&dangling_recipe));
         assert!(stderr.is_empty());
 

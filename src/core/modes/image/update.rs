@@ -127,7 +127,9 @@ mod tests {
         assert!(pod_text.contains(
             "  Updated (1):\n    - example-stack (Example Web Stack): example-stack-app (docker.io/example/example-app:latest)\n"
         ));
-        assert!(pod_text.contains("Checked 1 pod (2 images): 1 updated, 1 up to date, 0 failed.\n"));
+        assert!(
+            pod_text.contains("Checked 1 pod (2 images): 1 updated, 1 up to date, 0 failed.\n")
+        );
 
         context.parameters = vec![
             String::from("recipe/1"),
@@ -148,7 +150,9 @@ mod tests {
         )
         .unwrap();
         let cnt_text = String::from_utf8(cnt_out).unwrap();
-        assert!(cnt_text.contains("  Updated (1):\n    - example-stack-app (docker.io/example/example-app:latest)\n"));
+        assert!(cnt_text.contains(
+            "  Updated (1):\n    - example-stack-app (docker.io/example/example-app:latest)\n"
+        ));
         assert!(cnt_text.contains("  Up to date (1):\n    - example-stack-db\n"));
         assert!(cnt_text.contains("Checked 2 images: 1 updated, 1 up to date, 0 failed.\n"));
     }
