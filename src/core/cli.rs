@@ -20,14 +20,13 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
+use crate::core::config::{extract_config_stem, resolve_config_name, resolve_config_path};
 use crate::core::context::{
     CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, Flags, ImageAction,
     InitAction, LogsAction, Mode, ModeAction, RecipeAction,
 };
 use crate::error::{CliError, CliErrorKind};
-use crate::utilities::path::{
-    extract_config_stem, has_parent_dir, resolve_config_name, resolve_config_path,
-};
+use crate::utilities::path::has_parent_dir;
 use crate::utilities::string::{is_empty_value_literal, is_valid_target_segment, is_valid_token};
 
 /// Initial capacity pre-allocated for positional CLI arguments.
@@ -662,7 +661,7 @@ mod tests {
         InitAction, LogsAction, Mode, ModeAction, RecipeAction,
     };
     use crate::error::CliErrorKind;
-    use crate::utilities::path::{resolve_config_name, resolve_config_path};
+    use crate::core::config::{resolve_config_name, resolve_config_path};
     use super::{MAX_CLI_ARGS, apply_flag_value, parse_args, parse_command_implicit, parse_mode_action};
 
     #[test]

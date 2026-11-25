@@ -119,7 +119,7 @@ mod tests {
     use crate::core::context::Context;
     use crate::core::pod::PodCommand;
     use crate::core::recipe::Recipe;
-    use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
+    use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
     use crate::io::system::fs;
     use super::{handle, list_commands, list_with};
 
@@ -152,12 +152,6 @@ pod cmd_pod {
     command run_int_container_2 {
         container 2
         execute \"script.sh run-int-container-2\"
-    }
-    command missing_container {
-        execute \"script.sh no-container\"
-    }
-    command missing_execute {
-        container *db
     }
 }
 container {
@@ -256,8 +250,6 @@ container absolute_db {
         let stdout_text = String::from_utf8(stdout).unwrap();
         let stderr_text = String::from_utf8(stderr).unwrap();
 
-        assert!(stderr_text.contains("WARNING: Command 'missing_container' has no description.\n"));
-        assert!(stderr_text.contains("WARNING: Command 'missing_execute' has no description.\n"));
         assert!(stderr_text.contains("WARNING: Command 'run_absolute' has no description.\n"));
         assert!(stderr_text.contains("WARNING: Command 'run_int_container' has no description.\n"));
         assert!(
@@ -269,16 +261,34 @@ container absolute_db {
         let expected_list = "\
 Commands for recipe 'recipe_006_commands':
   1) add_index: Adds missing database indices.
-  2) missing_container
-  3) missing_execute
-  4) run_absolute
-  5) run_int_container
-  6) run_int_container_2
-  7) run_int_user
+  2) run_absolute
+  3) run_int_container
+  4) run_int_container_2
+  5) run_int_user
 ";
         assert_eq!(stdout_text, expected_list);
 
         assert!(handle(&context).is_ok());
+
+        // Incomplete command recipe fails list_with at the command block's own line.
+        fs::write_file(
+            &directory.join("incomplete_cmd.pod"),
+            "pod cmd_pod {\n    name \"Command Pod\"\n    path /pods/cmd_pod\n    registry docker.io\n    command missing_execute {\n        container *db\n    }\n}\ncontainer *db {\n    image postgres\n}\n",
+        )
+        .unwrap();
+        context.config.recipes.groups.insert(
+            String::from("incomplete"),
+            vec![String::from("incomplete_cmd")],
+        );
+        context.parameters = vec![String::from("incomplete_cmd")];
+        let incomplete_error = list_with(&context, &mut Vec::new(), &mut Vec::new()).unwrap_err();
+        assert!(matches!(
+            incomplete_error,
+            PodError::Recipe(recipe_error)
+                if recipe_error.kind == RecipeErrorKind::InvalidCommand
+                    && recipe_error.line == Some(5)
+        ));
+
         let _ = std::fs::remove_dir_all(&directory);
     }
 

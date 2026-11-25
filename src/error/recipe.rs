@@ -30,9 +30,20 @@ pub struct RecipeError {
     pub kind: RecipeErrorKind,
     pub line: Option<usize>,
     pub token: Option<String>,
+    arg_index: Option<usize>,
 }
 
 impl RecipeError {
+    /// Creates a new recipe error at 1-based `line` when non-zero, or without a line number when `line == 0`.
+    #[must_use]
+    pub fn at_line_or_none(kind: RecipeErrorKind, line: usize, token: &str) -> Self {
+        if line == 0 {
+            Self::without_line(kind, token)
+        } else {
+            Self::with_token(kind, line, token)
+        }
+    }
+
     /// Attaches a compiler-style [`DiagnosticError`] resolved from `source` and `file_path`.
     #[must_use]
     pub fn with_diagnostic(mut self, source: &str, file_path: &str) -> Self {
@@ -46,6 +57,7 @@ impl RecipeError {
                 | RecipeErrorKind::UnknownDirective
         );
         let token = self.token.as_deref();
+        let arg_index = self.arg_index;
         let built = diagnostic::build_diagnostic_from_line(
             source,
             file_path,
@@ -53,10 +65,11 @@ impl RecipeError {
             self.kind.annotation_text(),
             self.kind.help_text(),
             |sanitized_line| {
-                span::locate_token_span(
+                span::locate_token_span_at_arg(
                     span::strip_inline_comment(sanitized_line),
                     token,
                     prefer_argument,
+                    arg_index,
                 )
             },
         );
@@ -68,6 +81,7 @@ impl RecipeError {
     #[must_use]
     pub fn with_token(kind: RecipeErrorKind, line: usize, token: impl AsRef<str>) -> Self {
         Self {
+            arg_index: None,
             diagnostic: None,
             kind,
             line: Some(line),
@@ -79,11 +93,20 @@ impl RecipeError {
     #[must_use]
     pub fn without_line(kind: RecipeErrorKind, token: impl AsRef<str>) -> Self {
         Self {
+            arg_index: None,
             diagnostic: None,
             kind,
             line: None,
             token: Some(string::sanitize_text(token.as_ref(), MAX_ERROR_TOKEN_BYTES)),
         }
+    }
+
+    /// Pins diagnostic span resolution to the 1-based argument index (`1` = first directive argument).
+    #[inline]
+    #[must_use]
+    pub(crate) const fn with_arg_index(mut self, arg_index: usize) -> Self {
+        self.arg_index = Some(arg_index);
+        self
     }
 }
 
@@ -118,6 +141,7 @@ pub enum RecipeErrorKind {
     InvalidOption,
     InvalidPath,
     InvalidPodId,
+    InvalidPodName,
     InvalidPublish,
     InvalidRegistry,
     InvalidRestartPolicy,
@@ -161,6 +185,9 @@ impl RecipeErrorKind {
             Self::InvalidOption => "option value must be non-empty text without control characters",
             Self::InvalidPath => "pod path must be a safe directory path without '..' or ':'",
             Self::InvalidPodId => "pod identifier must normalize to '[a-z0-9][a-z0-9_.-]*'",
+            Self::InvalidPodName => {
+                "pod name must be a non-empty text string without control characters"
+            }
             Self::InvalidPublish => "port publish argument is malformed",
             Self::InvalidRegistry => {
                 "registry must be a non-empty token without whitespace or leading '-'"
@@ -230,6 +257,9 @@ impl RecipeErrorKind {
             Self::InvalidPodId => {
                 "start the pod identifier with a letter or digit (for example: 'pod example-stack {')."
             }
+            Self::InvalidPodName => {
+                "provide a non-empty quoted display name without control characters (for example: 'name \"My Pod\"')."
+            }
             Self::InvalidPublish => {
                 "use 'publish <host_port> <container_port> [TCP|UDP]' (for example: 'publish 8080 80 TCP')."
             }
@@ -291,6 +321,7 @@ impl RecipeErrorKind {
             Self::InvalidOption => "invalid option value in recipe",
             Self::InvalidPath => "invalid path value in recipe",
             Self::InvalidPodId => "invalid pod identifier in recipe",
+            Self::InvalidPodName => "invalid pod name in recipe",
             Self::InvalidPublish => "invalid port publish specification in recipe",
             Self::InvalidRegistry => "invalid registry in recipe",
             Self::InvalidRestartPolicy => "invalid restart policy in recipe",
@@ -386,6 +417,7 @@ mod tests {
             (RecipeErrorKind::InvalidOption, "invalid option"),
             (RecipeErrorKind::InvalidPath, "invalid path"),
             (RecipeErrorKind::InvalidPodId, "invalid pod identifier"),
+            (RecipeErrorKind::InvalidPodName, "invalid pod name"),
             (
                 RecipeErrorKind::InvalidPublish,
                 "invalid port publish specification",
@@ -447,12 +479,29 @@ mod tests {
         }
 
         let tokenless = RecipeError {
+            arg_index: None,
             diagnostic: None,
             kind: RecipeErrorKind::NotFound,
             line: None,
             token: None,
         };
         assert_eq!(tokenless.to_string(), "recipe file not found");
+
+        let zero_line = RecipeError::at_line_or_none(RecipeErrorKind::InvalidPodId, 0, "-bad");
+        assert_eq!(zero_line.line, None);
+        assert!(!zero_line.to_string().contains("line 0:"));
+        assert!(!zero_line.to_string().contains("line 1:"));
+
+        let nonzero_line = RecipeError::at_line_or_none(RecipeErrorKind::InvalidPodId, 4, "-bad");
+        assert_eq!(nonzero_line.line, Some(4));
+        assert!(nonzero_line.to_string().contains("line 4:"));
+
+        let arg_pinned = RecipeError::with_token(RecipeErrorKind::InvalidVolume, 1, "data")
+            .with_arg_index(2)
+            .with_diagnostic("    volume data data\n", "./recipe.pod");
+        let pinned_diag = arg_pinned.diagnostic.as_ref().unwrap();
+        assert_eq!(pinned_diag.col_number, 17);
+        assert_eq!(pinned_diag.annotation_carets, "                ^^^^");
     }
 
     #[test]

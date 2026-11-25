@@ -90,7 +90,7 @@ where
         context.config.simulate,
         is_running,
     )?;
-    podman::exec_container(
+    let _ = podman::exec_container(
         &ExecContainer {
             command: &SHELL_FALLBACK_COMMAND,
             container_name: &container_name,
@@ -101,7 +101,8 @@ where
         context.config.simulate,
         stdout,
         stderr,
-    )
+    )?;
+    Ok(())
 }
 
 /// Extracts and validates the single positional `<target>` parameter from `context.parameters`.

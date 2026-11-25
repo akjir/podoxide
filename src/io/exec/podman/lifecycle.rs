@@ -51,7 +51,7 @@ pub struct CreatePod<'a> {
     pub publish: &'a [String],
 }
 
-/// Executes `podman create --name <container_name> --pod <pod_name> [--restart <restart>] [--volume <mount>...] [options...] <image> [commands...]`.
+/// Executes `podman create --name <container_name> --pod <pod_name> [--restart <restart>] [--volume <mount>...] [options...] <image> [commands...]` and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -62,10 +62,10 @@ pub fn create_container<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     validate_create_container(request)?;
     let arguments = build_container_create_args(request);
-    let _ = super::run_podman_with(
+    super::run_podman_with(
         &arguments,
         &ExecOptions {
             interrupt_policy: InterruptPolicy::WarnOnInterrupt,
@@ -75,8 +75,7 @@ pub fn create_container<W: Write, E: Write>(
         },
         stdout,
         stderr,
-    )?;
-    Ok(())
+    )
 }
 
 /// Executes `podman pod create --name <pod_name> [--publish <entry>...] [options...]` and returns its [`ExecOutcome`].
@@ -106,7 +105,7 @@ pub fn create_pod<W: Write, E: Write>(
     )
 }
 
-/// Executes `podman image prune -f` (or `podman image prune -f -a` when `all` is `true`).
+/// Executes `podman image prune -f` (or `podman image prune -f -a` when `all` is `true`) and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -117,13 +116,13 @@ pub fn prune_images<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     let arguments: &[&str] = if all {
         &PRUNE_ALL_ARGS
     } else {
         &PRUNE_DANGLING_ARGS
     };
-    let _ = super::run_podman_with(
+    super::run_podman_with(
         arguments,
         &ExecOptions {
             interrupt_policy: InterruptPolicy::WarnOnInterrupt,
@@ -133,11 +132,10 @@ pub fn prune_images<W: Write, E: Write>(
         },
         stdout,
         stderr,
-    )?;
-    Ok(())
+    )
 }
 
-/// Executes `podman rm <container_name>`.
+/// Executes `podman rm <container_name>` and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -148,7 +146,7 @@ pub fn remove_container<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     run_named_podman_command(
         &["rm", container_name],
         container_name,
@@ -160,7 +158,7 @@ pub fn remove_container<W: Write, E: Write>(
     )
 }
 
-/// Executes `podman pod rm <pod_name>`.
+/// Executes `podman pod rm <pod_name>` and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -171,7 +169,7 @@ pub fn remove_pod<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     run_named_podman_command(
         &["pod", "rm", pod_name],
         pod_name,
@@ -183,7 +181,7 @@ pub fn remove_pod<W: Write, E: Write>(
     )
 }
 
-/// Executes `podman start <container_name>`.
+/// Executes `podman start <container_name>` and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -194,7 +192,7 @@ pub fn start_container<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     run_named_podman_command(
         &["start", container_name],
         container_name,
@@ -206,7 +204,7 @@ pub fn start_container<W: Write, E: Write>(
     )
 }
 
-/// Executes `podman stop <container_name>`.
+/// Executes `podman stop <container_name>` and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -217,7 +215,7 @@ pub fn stop_container<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     run_named_podman_command(
         &["stop", container_name],
         container_name,
@@ -229,7 +227,7 @@ pub fn stop_container<W: Write, E: Write>(
     )
 }
 
-/// Executes `podman pod stop <pod_name>`.
+/// Executes `podman pod stop <pod_name>` and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -240,7 +238,7 @@ pub fn stop_pod<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     run_named_podman_command(
         &["pod", "stop", pod_name],
         pod_name,
@@ -340,12 +338,12 @@ fn run_named_podman_command<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     super::ensure_valid(
         string::is_valid_pod_or_container_name(name),
         invalid_message,
     )?;
-    let _ = super::run_podman_with(
+    super::run_podman_with(
         arguments,
         &ExecOptions {
             interrupt_policy: InterruptPolicy::WarnOnInterrupt,
@@ -355,8 +353,7 @@ fn run_named_podman_command<W: Write, E: Write>(
         },
         stdout,
         stderr,
-    )?;
-    Ok(())
+    )
 }
 
 /// Validates all fields of `request` before building `podman create` arguments.

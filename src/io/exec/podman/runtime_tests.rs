@@ -149,19 +149,22 @@ fn exec_logs_and_pull_validate_inputs_and_support_uppercase_unmanaged_names() {
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
-    exec_container(
-        &ExecContainer {
-            command: &SHELL_FALLBACK_COMMAND,
-            container_name: "MyApp_1",
-            interactive: true,
-            user: None,
-        },
-        "Connect: ",
-        true,
-        &mut stdout,
-        &mut stderr,
-    )
-    .unwrap();
+    assert_eq!(
+        exec_container(
+            &ExecContainer {
+                command: &SHELL_FALLBACK_COMMAND,
+                container_name: "MyApp_1",
+                interactive: true,
+                user: None,
+            },
+            "Connect: ",
+            true,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap(),
+        ExecOutcome::Succeeded
+    );
     assert!(
         String::from_utf8(stdout)
             .unwrap()
@@ -260,7 +263,10 @@ fn exec_logs_and_pull_validate_inputs_and_support_uppercase_unmanaged_names() {
     }
 
     let mut logs_out = Vec::new();
-    logs_pod(&base_logs, "Logs: ", true, &mut logs_out, &mut stderr).unwrap();
+    assert_eq!(
+        logs_pod(&base_logs, "Logs: ", true, &mut logs_out, &mut stderr).unwrap(),
+        ExecOutcome::Succeeded
+    );
     assert!(
         String::from_utf8(logs_out)
             .unwrap()

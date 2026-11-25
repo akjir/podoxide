@@ -47,15 +47,49 @@ podoxide/
     │   └── span.rs
     ├── core/
     │   ├── cli.rs
-    │   ├── config.rs
     │   ├── constants.rs
-    │   ├── container.rs
     │   ├── context.rs
     │   ├── log.rs
     │   ├── mod.rs
-    │   ├── pod.rs
-    │   ├── recipe.rs
-    │   ├── update.rs
+    │   ├── config/
+    │   │   ├── mod.rs
+    │   │   ├── parser.rs
+    │   │   ├── parser_tests.rs
+    │   │   ├── path.rs
+    │   │   ├── path_tests.rs
+    │   │   ├── targets.rs
+    │   │   └── tests.rs
+    │   ├── container/
+    │   │   ├── lifecycle.rs
+    │   │   ├── lifecycle_tests.rs
+    │   │   ├── mod.rs
+    │   │   ├── update.rs
+    │   │   ├── validation.rs
+    │   │   ├── validation_tests.rs
+    │   │   ├── volume.rs
+    │   │   └── volume_tests.rs
+    │   ├── pod/
+    │   │   ├── lifecycle.rs
+    │   │   ├── lifecycle_tests.rs
+    │   │   ├── mod.rs
+    │   │   ├── update.rs
+    │   │   ├── update_tests.rs
+    │   │   └── validation_tests.rs
+    │   ├── recipe/
+    │   │   ├── directives.rs
+    │   │   ├── directives_tests.rs
+    │   │   ├── mod.rs
+    │   │   ├── parser.rs
+    │   │   ├── parser_tests.rs
+    │   │   ├── resolve.rs
+    │   │   ├── resolve_tests.rs
+    │   │   ├── validation.rs
+    │   │   └── validation_tests.rs
+    │   ├── update/
+    │   │   ├── mod.rs
+    │   │   ├── summary.rs
+    │   │   ├── tests.rs
+    │   │   └── writer.rs
     │   └── modes/
     │       ├── mod.rs
     │       ├── command/
@@ -141,6 +175,7 @@ podoxide/
         ├── format.rs
         ├── mod.rs
         ├── path.rs
+        ├── path_tests.rs
         └── string.rs
 ```
 
@@ -168,18 +203,33 @@ podoxide/
 
 The `src/core/` directory contains application state, domain models, argument parsing, and top-level orchestration.
 
-| File                    | Function |
-| :---------------------- | :------- |
-| `src/core/mod.rs`       | Declares and re-exports the core domain modules and the `modes` submodule. |
-| `src/core/cli.rs`       | Parses CLI arguments (`OsStr` / `OsString`), extracts global and mode-specific flags (`--config`, `--debug`, `--simulate`), and selects modes. |
-| `src/core/config.rs`    | Defines the configuration model (`pods.conf`), reads configuration files, collects active recipes, checks recipe membership, and expands `@group` targets. |
-| `src/core/constants.rs` | Defines global application metadata and the compile-time build version constant (`APP_NAME`, `APP_VERSION`). |
-| `src/core/container.rs` | Defines the container model, resolves container names (`*name` and index fallbacks), validates container fields, and executes container lifecycle operations (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`, `pull`, `update`). |
-| `src/core/context.rs`   | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
-| `src/core/log.rs`       | Provides structured output, numbered-line printing (`write_numbered_lines`), and diagnostic logging (`debug`, `info`, `pod_error`, `write_*`) with debug state control. |
-| `src/core/pod.rs`       | Defines the pod model and orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `pull`, `update`) across containers. |
-| `src/core/recipe.rs`    | Defines the `.pod` recipe model, loads and validates pod and container definitions (`Recipe::inspect`), and resolves target container specifications (`<recipe>/<spec>`). |
-| `src/core/update.rs`    | Defines update outcome models (`ContainerPullRecord`, `ContainerUpdateResult`, `PodUpdateResult`, `SummaryKind`, `SummaryScope`, `UpdateAction`, `UpdateSummary`), the indented reload writer (`IndentedWriter`), pull prefix formatting, and grouped `Update Summary:` rendering. |
+| File                                | Function |
+| :---------------------------------- | :------- |
+| `src/core/mod.rs`                   | Declares and re-exports the core domain modules and the `modes` submodule. |
+| `src/core/cli.rs`                   | Parses CLI arguments (`OsStr` / `OsString`), extracts global and mode-specific flags (`--config`, `--debug`, `--simulate`), and selects modes. |
+| `src/core/constants.rs`             | Defines global application metadata and the compile-time build version constant (`APP_NAME`, `APP_VERSION`). |
+| `src/core/context.rs`               | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
+| `src/core/log.rs`                   | Provides structured output, numbered-line printing (`write_numbered_lines`), and diagnostic logging (`debug`, `info`, `pod_error`, `write_*`) with debug state control. |
+| `src/core/config/mod.rs`            | Defines `Config`, `PodsConfig`, `RecipesConfig`, defaults, and `MAX_GROUP_EXPANSION_DEPTH`, re-exporting path and editor helpers. |
+| `src/core/config/parser.rs`         | Parses and validates `pods.conf` PSL AST blocks and directives (`general`, `pods`, `recipes`, `groups`). |
+| `src/core/config/path.rs`           | Resolves `.conf` paths and names (`extract_config_stem`, `resolve_config_name`, `resolve_config_path`), reads config files, and validates `editor` values (`validate_editor`). |
+| `src/core/config/targets.rs`        | Validates acyclic `@<group>` DAGs within `MAX_GROUP_EXPANSION_DEPTH`, queries recipe membership, and expands targets in a single deduplicated pass. |
+| `src/core/container/mod.rs`         | Defines `Container` and `VolumeMount` and re-exports container lifecycle, update, validation, and volume APIs. |
+| `src/core/container/lifecycle.rs`   | Executes container lifecycle commands (`create`, `start`, `stop`, `remove`, `up`, `down`, `restart`, `reload`), propagating `ExecOutcome`. |
+| `src/core/container/update.rs`      | Resolves image references, executes cached `podman pull` (`PullCache`), detects stale container image IDs, and conditionally reloads containers. |
+| `src/core/container/validation.rs`  | Validates container names, images, registries, restart policies, options, commands, and volume preconditions, and resolves relative container names. |
+| `src/core/container/volume.rs`      | Validates and formats `VolumeMount` entries against pod base directories. |
+| `src/core/pod/mod.rs`               | Defines `Pod` (with execution-invariant `PartialEq` / `Eq`) and `PodCommand`, and manages pod creation state. |
+| `src/core/pod/lifecycle.rs`         | Orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`) with upfront validation and `ExecOutcome` propagation. |
+| `src/core/pod/update.rs`            | Orchestrates pod-level image pulls (`pull_with_cache`), stale-container image ID detection, and conditional indented pod reload (`update_with_cache`). |
+| `src/core/recipe/mod.rs`            | Defines `Recipe` and `RECIPE_EXTENSION`, exposing `Recipe::inspect`, `read_file`, `file_exists`, and container target resolution. |
+| `src/core/recipe/directives.rs`     | Parses and validates individual `.pod` block headers and directives (`publish`, `volume`, `option`, `name`, `path`, `registry`, `image`) with per-block entry caps and argument-index diagnostic spans. |
+| `src/core/recipe/parser.rs`         | Loads `.pod` files, validates load paths/targets, and translates PSL AST blocks into `Recipe`. |
+| `src/core/recipe/resolve.rs`        | Resolves container specifications (`1..=N`, `*suffix`, exact or prefixed name) with zero-copy fast paths for already-resolved names. |
+| `src/core/recipe/validation.rs`     | Performs semantic validation on `Recipe`, `Pod`, `PodCommand`, `publish` specifications, options, and container names. |
+| `src/core/update/mod.rs`            | Defines update outcome models (`ContainerPullRecord`, `ContainerUpdateResult`, `PodUpdateResult`, `PullCache`, `SummaryKind`, `SummaryScope`, `UpdateAction`, `UpdateRunners`) and pull formatting helpers. |
+| `src/core/update/summary.rs`        | Aggregates pod/container update results (`UpdateSummary`, `has_failures`) and renders grouped `Update Summary:` reports. |
+| `src/core/update/writer.rs`         | Implements `IndentedWriter`, preserving indentation across both `\n` and `\r` line boundaries. |
 
 ## CLI Modes (`src/core/modes/`)
 
@@ -306,7 +356,7 @@ Executes external commands directly via `std::process::Command` without shell in
 | `src/io/exec/spinner.rs`          | Provides terminal-aware Braille spinner execution with bounded `stderr` capture and non-TTY single-line fallback. |
 | `src/io/exec/podman/mod.rs`       | Re-exports the central Podman CLI API and provides shared validation and process invocation helpers. |
 | `src/io/exec/podman/lifecycle.rs` | Builds and executes Podman lifecycle operations (`CreateContainer`, `CreatePod`, create, start, stop, remove, and image prune). |
-| `src/io/exec/podman/query.rs`     | Executes Podman inspection queries (`check_version` 5.8.0+, `container_running`, `pod_exists`, `query_image_id`, `query_images`, `query_in_use_images`, `query_ps_status`, and control-character record delimiters). |
+| `src/io/exec/podman/query.rs`     | Executes Podman inspection queries (`check_version` 5.8.0+, `container_running`, `pod_exists`, `query_container_image_id`, `query_image_id`, `query_images`, `query_in_use_images`, `query_ps_status`, and control-character record delimiters). |
 | `src/io/exec/podman/runtime.rs`   | Builds and executes TTY-aware `podman exec`, color/SIGINT-aware `podman pod logs`, and spinner-backed `podman pull` (`ExecContainer`, `PodLogs`, `PullOutcome`, `SHELL_FALLBACK_COMMAND`). |
 
 ### PodScript Language (`src/io/psl/`)
@@ -340,9 +390,9 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 | File                          | Function |
 | :---------------------------- | :------- |
 | `src/utilities/mod.rs`        | Declares and re-exports the utility submodules. |
-| `src/utilities/collection.rs` | Provides slice and vector helpers such as option token splitting and validation (`append_option_tokens`, `is_valid_option_value`), order-preserving deduplication (`dedup_preserve_order`), and bounded pre-allocation utilities (`bounded_capacity`). |
+| `src/utilities/collection.rs` | Provides slice and vector helpers such as option token splitting and validation (`append_option_tokens`, `is_valid_option_value`) and bounded pre-allocation utilities (`bounded_capacity`). |
 | `src/utilities/format.rs`     | Formats shell-escaped command strings (`format_command`), 1-based list indices (`format_index_prefix`), quoted conjunctions (`format_quoted_conjunction`), recipe inspection hints (`format_recipe_error_hint`), and byte counts (`format_bytes`), parses human-readable sizes (`parse_size_to_bytes`), aligns status columns (`format_line`), and formats CLI version headers (`format_version_header`). |
-| `src/utilities/path.rs`       | Provides lexical path normalization (`normalize_lexical_path`, `pop_relative_or_absolute`), full path construction (`build_full_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), directory, editor, volume option, and target path validation (`has_regular_target_name`, `is_valid_directory`, `is_valid_directory_path`, `is_valid_editor_value`, `is_valid_target_path`, `is_valid_volume_options`, `validate_editor`), path token sanitization (`sanitize_path_token`), extension matching (`matches_extension`), parent traversal checks (`has_parent_dir`), and `.conf` stem/path resolution (`extract_config_stem`, `resolve_config_name`, `resolve_config_path`). |
+| `src/utilities/path.rs`       | Provides pure lexical path normalization (`normalize_lexical_path`, `pop_relative_or_absolute`), full path construction (`build_full_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), directory, editor, volume option, and target path validation (`has_regular_target_name`, `is_valid_directory`, `is_valid_directory_path`, `is_valid_editor_value`, `is_valid_target_path`, `is_valid_volume_options`), path token sanitization (`sanitize_path_token`), extension matching (`matches_extension`), and parent traversal checks (`has_parent_dir`) with zero `crate::core` imports. |
 | `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character detection and sanitization (`contains_control_or_bidi`, `contains_control_or_whitespace`, `is_bidi_control`, `sanitize_char`, `sanitize_text`), empty value literal detection (`is_empty_value_literal`), shell quoting (`escape_shell`, `is_safe_shell_byte`), identifier, target, token, text, and pod/container name validation and normalization (`is_identifier_continue`, `is_identifier_start`, `is_valid_container_suffix`, `is_valid_group_target`, `is_valid_identifier`, `is_valid_pod_or_container_name`, `is_valid_recipe_identifier`, `is_valid_target_segment`, `is_valid_text`, `is_valid_token`, `normalize_name`), and strict ASCII integer parsing (`parse_ascii_u32`). |
 
 ## Execution Flow
@@ -350,6 +400,6 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 1. **Entry (`src/main.rs`):** Invokes the library runner and maps the result to `std::process::ExitCode`.
 2. **Environment Verification (`src/io/system/env.rs`, `src/io/exec/podman.rs`):** Verifies Linux OS, checks Podman `5.8.0+`, and prompts for confirmation when running as `root`.
 3. **CLI Parsing (`src/core/cli.rs`):** Scans CLI arguments into `Context` (`src/core/context.rs`), extracting global flags (`--config`, `--debug`, `--simulate`), mode selection, action, and targets.
-4. **Configuration Loading (`src/io/psl/`, `src/core/config.rs`):** Loads and parses `pods.conf` unless bypassed by standalone actions (`init`, `version`, `help`, or parameterless mode calls).
+4. **Configuration Loading (`src/io/psl/`, `src/core/config/`):** Loads and parses `pods.conf` unless bypassed by standalone actions (`init`, `version`, `help`, or parameterless mode calls).
 5. **Mode Dispatch (`src/core/modes/mod.rs`):** Routes `Context` to the selected mode handler (`default`, `command`, `config`, `connect`, `image`, `init`, `logs`, or `recipe`).
-6. **Recipe Resolution & Execution (`src/core/recipe.rs`, `src/core/pod.rs`, `src/io/exec/`):** Expands `@group` targets, parses and validates `.pod` recipes via `src/io/psl/`, and executes or simulates the resulting `podman` commands.
+6. **Recipe Resolution & Execution (`src/core/recipe/`, `src/core/pod/`, `src/core/container/`, `src/io/exec/`):** Expands `@group` targets, parses and validates `.pod` recipes via `src/io/psl/`, and executes or simulates the resulting `podman` commands.

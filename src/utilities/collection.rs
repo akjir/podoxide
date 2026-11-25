@@ -13,10 +13,9 @@
 // You should have received a copy of the GNU General Public License along with
 // this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Slice and vector helpers for option token splitting, order-preserving deduplication, and bounded pre-allocation.
+//! Slice and vector helpers for option token splitting and bounded pre-allocation.
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
 
 use crate::utilities::string;
 
@@ -39,23 +38,6 @@ pub const fn bounded_capacity(requested: usize, maximum: usize) -> usize {
     } else {
         maximum
     }
-}
-
-/// Returns a new vector containing the unique strings from `items` in first-appearance order.
-#[must_use]
-pub fn dedup_preserve_order(items: &[String]) -> Vec<String> {
-    if items.is_empty() {
-        return Vec::new();
-    }
-    let capacity = bounded_capacity(items.len(), MAX_COLLECTION_PREALLOC);
-    let mut result = Vec::with_capacity(capacity);
-    let mut seen = BTreeSet::new();
-    for item in items {
-        if seen.insert(item.as_str()) {
-            result.push(item.clone());
-        }
-    }
-    result
 }
 
 /// Evaluates whether `value` is a valid `option` directive argument with well-formed text and balanced inner quotes.
@@ -340,8 +322,7 @@ fn unquote_single_wrapped(value: &str) -> Option<Cow<'_, str>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity, dedup_preserve_order,
-        is_valid_option_value,
+        MAX_COLLECTION_PREALLOC, append_option_tokens, bounded_capacity, is_valid_option_value,
     };
 
     #[test]
@@ -448,28 +429,6 @@ mod tests {
         assert_eq!(
             bounded_capacity(MAX_COLLECTION_PREALLOC + 500, MAX_COLLECTION_PREALLOC),
             MAX_COLLECTION_PREALLOC
-        );
-    }
-
-    #[test]
-    fn dedup_preserve_order_retains_first_appearance() {
-        let empty: Vec<String> = Vec::new();
-        assert!(dedup_preserve_order(&empty).is_empty());
-
-        let items = vec![
-            String::from("lie"),
-            String::from("cake"),
-            String::from("the"),
-            String::from("cake"),
-            String::from("lie"),
-        ];
-        assert_eq!(
-            dedup_preserve_order(&items),
-            vec![
-                String::from("lie"),
-                String::from("cake"),
-                String::from("the"),
-            ]
         );
     }
 

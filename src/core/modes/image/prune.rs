@@ -132,7 +132,8 @@ where
     let is_all = context.flags.all;
     let is_preview = context.flags.preview;
     if !is_preview && context.config.simulate {
-        return podman::prune_images(is_all, PRUNE_PREFIX, true, stdout, stderr);
+        let _ = podman::prune_images(is_all, PRUNE_PREFIX, true, stdout, stderr)?;
+        return Ok(());
     }
     let scan = scan_prunable_images(is_all, is_preview, query_in_use, query_images)?;
     if scan.image_count == 0 {
@@ -149,7 +150,8 @@ where
         log::write_print(stdout, "Aborted.");
         return Ok(());
     }
-    podman::prune_images(is_all, PRUNE_PREFIX, false, stdout, stderr)
+    let _ = podman::prune_images(is_all, PRUNE_PREFIX, false, stdout, stderr)?;
+    Ok(())
 }
 
 /// Resolves the human-readable image label (`<id>`, `<repo>:<tag>`, or `<repo>`) for `record`.

@@ -85,13 +85,18 @@ fn exec_command<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<(), PodError> {
     let command = resolve_command(recipe, command_spec, stderr)?;
-    let execute_tokens = validate_command(command, recipe.pod.line)?;
+    let line = if command.line == 0 {
+        recipe.pod.line
+    } else {
+        command.line
+    };
+    let execute_tokens = validate_command(command, line)?;
     let container_name = recipe.resolve_container_name(&command.container)?;
     let prefix = format!(
         "Execute command '{}' in container '{container_name}': ",
         command.execute
     );
-    podman::exec_container(
+    let _ = podman::exec_container(
         &ExecContainer {
             command: &execute_tokens,
             container_name: &container_name,
@@ -102,7 +107,8 @@ fn exec_command<W: Write, E: Write>(
         simulate,
         stdout,
         stderr,
-    )
+    )?;
+    Ok(())
 }
 
 /// Loads the target recipe from `context` and executes the requested command.
@@ -131,23 +137,6 @@ fn execute_with<W: Write, E: Write>(
     )
 }
 
-/// Constructs a [`PodError::Recipe`] with [`RecipeErrorKind::InvalidCommand`] at `line` (or without a line when `0`).
-#[must_use]
-fn recipe_command_error(line: usize, token: &str) -> PodError {
-    if line == 0 {
-        PodError::from(RecipeError::without_line(
-            RecipeErrorKind::InvalidCommand,
-            token,
-        ))
-    } else {
-        PodError::from(RecipeError::with_token(
-            RecipeErrorKind::InvalidCommand,
-            line,
-            token,
-        ))
-    }
-}
-
 /// Resolves `command_spec` by 1-based numeric index or exact command name from `recipe.pod.commands`.
 ///
 /// # Errors
@@ -164,14 +153,26 @@ fn resolve_command<'a, E: Write>(
         return index
             .checked_sub(1)
             .and_then(|zero_based| valid_commands.get(zero_based).copied())
-            .ok_or_else(|| recipe_command_error(recipe.pod.line, command_spec));
+            .ok_or_else(|| {
+                PodError::from(RecipeError::at_line_or_none(
+                    RecipeErrorKind::InvalidCommand,
+                    recipe.pod.line,
+                    command_spec,
+                ))
+            });
     }
     recipe
         .pod
         .commands
         .get(command_spec)
         .filter(|command| is_valid_command_entry(command_spec, command))
-        .ok_or_else(|| recipe_command_error(recipe.pod.line, command_spec))
+        .ok_or_else(|| {
+            PodError::from(RecipeError::at_line_or_none(
+                RecipeErrorKind::InvalidCommand,
+                recipe.pod.line,
+                command_spec,
+            ))
+        })
 }
 
 /// Splits `input` into shell-style argv tokens, preserving single-quoted and double-quoted arguments.
@@ -294,24 +295,44 @@ fn step_unquoted(
 /// is missing/invalid, `execute` has unclosed quotes or starts with `-`, or `user` is not a valid token.
 fn validate_command(command: &PodCommand, line: usize) -> Result<Vec<String>, PodError> {
     if !is_valid_text(&command.container) {
-        return Err(recipe_command_error(line, &command.name));
+        return Err(PodError::from(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            &command.name,
+        )));
     }
     if !is_valid_text(&command.execute) || command.execute.trim_start().starts_with('-') {
-        return Err(recipe_command_error(line, &command.name));
+        return Err(PodError::from(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            &command.name,
+        )));
     }
     let Some(tokens) = split_execute_tokens(&command.execute) else {
-        return Err(recipe_command_error(line, &command.name));
+        return Err(PodError::from(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            &command.name,
+        )));
     };
     if tokens
         .first()
         .is_none_or(|program| program.is_empty() || program.starts_with('-'))
     {
-        return Err(recipe_command_error(line, &command.name));
+        return Err(PodError::from(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            &command.name,
+        )));
     }
     if let Some(user) = &command.user
         && !is_valid_token(user)
     {
-        return Err(recipe_command_error(line, user));
+        return Err(PodError::from(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            user,
+        )));
     }
     Ok(tokens)
 }
@@ -362,12 +383,6 @@ pod cmd_pod {
     command run_quoted {
         container *db
         execute \"sh -c 'echo hello'\"
-    }
-    command missing_container {
-        execute \"script.sh no-container\"
-    }
-    command missing_execute {
-        container *db
     }
     command missing_target_container {
         container *nonexistent
@@ -576,7 +591,7 @@ container absolute_db {
             other => panic!("expected PodError::Cli(MissingTarget), got {other:?}"),
         }
 
-        for invalid_spec in ["missing_container", "missing_execute", "unknown", "0", "99"] {
+        for invalid_spec in ["unknown", "0", "99"] {
             context.parameters = vec![
                 String::from("recipe_006_commands"),
                 String::from(invalid_spec),
@@ -588,6 +603,41 @@ container absolute_db {
                 }
                 other => panic!(
                     "expected PodError::Recipe(InvalidCommand) for {invalid_spec}, got {other:?}"
+                ),
+            }
+        }
+
+        // Incomplete command blocks fail upfront during Recipe::inspect at the command block line.
+        fs::write_file(
+            &directory.join("missing_container.pod"),
+            "pod cmd_pod {\n    name \"Command Pod\"\n    path /pods/cmd_pod\n    registry docker.io\n    command missing_container {\n        execute \"script.sh no-container\"\n    }\n}\ncontainer *db {\n    image postgres\n}\n",
+        )
+        .unwrap();
+        fs::write_file(
+            &directory.join("missing_execute.pod"),
+            "pod cmd_pod {\n    name \"Command Pod\"\n    path /pods/cmd_pod\n    registry docker.io\n    command missing_execute {\n        container *db\n    }\n}\ncontainer *db {\n    image postgres\n}\n",
+        )
+        .unwrap();
+        context.config.recipes.groups.insert(
+            String::from("incomplete"),
+            vec![
+                String::from("missing_container"),
+                String::from("missing_execute"),
+            ],
+        );
+        for incomplete_recipe in ["missing_container", "missing_execute"] {
+            context.parameters = vec![
+                String::from(incomplete_recipe),
+                String::from(incomplete_recipe),
+            ];
+            let error = execute_with(&context, &mut stdout, &mut stderr).unwrap_err();
+            match error {
+                PodError::Recipe(recipe_error) => {
+                    assert_eq!(recipe_error.kind, RecipeErrorKind::InvalidCommand);
+                    assert_eq!(recipe_error.line, Some(5));
+                }
+                other => panic!(
+                    "expected PodError::Recipe(InvalidCommand) at line 5 for {incomplete_recipe}, got {other:?}"
                 ),
             }
         }
@@ -641,7 +691,7 @@ container absolute_db {
                 "Execute command 'script.sh add-missing-indices' in container 'cmd_pod-db': \npodman exec -it -u 33 cmd_pod-db script.sh add-missing-indices\n",
             ),
             (
-                "5",
+                "3",
                 "Execute command 'script.sh run-absolute' in container 'absolute_db': \npodman exec -it absolute_db script.sh run-absolute\n",
             ),
         ];

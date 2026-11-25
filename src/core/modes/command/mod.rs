@@ -84,13 +84,10 @@ pub(super) fn get_valid_commands<'a, E: Write>(
 /// Evaluates whether `(key, command)` represents a populated, well-formed command entry.
 #[must_use]
 pub(super) fn is_valid_command_entry(key: &str, command: &PodCommand) -> bool {
-    if !is_valid_identifier(key) || key != command.name {
-        return false;
-    }
-    !command.container.is_empty()
-        || !command.description.is_empty()
-        || !command.execute.is_empty()
-        || command.user.is_some()
+    is_valid_identifier(key)
+        && key == command.name
+        && !command.container.is_empty()
+        && !command.execute.is_empty()
 }
 
 /// Verifies that `target` is registered in `context.config` and loads and validates `<target>.pod`.

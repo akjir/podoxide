@@ -18,12 +18,11 @@
 use std::io::{self, Write};
 use std::path::Path;
 
+use crate::core::config::{extract_config_stem, validate_editor};
 use crate::core::context::Context;
 use crate::error::{ConfigError, ConfigErrorKind, PodError};
 use crate::io::exec::command;
-use crate::utilities::path::{
-    extract_config_stem, has_parent_dir, sanitize_path_token, validate_editor,
-};
+use crate::utilities::path::{has_parent_dir, sanitize_path_token};
 
 /// Opens the active `pods.conf` configuration file in the configured external editor.
 ///

@@ -24,9 +24,11 @@ use crate::core::log;
 use crate::core::pod::{self, Pod};
 use crate::core::recipe::Recipe;
 use crate::core::update::{
-    ContainerUpdateResult, SummaryKind, SummaryScope, UpdateAction, UpdateSummary,
+    ContainerUpdateResult, PullCache, PullRunner, SummaryKind, SummaryScope, UpdateAction,
+    UpdateRunners, UpdateSummary,
 };
 use crate::error::{CliError, CliErrorKind, PodError};
+use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::{self, PullOutcome};
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use super::{collect_container_specs, expand_pod_targets, resolve_container_targets};
@@ -41,9 +43,11 @@ use super::{collect_container_specs, expand_pod_targets, resolve_container_targe
 ///    `context.parameters` against `context.config.recipes.groups`, preserving first-appearance
 ///    order and deduplicating repeated targets.
 /// 2. Load and validate all targeted `.pod` recipes upfront before modifying running pods.
-/// 3. For pod/group targets: pull container images with indented progress output, reload the pod
-///    (`down` + `up`) when at least one image changed and no pull failed (or when `--simulate` is
-///    active), and separate consecutive pods with a blank line.
+/// 3. For pod/group targets: pull container images with indented progress output (deduplicating
+///    shared image references across containers and pods), detect containers running stale image
+///    IDs when a pre-pulled image returns up-to-date, reload the pod (`down` + `up`) when at
+///    least one image changed and no pull failed (or when `--simulate` is active), and separate
+///    consecutive pods with a blank line.
 /// 4. For container targets: pull and conditionally reload each targeted container without tearing
 ///    down an existing parent pod.
 /// 5. Render the grouped `Update Summary:` section (`Reloaded`, `Failed`, `Up to date`, or
@@ -56,17 +60,40 @@ use super::{collect_container_specs, expand_pod_targets, resolve_container_targe
 pub fn handle(context: &Context) -> Result<(), PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
+    let mut cache = PullCache::new();
     let mut pull_image = podman::pull_image;
-    execute_update_with(
+    let simulate = context.config.simulate;
+    let mut query_container = |container_name: &str| {
+        if simulate {
+            None
+        } else {
+            podman::query_container_image_id(container_name)
+        }
+    };
+    let mut query_image = |image_reference: &str| {
+        if simulate {
+            None
+        } else {
+            podman::query_image_id(image_reference)
+        }
+    };
+    let mut runners = UpdateRunners {
+        cache: &mut cache,
+        pull_image: &mut pull_image,
+        query_container_image: &mut query_container,
+        query_image: &mut query_image,
+    };
+    let _ = execute_update_with_inspectors(
         context,
         SummaryKind::LifecycleUpdate,
-        &mut pull_image,
+        &mut runners,
         &mut stdout,
         &mut stderr,
-    )
+    )?;
+    Ok(())
 }
 
-/// Resolves targets from `context`, runs pod or container updates/pulls via `pull_image`, and renders the grouped `Update Summary:` to `stdout`.
+/// Resolves targets from `context`, runs pod or container updates/pulls via `pull_image` with shared pull deduplication, and renders the grouped `Update Summary:` to `stdout`.
 ///
 /// # Errors
 ///
@@ -77,33 +104,66 @@ pub(crate) fn execute_update_with<W, E, P>(
     pull_image: &mut P,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError>
+) -> Result<ExecOutcome, PodError>
 where
     W: Write,
     E: Write,
     P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
 {
-    let Some(first) = context.parameters.first() else {
-        return Err(PodError::from(CliError::new(CliErrorKind::MissingTarget)));
+    let mut cache = PullCache::new();
+    let mut no_container_inspect = |_: &str| None;
+    let mut no_image_inspect = |_: &str| None;
+    let mut runners = UpdateRunners {
+        cache: &mut cache,
+        pull_image,
+        query_container_image: &mut no_container_inspect,
+        query_image: &mut no_image_inspect,
     };
-    if first.contains('/') {
-        return execute_container_updates(context, kind, pull_image, stdout, stderr);
-    }
-    execute_pod_updates(context, kind, pull_image, stdout, stderr)
+    execute_update_with_inspectors(context, kind, &mut runners, stdout, stderr)
 }
 
-/// Resolves `<recipe>/<container>` targets, executes pulls or lifecycle updates, and writes the container summary.
-fn execute_container_updates<W, E, P>(
+/// Resolves targets from `context`, runs pod or container updates/pulls via `runners`, and renders the grouped `Update Summary:` to `stdout`.
+///
+/// # Errors
+///
+/// Returns [`PodError`] if target resolution, recipe validation, or command spawning fails.
+fn execute_update_with_inspectors<W, E, P, C, I>(
     context: &Context,
     kind: SummaryKind,
-    pull_image: &mut P,
+    runners: &mut UpdateRunners<'_, P, C, I>,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError>
+) -> Result<ExecOutcome, PodError>
 where
     W: Write,
     E: Write,
     P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
+    C: FnMut(&str) -> Option<String>,
+    I: FnMut(&str) -> Option<String>,
+{
+    let Some(first) = context.parameters.first() else {
+        return Err(PodError::from(CliError::new(CliErrorKind::MissingTarget)));
+    };
+    if first.contains('/') {
+        return execute_container_updates(context, kind, runners, stdout, stderr);
+    }
+    execute_pod_updates(context, kind, runners, stdout, stderr)
+}
+
+/// Resolves `<recipe>/<container>` targets, executes pulls or lifecycle updates, and writes the container summary.
+fn execute_container_updates<W, E, P, C, I>(
+    context: &Context,
+    kind: SummaryKind,
+    runners: &mut UpdateRunners<'_, P, C, I>,
+    stdout: &mut W,
+    stderr: &mut E,
+) -> Result<ExecOutcome, PodError>
+where
+    W: Write,
+    E: Write,
+    P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
+    C: FnMut(&str) -> Option<String>,
+    I: FnMut(&str) -> Option<String>,
 {
     if log::is_debug_enabled() {
         log::debug(&format!("Targets   - {}", context.parameters.join(" ")));
@@ -124,28 +184,30 @@ where
             container,
             &recipe.pod,
             context.config.simulate,
-            pull_image,
+            runners,
             stdout,
             stderr,
         )?;
         summary.record_container(result.action, &result.record);
     }
     summary.write_to(stdout);
-    Ok(())
+    Ok(summary_outcome(&summary))
 }
 
 /// Expands `@<group>` and `<recipe>` targets, executes pod pulls or lifecycle updates, and writes the pod summary.
-fn execute_pod_updates<W, E, P>(
+fn execute_pod_updates<W, E, P, C, I>(
     context: &Context,
     kind: SummaryKind,
-    pull_image: &mut P,
+    runners: &mut UpdateRunners<'_, P, C, I>,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError>
+) -> Result<ExecOutcome, PodError>
 where
     W: Write,
     E: Write,
     P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
+    C: FnMut(&str) -> Option<String>,
+    I: FnMut(&str) -> Option<String>,
 {
     let targets = expand_pod_targets(context)?;
     let recipes = load_target_recipes(&context.config, &targets)?;
@@ -155,21 +217,22 @@ where
             log::write_print(stdout, "");
         }
         let result = match kind {
-            SummaryKind::ImagePull => {
-                pod::pull_with_runner(recipe, context.config.simulate, pull_image, stdout, stderr)?
-            }
-            SummaryKind::LifecycleUpdate => pod::update_with_runner(
+            SummaryKind::ImagePull => pod::pull_with_cache(
                 recipe,
                 context.config.simulate,
-                pull_image,
+                runners.cache,
+                runners.pull_image,
                 stdout,
                 stderr,
             )?,
+            SummaryKind::LifecycleUpdate => {
+                pod::update_with_cache(recipe, context.config.simulate, runners, stdout, stderr)?
+            }
         };
         summary.record_pod(&result);
     }
     summary.write_to(stdout);
-    Ok(())
+    Ok(summary_outcome(&summary))
 }
 
 /// Loads and validates all target `.pod` recipes upfront in expansion order.
@@ -183,12 +246,12 @@ fn load_target_recipes(config: &Config, targets: &[String]) -> Result<Vec<Recipe
 }
 
 /// Executes a single container pull or lifecycle update and returns its [`ContainerUpdateResult`].
-fn run_single_container_update<W, E, P>(
+fn run_single_container_update<W, E, P, C, I>(
     kind: SummaryKind,
     container: &Container,
     pod: &Pod,
     simulate: bool,
-    pull_image: &mut P,
+    runners: &mut UpdateRunners<'_, P, C, I>,
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<ContainerUpdateResult, PodError>
@@ -196,11 +259,23 @@ where
     W: Write,
     E: Write,
     P: FnMut(&str, &str, bool, &mut W, &mut E) -> Result<PullOutcome, PodError>,
+    C: FnMut(&str) -> Option<String>,
+    I: FnMut(&str) -> Option<String>,
 {
     match kind {
         SummaryKind::ImagePull => {
-            let record = container::pull_with_runner(
-                container, pod, "", simulate, pull_image, stdout, stderr,
+            let mut pull_runner = PullRunner {
+                cache: runners.cache,
+                pull_image: runners.pull_image,
+            };
+            let record = container::pull_with_cache(
+                container,
+                pod,
+                "",
+                simulate,
+                &mut pull_runner,
+                stdout,
+                stderr,
             )?;
             Ok(ContainerUpdateResult {
                 action: UpdateAction::UpToDate,
@@ -208,8 +283,18 @@ where
             })
         }
         SummaryKind::LifecycleUpdate => {
-            container::update_with_runner(container, pod, simulate, pull_image, stdout, stderr)
+            container::update_with_cache(container, pod, simulate, runners, stdout, stderr)
         }
+    }
+}
+
+/// Converts [`UpdateSummary::has_failures`] into an [`ExecOutcome`].
+#[must_use]
+const fn summary_outcome(summary: &UpdateSummary) -> ExecOutcome {
+    if summary.has_failures() {
+        ExecOutcome::Failed
+    } else {
+        ExecOutcome::Succeeded
     }
 }
 
@@ -225,11 +310,12 @@ mod tests {
     use crate::core::config::Config;
     use crate::core::context::Context;
     use crate::core::log;
-    use crate::core::update::SummaryKind;
+    use crate::core::update::{PullCache, SummaryKind, UpdateRunners};
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
+    use crate::io::exec::command::ExecOutcome;
     use crate::io::exec::podman::PullOutcome;
     use crate::io::system::fs;
-    use super::{execute_update_with, handle};
+    use super::{execute_update_with, execute_update_with_inspectors, handle};
 
     const CACHE_RECIPE_PSL: &str = "\
 pod cache {
@@ -333,7 +419,7 @@ recipes {
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        execute_update_with(
+        let pod_outcome = execute_update_with(
             &context,
             SummaryKind::LifecycleUpdate,
             &mut mock_mixed_pull,
@@ -341,6 +427,7 @@ recipes {
             &mut stderr,
         )
         .unwrap();
+        assert_eq!(pod_outcome, ExecOutcome::Failed);
         let output = String::from_utf8(stdout).unwrap();
         let err_output = String::from_utf8(stderr).unwrap();
 
@@ -382,7 +469,7 @@ recipes {
         ];
         let mut cnt_stdout = Vec::new();
         let mut cnt_stderr = Vec::new();
-        execute_update_with(
+        let cnt_outcome = execute_update_with(
             &context,
             SummaryKind::LifecycleUpdate,
             &mut mock_mixed_pull,
@@ -390,6 +477,7 @@ recipes {
             &mut cnt_stderr,
         )
         .unwrap();
+        assert_eq!(cnt_outcome, ExecOutcome::Failed);
         let cnt_output = String::from_utf8(cnt_stdout).unwrap();
         assert!(cnt_output.contains("Container 'example-stack-db' is up to date.\n\n"));
         assert!(cnt_output.contains("Stop container 'example-stack-app': \n"));
@@ -487,6 +575,125 @@ recipes {
         .unwrap_err();
         assert!(matches!(recipe_err, PodError::Psl(_) | PodError::Recipe(_)));
         assert!(err_stdout.is_empty());
+
+        let _ = std_fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn tdd_cross_pod_duplicate_image_pull_deduplication() {
+        let temp_dir = env::temp_dir().join(format!("podoxide_tdd_dedup_{}", process::id()));
+        let _ = std_fs::remove_dir_all(&temp_dir);
+        let recipes_dir = temp_dir.join("recipes");
+        std_fs::create_dir_all(&recipes_dir).unwrap();
+
+        let pod_one = "\
+pod one {
+    name \"Pod One\"
+    path /pods/one
+    registry docker.io
+}
+container *db {
+    image postgres:16
+}
+";
+        let pod_two = "\
+pod two {
+    name \"Pod Two\"
+    path /pods/two
+    registry docker.io
+}
+container *db {
+    image postgres:16
+}
+";
+        fs::write_file(&recipes_dir.join("one.pod"), pod_one).unwrap();
+        fs::write_file(&recipes_dir.join("two.pod"), pod_two).unwrap();
+
+        let mut config =
+            Config::from_str("recipes {\n    groups {\n        all one two\n    }\n}\n").unwrap();
+        config.recipes.path = recipes_dir;
+        config.simulate = true;
+
+        let mut context = Context::new();
+        context.config = config;
+        context.parameters = vec![String::from("@all")];
+
+        let mut pull_calls = 0_usize;
+        let mut counting_pull = |_: &str,
+                                 prefix: &str,
+                                 _: bool,
+                                 stdout: &mut Vec<u8>,
+                                 _: &mut Vec<u8>|
+         -> Result<PullOutcome, PodError> {
+            pull_calls += 1;
+            log::write_print(stdout, &format!("{prefix}Updated."));
+            Ok(PullOutcome::Updated)
+        };
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let outcome = execute_update_with(
+            &context,
+            SummaryKind::LifecycleUpdate,
+            &mut counting_pull,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(outcome, ExecOutcome::Succeeded);
+        assert_eq!(
+            pull_calls, 1,
+            "shared image across pods must only invoke pull_image once"
+        );
+
+        // Cross-pod stale container detection when shared pre-pulled image returns UpToDate:
+        // pod one runs sha256:new (up to date), pod two runs sha256:old (reloaded).
+        let mut stale_pull_calls = 0_usize;
+        let mut up_to_date_pull = |_: &str,
+                                   prefix: &str,
+                                   _: bool,
+                                   out: &mut Vec<u8>,
+                                   _: &mut Vec<u8>|
+         -> Result<PullOutcome, PodError> {
+            stale_pull_calls += 1;
+            log::write_print(out, &format!("{prefix}Up to date."));
+            Ok(PullOutcome::UpToDate)
+        };
+        let mut query_container = |container_name: &str| {
+            if container_name == "two-db" {
+                Some(String::from("sha256:old"))
+            } else {
+                Some(String::from("sha256:new"))
+            }
+        };
+        let mut query_image = |_: &str| Some(String::from("sha256:new"));
+        let mut cache = PullCache::new();
+        let mut runners = UpdateRunners {
+            cache: &mut cache,
+            pull_image: &mut up_to_date_pull,
+            query_container_image: &mut query_container,
+            query_image: &mut query_image,
+        };
+        let mut stale_stdout = Vec::new();
+        let mut stale_stderr = Vec::new();
+        let stale_outcome = execute_update_with_inspectors(
+            &context,
+            SummaryKind::LifecycleUpdate,
+            &mut runners,
+            &mut stale_stdout,
+            &mut stale_stderr,
+        )
+        .unwrap();
+        assert_eq!(stale_outcome, ExecOutcome::Succeeded);
+        assert_eq!(stale_pull_calls, 1);
+        let stale_text = String::from_utf8(stale_stdout).unwrap();
+        assert!(stale_text.contains("Pod 'Pod One' ('one') is up to date."));
+        assert!(stale_text.contains("Stop container 'two-db': "));
+        assert!(stale_text.contains("Start container 'two-db': "));
+        assert!(
+            stale_text
+                .contains("Checked 2 pods (2 containers): 1 reloaded, 1 up to date, 0 failed.")
+        );
 
         let _ = std_fs::remove_dir_all(&temp_dir);
     }

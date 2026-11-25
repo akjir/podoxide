@@ -80,7 +80,7 @@ impl PullOutcome {
     }
 }
 
-/// Executes `podman exec [-it|-i] [-u <user>] <container_name> <command...>`.
+/// Executes `podman exec [-it|-i] [-u <user>] <container_name> <command...>` and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -91,7 +91,7 @@ pub fn exec_container<S: AsRef<str>, W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     validate_exec_container(request)?;
     let is_tty = if simulate {
         request.interactive
@@ -104,7 +104,7 @@ pub fn exec_container<S: AsRef<str>, W: Write, E: Write>(
     } else {
         ExecMode::Captured
     };
-    let _ = super::run_podman_with(
+    super::run_podman_with(
         &arguments,
         &ExecOptions {
             interrupt_policy: InterruptPolicy::WarnOnInterrupt,
@@ -114,11 +114,10 @@ pub fn exec_container<S: AsRef<str>, W: Write, E: Write>(
         },
         stdout,
         stderr,
-    )?;
-    Ok(())
+    )
 }
 
-/// Executes `podman pod logs -n [--color] [-f] [--since <since>] [--until <until>] [--tail <tail>] [--timestamps] [-c <container_name>] <pod_name>`.
+/// Executes `podman pod logs -n [--color] [-f] [--since <since>] [--until <until>] [--tail <tail>] [--timestamps] [-c <container_name>] <pod_name>` and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -129,7 +128,7 @@ pub fn logs_pod<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     validate_pod_logs(request)?;
     let no_color = env::var_os("NO_COLOR").is_some();
     let use_color = if simulate {
@@ -143,7 +142,7 @@ pub fn logs_pod<W: Write, E: Write>(
     } else {
         InterruptPolicy::WarnOnInterrupt
     };
-    let _ = super::run_podman_with(
+    super::run_podman_with(
         &arguments,
         &ExecOptions {
             interrupt_policy,
@@ -153,8 +152,7 @@ pub fn logs_pod<W: Write, E: Write>(
         },
         stdout,
         stderr,
-    )?;
-    Ok(())
+    )
 }
 
 /// Executes `podman pull <image_reference>` while displaying progress and inspecting the local image ID before and after to report [`PullOutcome`].

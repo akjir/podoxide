@@ -20,8 +20,8 @@ use super::{
     FIELD_DELIMITER, IMAGES_FORMAT, MAX_INSPECT_RECORDS, MAX_VERSION_LINES,
     MAX_VERSION_OUTPUT_BYTES, PS_FORMAT, RECORD_DELIMITER, collect_in_use_images_with,
     container_running_with, is_running_container_status, is_supported_version,
-    parse_image_id_output, parse_in_use_output, pod_exists_with, query_image_id_with,
-    query_images_with, query_ps_status_with,
+    parse_image_id_output, parse_in_use_output, pod_exists_with, query_container_image_id_with,
+    query_image_id_with, query_images_with, query_ps_status_with,
 };
 
 #[test]
@@ -186,6 +186,23 @@ fn query_in_use_images_and_format_templates_use_atomic_ps_and_control_delimiters
         ]
     );
     assert!(query_image_id_with("alpine:latest", &mut |_: &[&str]| None).is_none());
+
+    let mut container_inspect_calls: Vec<Vec<String>> = Vec::new();
+    let mut container_inspect_capture = |arguments: &[&str]| -> Option<String> {
+        container_inspect_calls.push(arguments.iter().map(|item| (*item).to_owned()).collect());
+        Some(String::from("sha256:oldimage\n"))
+    };
+    assert_eq!(
+        query_container_image_id_with("stack-db", &mut container_inspect_capture),
+        Some(String::from("sha256:oldimage"))
+    );
+    assert!(query_container_image_id_with("--invalid", &mut container_inspect_capture).is_none());
+    assert_eq!(container_inspect_calls.len(), 1);
+    assert_eq!(
+        container_inspect_calls[0],
+        vec!["container", "inspect", "-f", "{{.Image}}", "stack-db"]
+    );
+    assert!(query_container_image_id_with("stack-db", &mut |_: &[&str]| None).is_none());
 }
 
 #[test]

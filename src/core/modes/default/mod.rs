@@ -38,6 +38,7 @@ use crate::core::log;
 use crate::core::pod::Pod;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, ConfigError, ConfigErrorKind, PodError};
+use crate::io::exec::command::ExecOutcome;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::string::is_valid_target_segment;
 
@@ -51,16 +52,18 @@ type ResolvedTargets<'a> = (BTreeMap<&'a str, Recipe>, Vec<(&'a str, String)>);
 /// Returns [`PodError`] if `context.parameters` is empty, target validation or expansion fails, a targeted `.pod` recipe file cannot be read or validated, a container target cannot be resolved, or the lifecycle action fails.
 pub fn execute_lifecycle_action(
     context: &Context,
-    pod_action: fn(&Recipe, bool) -> Result<(), PodError>,
-    container_action: fn(&Container, &Pod, bool) -> Result<(), PodError>,
+    pod_action: fn(&Recipe, bool) -> Result<ExecOutcome, PodError>,
+    container_action: fn(&Container, &Pod, bool) -> Result<ExecOutcome, PodError>,
 ) -> Result<(), PodError> {
     let Some(first) = context.parameters.first() else {
         return Err(PodError::from(CliError::new(CliErrorKind::MissingTarget)));
     };
     if first.contains('/') {
-        return execute_container_targets(context, container_action);
+        let _ = execute_container_targets(context, container_action)?;
+        return Ok(());
     }
-    execute_pod_targets(context, pod_action)
+    let _ = execute_pod_targets(context, pod_action)?;
+    Ok(())
 }
 
 /// Dispatches default mode execution to the resolved lifecycle, status, help, or version action.
@@ -150,34 +153,40 @@ pub(crate) fn resolve_container_targets<'a>(
 /// Resolves, deduplicates, and executes `container_action` across explicit `<recipe>/<container>` targets.
 fn execute_container_targets(
     context: &Context,
-    container_action: fn(&Container, &Pod, bool) -> Result<(), PodError>,
-) -> Result<(), PodError> {
+    container_action: fn(&Container, &Pod, bool) -> Result<ExecOutcome, PodError>,
+) -> Result<ExecOutcome, PodError> {
     if log::is_debug_enabled() {
         log::debug(&format!("Targets   - {}", context.parameters.join(" ")));
     }
     let specs = collect_container_specs(context)?;
     let (recipes, resolved) = resolve_container_targets(&context.config, &specs)?;
+    let mut outcome = ExecOutcome::Succeeded;
     for (recipe_name, container_name) in &resolved {
         let Some(recipe) = recipes.get(recipe_name) else {
             continue;
         };
         let container = recipe.resolve_container(container_name)?;
-        container_action(container, &recipe.pod, context.config.simulate)?;
+        outcome = outcome.combine(container_action(
+            container,
+            &recipe.pod,
+            context.config.simulate,
+        )?);
     }
-    Ok(())
+    Ok(outcome)
 }
 
 /// Expands `@<group>` and `<recipe>` targets and executes `pod_action` for each recipe.
 fn execute_pod_targets(
     context: &Context,
-    pod_action: fn(&Recipe, bool) -> Result<(), PodError>,
-) -> Result<(), PodError> {
+    pod_action: fn(&Recipe, bool) -> Result<ExecOutcome, PodError>,
+) -> Result<ExecOutcome, PodError> {
     let targets = expand_pod_targets(context)?;
+    let mut outcome = ExecOutcome::Succeeded;
     for target in &targets {
         let recipe = Recipe::inspect(&context.config, target)?;
-        pod_action(&recipe, context.config.simulate)?;
+        outcome = outcome.combine(pod_action(&recipe, context.config.simulate)?);
     }
-    Ok(())
+    Ok(outcome)
 }
 
 /// Returns the cached [`Recipe`] for `recipe_name` or loads, validates, and caches it.

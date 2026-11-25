@@ -84,7 +84,7 @@ pub(super) fn execute_logs_with<W: Write, E: Write>(
     let (recipe_name, container_spec) = parse_target(target)?;
     let (pod_id, container_name) = load_and_resolve_target(context, recipe_name, container_spec)?;
     validate_log_flags(&context.flags)?;
-    podman::logs_pod(
+    let _ = podman::logs_pod(
         &PodLogs {
             container_name: container_name.as_deref(),
             follow,
@@ -98,7 +98,8 @@ pub(super) fn execute_logs_with<W: Write, E: Write>(
         context.config.simulate,
         stdout,
         stderr,
-    )
+    )?;
+    Ok(())
 }
 
 /// Extracts the single positional `<recipe>[/<container>]` parameter from `context.parameters`.

@@ -41,6 +41,16 @@ pub enum ExecOutcome {
 }
 
 impl ExecOutcome {
+    /// Combines two execution outcomes, returning [`ExecOutcome::Failed`] if either failed.
+    #[inline]
+    #[must_use]
+    pub const fn combine(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Succeeded, Self::Succeeded) => Self::Succeeded,
+            _ => Self::Failed,
+        }
+    }
+
     /// Converts a process [`ExitStatus`] into [`ExecOutcome::Succeeded`] or [`ExecOutcome::Failed`].
     #[inline]
     #[must_use]

@@ -17,10 +17,10 @@
 
 use std::io::{self, Write};
 
+use crate::core::config::validate_editor;
 use crate::core::context::Context;
 use crate::error::PodError;
 use crate::io::exec::command;
-use crate::utilities::path::validate_editor;
 use super::{build_recipe_path, extract_registered_recipe};
 
 /// Opens the specified `.pod` recipe file in the external editor configured in `pods.conf`.

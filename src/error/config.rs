@@ -55,12 +55,13 @@ impl ConfigError {
                 | ConfigErrorKind::InvalidPath
         );
         let token = self.token.as_deref();
+        let (annotation_text, help_text) = diagnostic_messages(self.kind, token);
         let built = diagnostic::build_diagnostic_from_line(
             source,
             file_path,
             line_number,
-            self.kind.annotation_text(),
-            self.kind.help_text(),
+            annotation_text,
+            help_text,
             |sanitized_line| {
                 span::locate_token_span(
                     span::strip_inline_comment(sanitized_line),
@@ -230,6 +231,36 @@ impl Display for ConfigErrorKind {
     }
 }
 
+/// Resolves tailored diagnostic annotation and help messages for `kind` and `token`.
+#[must_use]
+fn diagnostic_messages(kind: ConfigErrorKind, token: Option<&str>) -> (&'static str, &'static str) {
+    if kind == ConfigErrorKind::InvalidPath && token.is_some_and(is_disallowed_podman_editor_token)
+    {
+        return (
+            "'podman' is not allowed as an external editor",
+            "configure a text editor such as 'vim', 'nvim', or 'nano' instead of 'podman'.",
+        );
+    }
+    (kind.annotation_text(), kind.help_text())
+}
+
+/// Evaluates whether `token` is a bare or absolute `podman` executable name disallowed as an editor.
+#[must_use]
+fn is_disallowed_podman_editor_token(token: &str) -> bool {
+    if token.is_empty()
+        || token.starts_with('-')
+        || (token.contains('/') && !token.starts_with('/'))
+        || token.contains("..")
+        || string::contains_control_or_whitespace(token)
+    {
+        return false;
+    }
+    token
+        .rsplit('/')
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("podman"))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::error::MAX_ERROR_TOKEN_BYTES;
@@ -326,5 +357,35 @@ mod tests {
         let formatted_oversized = direct_oversized.to_string();
         assert!(formatted_oversized.len() <= MAX_ERROR_TOKEN_BYTES + 64);
         assert!(formatted_oversized.ends_with("ä'"));
+
+        let podman_editor = ConfigError::with_token(ConfigErrorKind::InvalidPath, 2, "podman")
+            .with_diagnostic("general {\n    editor podman\n}\n", "./pods.conf");
+        let podman_diag = podman_editor.diagnostic.as_ref().unwrap();
+        assert!(podman_diag.annotation_text.contains("podman"));
+        assert!(podman_diag.help_text.contains("podman"));
+
+        let abs_podman =
+            ConfigError::with_token(ConfigErrorKind::InvalidPath, 2, "/usr/bin/podman")
+                .with_diagnostic("general {\n    editor /usr/bin/podman\n}\n", "./pods.conf");
+        assert!(
+            abs_podman
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .annotation_text
+                .contains("podman")
+        );
+
+        let traversal_podman =
+            ConfigError::with_token(ConfigErrorKind::InvalidPath, 2, "../podman")
+                .with_diagnostic("pods {\n    path ../podman\n}\n", "./pods.conf");
+        assert_eq!(
+            traversal_podman
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .annotation_text,
+            ConfigErrorKind::InvalidPath.annotation_text()
+        );
     }
 }

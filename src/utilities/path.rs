@@ -13,13 +13,12 @@
 // You should have received a copy of the GNU General Public License along with
 // this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! File path lexical normalization, extension matching, and configuration stem extraction helpers.
+//! File path lexical normalization, extension matching, and path validation helpers.
 
 use std::borrow::Cow;
 use std::path::{Component, Path, PathBuf};
 
-use crate::core::config::{DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH};
-use crate::error::{ConfigError, ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError};
+use crate::error::MAX_ERROR_TOKEN_BYTES;
 use crate::utilities::string;
 
 /// Constructs a full file or directory path from `base_dir`, `file_name`, and `file_extension`.
@@ -43,14 +42,6 @@ pub fn build_full_path(base_dir: &Path, file_name: &str, file_extension: &str) -
         full.push(leaf.as_ref());
     }
     full
-}
-
-/// Extracts the configuration file stem from a raw `.conf` path string if it is structurally valid.
-#[must_use]
-pub fn extract_config_stem(raw_value: &str) -> Option<&str> {
-    let file_name = validate_raw_target_file_name(raw_value)?;
-    let stem = file_name.strip_suffix(".conf").unwrap_or(file_name);
-    has_valid_stem(stem).then_some(stem)
 }
 
 /// Evaluates whether `path` contains any parent directory (`..`) traversal component.
@@ -221,43 +212,6 @@ pub fn relative_display_path<'a>(path: &'a Path, base_dir: &Path) -> &'a Path {
     stripped
 }
 
-/// Resolves a configuration file argument into its configuration name (file stem).
-#[must_use]
-pub fn resolve_config_name(config: Option<&Path>) -> String {
-    config
-        .and_then(Path::to_str)
-        .and_then(extract_config_stem)
-        .unwrap_or(DEFAULT_CONFIG_NAME)
-        .to_owned()
-}
-
-/// Resolves a configuration file argument into a normalized `.conf` path.
-#[must_use]
-pub fn resolve_config_path(config: Option<&Path>) -> PathBuf {
-    let Some(path) = config else {
-        return PathBuf::from(DEFAULT_CONFIG_PATH);
-    };
-    let Some(raw) = path.to_str() else {
-        return PathBuf::from(DEFAULT_CONFIG_PATH);
-    };
-    if extract_config_stem(raw).is_none() {
-        return PathBuf::from(DEFAULT_CONFIG_PATH);
-    }
-    let has_explicit_prefix =
-        raw.starts_with('/') || raw.starts_with("./") || raw.starts_with("../");
-    let has_conf_extension = raw.ends_with(".conf");
-
-    let mut resolved = String::with_capacity(raw.len() + 7);
-    if !has_explicit_prefix {
-        resolved.push_str("./");
-    }
-    resolved.push_str(raw);
-    if !has_conf_extension {
-        resolved.push_str(".conf");
-    }
-    PathBuf::from(resolved)
-}
-
 /// Clamps and sanitizes a filesystem `path` into a bounded [`MAX_ERROR_TOKEN_BYTES`] error token.
 #[must_use]
 pub fn sanitize_path_token(path: &Path) -> String {
@@ -271,27 +225,25 @@ pub fn sanitize_path_token(path: &Path) -> String {
     string::sanitize_text(&lossy, MAX_ERROR_TOKEN_BYTES)
 }
 
-/// Verifies that `editor` is non-empty and structurally valid for direct process execution.
-///
-/// # Errors
-///
-/// Returns [`PodError`] with [`ConfigErrorKind::MissingEditor`] when `editor` is empty or
-/// whitespace-only, or [`ConfigErrorKind::InvalidPath`] when `editor` is not a valid executable
-/// name or path.
-pub fn validate_editor(editor: &str) -> Result<&str, PodError> {
-    if editor.trim().is_empty() {
-        return Err(PodError::from(ConfigError::new(
-            ConfigErrorKind::MissingEditor,
-            None,
-        )));
+/// Evaluates whether `stem` is non-empty and contains at least one non-dot byte.
+#[must_use]
+pub(crate) fn has_valid_stem(stem: &str) -> bool {
+    !stem.is_empty() && !stem.bytes().all(|byte| byte == b'.')
+}
+
+/// Validates structural invariants of a raw target path string and returns its terminal file name.
+#[must_use]
+pub(crate) fn validate_raw_target_file_name(raw_value: &str) -> Option<&str> {
+    if raw_value.is_empty()
+        || raw_value != raw_value.trim()
+        || raw_value.starts_with(['-', '+'])
+        || raw_value.ends_with('/')
+        || string::contains_control_or_bidi(raw_value)
+    {
+        return None;
     }
-    if !is_valid_editor_value(editor) {
-        return Err(PodError::from(ConfigError::without_line(
-            ConfigErrorKind::InvalidPath,
-            editor,
-        )));
-    }
-    Ok(editor)
+    let file_name = raw_value.rsplit('/').next().unwrap_or(raw_value);
+    (!file_name.starts_with(['-', '+'])).then_some(file_name)
 }
 
 /// Applies a single `component` to `normalized` during lexical path normalization.
@@ -324,11 +276,6 @@ fn has_dot_segment_prefix(base_bytes: &[u8]) -> bool {
         || base_bytes.starts_with(b"../")
 }
 
-/// Evaluates whether `stem` is non-empty and contains at least one non-dot byte.
-fn has_valid_stem(stem: &str) -> bool {
-    !stem.is_empty() && !stem.bytes().all(|byte| byte == b'.')
-}
-
 /// Strips any leading `.` (`./`) current-directory prefix components from `path`.
 #[must_use]
 fn strip_leading_cur_dir(mut path: &Path) -> &Path {
@@ -338,341 +285,6 @@ fn strip_leading_cur_dir(mut path: &Path) -> &Path {
     path
 }
 
-/// Validates structural invariants of a raw target path string and returns its terminal file name.
-#[must_use]
-fn validate_raw_target_file_name(raw_value: &str) -> Option<&str> {
-    if raw_value.is_empty()
-        || raw_value != raw_value.trim()
-        || raw_value.starts_with(['-', '+'])
-        || raw_value.ends_with('/')
-        || string::contains_control_or_bidi(raw_value)
-    {
-        return None;
-    }
-    let file_name = raw_value.rsplit('/').next().unwrap_or(raw_value);
-    (!file_name.starts_with(['-', '+'])).then_some(file_name)
-}
-
 #[cfg(test)]
-mod tests {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt;
-    use std::path::{Path, PathBuf};
-
-    use crate::error::{ConfigErrorKind, MAX_ERROR_TOKEN_BYTES, PodError};
-    use super::{
-        build_full_path, extract_config_stem, has_parent_dir, has_regular_target_name,
-        is_valid_directory, is_valid_directory_path, is_valid_editor_value, is_valid_target_path,
-        is_valid_volume_options, matches_extension, normalize_lexical_path, parent_or_cur_dir,
-        pop_relative_or_absolute, relative_display_path, resolve_config_name, resolve_config_path,
-        sanitize_path_token, validate_editor,
-    };
-
-    #[test]
-    fn build_full_path_and_directory_validation_and_sanitization() {
-        assert_eq!(
-            build_full_path(Path::new("."), "recipe", ".pod"),
-            PathBuf::from("./recipe.pod")
-        );
-        assert_eq!(
-            build_full_path(Path::new("./recipes"), "recipe.pod", ".pod"),
-            PathBuf::from("./recipes/recipe.pod")
-        );
-        assert_eq!(
-            build_full_path(Path::new("pods"), "si_po", ""),
-            PathBuf::from("./pods/si_po")
-        );
-        assert_eq!(
-            build_full_path(Path::new(".pods"), "si_po", ""),
-            PathBuf::from("./.pods/si_po")
-        );
-        assert_eq!(
-            build_full_path(Path::new(".recipes"), "recipe", ".pod"),
-            PathBuf::from("./.recipes/recipe.pod")
-        );
-        assert_eq!(
-            build_full_path(Path::new("/pods"), "nopathpod", ""),
-            PathBuf::from("/pods/nopathpod")
-        );
-        assert_eq!(
-            build_full_path(Path::new(""), "recipe", ".pod"),
-            PathBuf::from("./recipe.pod")
-        );
-        assert_eq!(
-            build_full_path(Path::new("./recipes"), "/etc/passwd", ".pod"),
-            PathBuf::from("./recipes/etc/passwd.pod")
-        );
-
-        assert!(is_valid_directory(Path::new(".")));
-        assert!(is_valid_directory(Path::new("/var/lib/pods")));
-        assert!(!is_valid_directory(Path::new("../pods")));
-        let non_utf8_dir = PathBuf::from(OsString::from_vec(vec![b'/', 0xFF]));
-        assert!(!is_valid_directory(&non_utf8_dir));
-
-        assert!(is_valid_directory_path("."));
-        assert!(is_valid_directory_path("./pods"));
-        assert!(is_valid_directory_path("/var/lib/pods"));
-        assert!(!is_valid_directory_path(""));
-        assert!(!is_valid_directory_path("/"));
-        assert!(!is_valid_directory_path("-pods"));
-        assert!(!is_valid_directory_path("../pods"));
-        assert!(!is_valid_directory_path("/var:pods"));
-        assert!(!is_valid_directory_path("/var/pods\n"));
-
-        assert!(is_valid_editor_value("vim"));
-        assert!(is_valid_editor_value("/usr/bin/nvim"));
-        assert!(!is_valid_editor_value("./evil"));
-        assert!(!is_valid_editor_value("sub/vim"));
-        assert!(!is_valid_editor_value(""));
-        assert!(!is_valid_editor_value("-vim"));
-        assert!(!is_valid_editor_value("/usr/bin/-vim"));
-        assert!(!is_valid_editor_value("../vim"));
-        assert!(!is_valid_editor_value("/usr/bin/"));
-        assert!(!is_valid_editor_value("vim -u NONE"));
-        assert!(!is_valid_editor_value("podman"));
-        assert!(!is_valid_editor_value("/usr/bin/podman"));
-        assert_eq!(validate_editor("vim").unwrap(), "vim");
-        assert!(matches!(
-            validate_editor("   "),
-            Err(PodError::Config(error)) if error.kind == ConfigErrorKind::MissingEditor
-        ));
-        assert!(matches!(
-            validate_editor("-vim"),
-            Err(PodError::Config(error)) if error.kind == ConfigErrorKind::InvalidPath
-        ));
-
-        assert!(is_valid_volume_options("ro,Z"));
-        assert!(!is_valid_volume_options(""));
-        assert!(!is_valid_volume_options(","));
-        assert!(!is_valid_volume_options("ro,"));
-        assert!(!is_valid_volume_options(",ro"));
-        assert!(!is_valid_volume_options("ro,,Z"));
-        assert!(!is_valid_volume_options("-ro"));
-        assert!(!is_valid_volume_options("ro:z"));
-        assert!(!is_valid_volume_options("ro/rw"));
-        assert!(!is_valid_volume_options(".."));
-        assert!(!is_valid_volume_options("ro z"));
-
-        assert!(has_regular_target_name(Path::new("./pods.conf")));
-        assert!(!has_regular_target_name(Path::new("")));
-        assert!(!has_regular_target_name(Path::new(".")));
-        assert!(!has_regular_target_name(Path::new("..")));
-        assert!(!has_regular_target_name(Path::new("./pods.conf/")));
-        assert!(!has_regular_target_name(Path::new("./pods.conf/.")));
-
-        assert_eq!(
-            sanitize_path_token(Path::new("/tmp/evil\x1b[31m.pod")),
-            "/tmp/evil [31m.pod"
-        );
-    }
-
-    #[test]
-    fn extract_config_stem_and_resolve_config_helpers() {
-        assert_eq!(extract_config_stem("pods"), Some("pods"));
-        assert_eq!(extract_config_stem("./pods.conf"), Some("pods"));
-        assert_eq!(extract_config_stem(".hidden"), Some(".hidden"));
-        assert_eq!(extract_config_stem("./.hidden.conf"), Some(".hidden"));
-        assert_eq!(
-            extract_config_stem("../my.multi.ext.conf"),
-            Some("my.multi.ext")
-        );
-        assert_eq!(
-            extract_config_stem("/etc/pods/staging.conf"),
-            Some("staging")
-        );
-
-        assert_eq!(resolve_config_name(None), "pods");
-        assert_eq!(resolve_config_name(Some(Path::new("staging"))), "staging");
-        assert_eq!(resolve_config_name(Some(Path::new("."))), "pods");
-        assert_eq!(resolve_config_path(None), PathBuf::from("./pods.conf"));
-        assert_eq!(
-            resolve_config_path(Some(Path::new("staging"))),
-            PathBuf::from("./staging.conf")
-        );
-        assert_eq!(
-            resolve_config_path(Some(Path::new("/etc/pods/staging.conf"))),
-            PathBuf::from("/etc/pods/staging.conf")
-        );
-        assert_eq!(
-            resolve_config_path(Some(Path::new("."))),
-            PathBuf::from("./pods.conf")
-        );
-
-        for invalid in [
-            "",
-            " ",
-            " pods.conf",
-            "pods.conf ",
-            "pods.conf\n",
-            "-pods.conf",
-            "/tmp/-pods.conf",
-            "/",
-            "./",
-            "../",
-            "configs/",
-            ".",
-            "..",
-            "...",
-            ".conf",
-            "/tmp/.conf",
-            "..conf",
-            "...conf",
-            "/tmp/..conf",
-            "/tmp/...conf",
-            "pods\u{202E}.conf",
-            "/tmp/\u{2066}pods.conf",
-        ] {
-            assert_eq!(
-                extract_config_stem(invalid),
-                None,
-                "expected None for {invalid:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn parent_dir_extension_and_lexical_normalization() {
-        assert!(has_parent_dir(Path::new("..")));
-        assert!(has_parent_dir(Path::new("../pods")));
-        assert!(has_parent_dir(Path::new("/var/pods/../etc")));
-        assert!(!has_parent_dir(Path::new("./pods")));
-        assert!(!has_parent_dir(Path::new("/var/lib/pods")));
-
-        assert!(matches_extension("app.pod", Some(".pod")));
-        assert!(matches_extension(".hidden.pod", Some(".pod")));
-        assert!(!matches_extension(".pod", Some(".pod")));
-        assert!(!matches_extension("..pod", Some(".pod")));
-        assert!(!matches_extension("...pod", Some(".pod")));
-        assert!(!matches_extension("app.txt", Some(".pod")));
-        assert!(matches_extension("anything", None));
-        assert!(!matches_extension("", None));
-        assert!(!matches_extension(".", None));
-        assert!(!matches_extension("..", None));
-
-        assert_eq!(normalize_lexical_path(Path::new("")), PathBuf::new());
-        assert_eq!(normalize_lexical_path(Path::new("/..")), PathBuf::from("/"));
-        assert_eq!(normalize_lexical_path(Path::new("..")), PathBuf::from(".."));
-        assert_eq!(
-            normalize_lexical_path(Path::new("./a/..")),
-            PathBuf::from(".")
-        );
-        assert_eq!(
-            normalize_lexical_path(Path::new("a/../../b")),
-            PathBuf::from("../b")
-        );
-        assert_eq!(
-            normalize_lexical_path(Path::new("/../../etc/./pods")),
-            PathBuf::from("/etc/pods")
-        );
-
-        let mut dot_path = PathBuf::from(".");
-        pop_relative_or_absolute(&mut dot_path);
-        assert_eq!(dot_path, PathBuf::from(".."));
-        pop_relative_or_absolute(&mut dot_path);
-        assert_eq!(dot_path, PathBuf::from("../.."));
-
-        let mut empty_path = PathBuf::new();
-        pop_relative_or_absolute(&mut empty_path);
-        assert_eq!(empty_path, PathBuf::from(".."));
-
-        let mut root_path = PathBuf::from("/");
-        pop_relative_or_absolute(&mut root_path);
-        assert_eq!(root_path, PathBuf::from("/"));
-
-        assert!(is_valid_target_path(Path::new("./recipe.pod")));
-        assert!(is_valid_target_path(Path::new("./pods.conf")));
-        assert!(is_valid_target_path(Path::new("./.hidden.pod")));
-        assert_eq!(
-            is_valid_target_path(Path::new(".pod.conf")),
-            extract_config_stem(".pod.conf").is_some()
-        );
-        assert!(!is_valid_target_path(Path::new("+!id.conf")));
-        assert!(!is_valid_target_path(Path::new("+q.pod")));
-        assert!(!is_valid_target_path(Path::new("./+q.pod")));
-        assert!(!is_valid_target_path(Path::new("")));
-        assert!(!is_valid_target_path(Path::new(".pod")));
-        assert!(!is_valid_target_path(Path::new("./.pod")));
-        assert!(!is_valid_target_path(Path::new("/tmp/.pod")));
-        assert!(!is_valid_target_path(Path::new("..pod")));
-        assert!(!is_valid_target_path(Path::new("./...pod")));
-        assert!(!is_valid_target_path(Path::new("..conf")));
-        assert!(!is_valid_target_path(Path::new("...conf")));
-        assert!(!is_valid_target_path(Path::new("../pods.conf")));
-        assert!(!is_valid_target_path(Path::new("/tmp/../pods.conf")));
-        let non_utf8_path = PathBuf::from(OsString::from_vec(vec![b'.', b'/', 0xFF, b'.', b'c']));
-        assert!(!is_valid_target_path(&non_utf8_path));
-
-        assert_eq!(parent_or_cur_dir(Path::new("./recipe.pod")), Path::new("."));
-        assert_eq!(parent_or_cur_dir(Path::new("recipe.pod")), Path::new("."));
-        assert_eq!(
-            parent_or_cur_dir(Path::new("/tmp/workspace/recipe.pod")),
-            Path::new("/tmp/workspace")
-        );
-
-        assert_eq!(
-            relative_display_path(Path::new("."), Path::new(".")),
-            Path::new(".")
-        );
-        assert_eq!(
-            relative_display_path(Path::new("/tmp/workspace"), Path::new("/tmp/workspace")),
-            Path::new(".")
-        );
-        assert_eq!(
-            relative_display_path(Path::new("./recipe.pod"), Path::new(".")),
-            Path::new("recipe.pod")
-        );
-        assert_eq!(
-            relative_display_path(Path::new("./pods.conf"), Path::new(".")),
-            Path::new("pods.conf")
-        );
-        assert_eq!(
-            relative_display_path(
-                Path::new("/tmp/workspace/recipe.pod"),
-                Path::new("/tmp/workspace")
-            ),
-            Path::new("recipe.pod")
-        );
-        assert_eq!(
-            relative_display_path(Path::new("/etc/pods/staging.conf"), Path::new(".")),
-            Path::new("/etc/pods/staging.conf")
-        );
-        assert_eq!(
-            relative_display_path(Path::new("./a/b"), Path::new("a")),
-            Path::new("b")
-        );
-        assert_eq!(
-            relative_display_path(Path::new("a/b"), Path::new("./a")),
-            Path::new("b")
-        );
-    }
-
-    #[test]
-    fn sanitize_path_token_respects_utf8_boundaries_and_non_utf8_osstr() {
-        let exact = "a".repeat(MAX_ERROR_TOKEN_BYTES);
-        assert_eq!(
-            sanitize_path_token(Path::new(&exact)).len(),
-            MAX_ERROR_TOKEN_BYTES
-        );
-
-        let over = "a".repeat(MAX_ERROR_TOKEN_BYTES + 1);
-        assert_eq!(
-            sanitize_path_token(Path::new(&over)).len(),
-            MAX_ERROR_TOKEN_BYTES
-        );
-
-        let mut boundary_str = "a".repeat(MAX_ERROR_TOKEN_BYTES - 3);
-        boundary_str.push('\u{1F980}');
-        let sanitized_boundary = sanitize_path_token(Path::new(&boundary_str));
-        assert_eq!(sanitized_boundary.len(), MAX_ERROR_TOKEN_BYTES - 3);
-        assert!(!sanitized_boundary.contains('\u{FFFD}'));
-
-        let mut raw_non_utf8 = vec![b'a'; MAX_ERROR_TOKEN_BYTES - 3];
-        raw_non_utf8.extend_from_slice("\u{1F980}".as_bytes());
-        raw_non_utf8[0] = 0xFF;
-        let non_utf8_path = PathBuf::from(OsString::from_vec(raw_non_utf8));
-        let sanitized_non_utf8 = sanitize_path_token(&non_utf8_path);
-        assert!(sanitized_non_utf8.len() <= MAX_ERROR_TOKEN_BYTES);
-        assert!(sanitized_non_utf8.starts_with('\u{FFFD}'));
-        assert!(!sanitized_non_utf8.ends_with('\u{FFFD}'));
-    }
-}
+#[path = "path_tests.rs"]
+mod tests;

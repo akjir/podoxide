@@ -100,6 +100,22 @@ pub(super) fn locate_token_span(
     highlight_trimmed_code(code_slice)
 }
 
+/// Locates the `arg_index`-th token on `code_slice` when specified, falling back to [`locate_token_span`].
+#[must_use]
+pub(super) fn locate_token_span_at_arg(
+    code_slice: &str,
+    token: Option<&str>,
+    prefer_argument: bool,
+    arg_index: Option<usize>,
+) -> (usize, usize) {
+    if let Some(target_index) = arg_index
+        && let Some((byte_start, byte_len)) = find_token_bytes_at_index(code_slice, target_index)
+    {
+        return byte_range_to_char_span(code_slice, byte_start, byte_len);
+    }
+    locate_token_span(code_slice, token, prefer_argument)
+}
+
 /// Strips any trailing `#` comment outside of single- or double-quoted strings.
 #[must_use]
 pub(super) fn strip_inline_comment(line: &str) -> &str {
@@ -186,6 +202,28 @@ fn find_matching_token_bytes(
         cursor = token_end;
     }
     first_match
+}
+
+/// Returns the `(byte_start, byte_len)` of the `target_index`-th token (`0` = directive name, `1..` = arguments) in `code_slice`.
+#[must_use]
+fn find_token_bytes_at_index(code_slice: &str, target_index: usize) -> Option<(usize, usize)> {
+    let bytes = code_slice.as_bytes();
+    let mut cursor = 0;
+    let mut token_index = 0_usize;
+
+    while let Some(&byte) = bytes.get(cursor) {
+        if byte.is_ascii_whitespace() || byte == b'{' || byte == b'}' {
+            cursor += 1;
+            continue;
+        }
+        let (token_start, token_end) = scan_next_code_token(code_slice, cursor);
+        if token_index == target_index {
+            return Some((token_start, token_end - token_start));
+        }
+        token_index += 1;
+        cursor = token_end;
+    }
+    None
 }
 
 /// Finds the first byte offset of `target_byte` outside of single- or double-quoted strings in `code_slice`.

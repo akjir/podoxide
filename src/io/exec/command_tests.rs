@@ -44,6 +44,23 @@ fn exec_capture_handles_success_failure_bounds_and_missing_binary() {
         Some("123456")
     );
     assert!(exec_capture_bounded("printf", &["1234567"], 6).is_none());
+
+    assert_eq!(
+        ExecOutcome::Succeeded.combine(ExecOutcome::Succeeded),
+        ExecOutcome::Succeeded
+    );
+    assert_eq!(
+        ExecOutcome::Succeeded.combine(ExecOutcome::Failed),
+        ExecOutcome::Failed
+    );
+    assert_eq!(
+        ExecOutcome::Failed.combine(ExecOutcome::Succeeded),
+        ExecOutcome::Failed
+    );
+    assert_eq!(
+        ExecOutcome::Failed.combine(ExecOutcome::Failed),
+        ExecOutcome::Failed
+    );
 }
 
 #[test]

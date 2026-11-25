@@ -61,6 +61,12 @@ pub fn pod_exists(pod_name: &str) -> bool {
     pod_exists_with(pod_name, &mut super::run_podman_capture)
 }
 
+/// Executes `podman container inspect -f '{{.Image}}' <container_name>` and returns the container's local image ID.
+#[must_use]
+pub fn query_container_image_id(container_name: &str) -> Option<String> {
+    query_container_image_id_with(container_name, &mut super::run_podman_capture)
+}
+
 /// Executes `podman image inspect -f '{{.Id}}' <image_reference>` and returns the local image ID.
 #[must_use]
 pub fn query_image_id(image_reference: &str) -> Option<String> {
@@ -230,6 +236,19 @@ where
         return false;
     }
     capture(&["pod", "exists", pod_name]).is_some()
+}
+
+/// Queries `podman container inspect -f '{{.Image}}' <container_name>` via `capture` and returns the validated image ID.
+#[must_use]
+fn query_container_image_id_with<F>(container_name: &str, capture: &mut F) -> Option<String>
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    if !string::is_valid_unmanaged_container_name(container_name) {
+        return None;
+    }
+    let output = capture(&["container", "inspect", "-f", "{{.Image}}", container_name])?;
+    parse_image_id_output(&output)
 }
 
 /// Queries `podman image inspect -f '{{.Id}}' <image_reference>` via `capture` and returns the validated image ID.

@@ -134,37 +134,64 @@ fn lifecycle_commands_build_args_and_simulate() {
         .unwrap(),
         ExecOutcome::Succeeded
     );
-    stop_pod("si_po", "Stop pod: ", true, &mut stdout, &mut stderr).unwrap();
-    remove_pod("si_po", "Remove pod: ", true, &mut stdout, &mut stderr).unwrap();
-    create_container(
-        &no_restart,
-        "Create container: ",
-        true,
-        &mut stdout,
-        &mut stderr,
-    )
-    .unwrap();
+    assert_eq!(
+        stop_pod("si_po", "Stop pod: ", true, &mut stdout, &mut stderr).unwrap(),
+        ExecOutcome::Succeeded
+    );
+    assert_eq!(
+        remove_pod("si_po", "Remove pod: ", true, &mut stdout, &mut stderr).unwrap(),
+        ExecOutcome::Succeeded
+    );
+    assert_eq!(
+        create_container(
+            &no_restart,
+            "Create container: ",
+            true,
+            &mut stdout,
+            &mut stderr,
+        )
+        .unwrap(),
+        ExecOutcome::Succeeded
+    );
     let spaced_volumes = [
         String::from("/anon"),
         String::from("/host:/data"),
         String::from("/pods/my pod/data:/data/my dir:ro,Z"),
     ];
-    create_container(
-        &CreateContainer {
-            volumes: &spaced_volumes,
-            ..no_restart
-        },
-        "",
-        true,
-        &mut Vec::new(),
-        &mut stderr,
-    )
-    .unwrap();
-    start_container("si_po-1", "Start: ", true, &mut stdout, &mut stderr).unwrap();
-    stop_container("si_po-1", "Stop: ", true, &mut stdout, &mut stderr).unwrap();
-    remove_container("si_po-1", "Remove: ", true, &mut stdout, &mut stderr).unwrap();
-    prune_images(false, "Prune: ", true, &mut stdout, &mut stderr).unwrap();
-    prune_images(true, "Prune all: ", true, &mut stdout, &mut stderr).unwrap();
+    assert_eq!(
+        create_container(
+            &CreateContainer {
+                volumes: &spaced_volumes,
+                ..no_restart
+            },
+            "",
+            true,
+            &mut Vec::new(),
+            &mut stderr,
+        )
+        .unwrap(),
+        ExecOutcome::Succeeded
+    );
+    assert_eq!(
+        start_container("si_po-1", "Start: ", true, &mut stdout, &mut stderr).unwrap(),
+        ExecOutcome::Succeeded
+    );
+    assert_eq!(
+        stop_container("si_po-1", "Stop: ", true, &mut stdout, &mut stderr).unwrap(),
+        ExecOutcome::Succeeded
+    );
+    assert_eq!(
+        remove_container("si_po-1", "Remove: ", true, &mut stdout, &mut stderr).unwrap(),
+        ExecOutcome::Succeeded
+    );
+    assert_eq!(
+        prune_images(false, "Prune: ", true, &mut stdout, &mut stderr).unwrap(),
+        ExecOutcome::Succeeded
+    );
+    assert_eq!(
+        prune_images(true, "Prune all: ", true, &mut stdout, &mut stderr).unwrap(),
+        ExecOutcome::Succeeded
+    );
 
     let rendered = String::from_utf8(stdout).unwrap();
     assert!(rendered.contains("podman pod create --name si_po"));

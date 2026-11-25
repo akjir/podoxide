@@ -46,13 +46,14 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     let mut pull_image = podman::pull_image;
-    execute_update_with(
+    let _ = execute_update_with(
         context,
         SummaryKind::ImagePull,
         &mut pull_image,
         &mut stdout,
         &mut stderr,
-    )
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -65,6 +66,7 @@ mod tests {
     use crate::core::modes::default::update::execute_update_with;
     use crate::core::update::SummaryKind;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
+    use crate::io::exec::command::ExecOutcome;
     use crate::io::exec::podman::PullOutcome;
     use super::handle;
 
@@ -114,7 +116,7 @@ mod tests {
         };
 
         let mut pod_out = Vec::new();
-        execute_update_with(
+        let pod_outcome = execute_update_with(
             &context,
             SummaryKind::ImagePull,
             &mut mock_pull,
@@ -122,6 +124,7 @@ mod tests {
             &mut Vec::new(),
         )
         .unwrap();
+        assert_eq!(pod_outcome, ExecOutcome::Succeeded);
         let pod_text = String::from_utf8(pod_out).unwrap();
         assert!(pod_text.contains("Update Summary:\n"));
         assert!(pod_text.contains(
@@ -141,7 +144,7 @@ mod tests {
         assert!(handle(&context).is_ok());
 
         let mut cnt_out = Vec::new();
-        execute_update_with(
+        let cnt_outcome = execute_update_with(
             &context,
             SummaryKind::ImagePull,
             &mut mock_pull,
@@ -149,6 +152,7 @@ mod tests {
             &mut Vec::new(),
         )
         .unwrap();
+        assert_eq!(cnt_outcome, ExecOutcome::Succeeded);
         let cnt_text = String::from_utf8(cnt_out).unwrap();
         assert!(cnt_text.contains(
             "  Updated (1):\n    - example-stack-app (docker.io/example/example-app:latest)\n"
