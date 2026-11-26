@@ -53,7 +53,7 @@ pub(crate) fn write_help<W: Write>(writer: &mut W) {
         "Connect to a running container with an interactive shell.",
     );
     log::write_print(writer, "Alias: con");
-    log::write_print(writer, "Usage: pods connect [OPTIONS] [ACTION] TARGET");
+    log::write_print(writer, "Usage: pods connect [OPTIONS] [ACTION] [TARGET]");
     log::write_print(writer, "");
     write_actions_section(writer);
     log::write_print(writer, "");
@@ -122,7 +122,7 @@ mod tests {
         )));
         assert!(output.contains("Connect to a running container with an interactive shell.\n"));
         assert!(output.contains("Alias: con\n"));
-        assert!(output.contains("Usage: pods connect [OPTIONS] [ACTION] TARGET\n"));
+        assert!(output.contains("Usage: pods connect [OPTIONS] [ACTION] [TARGET]\n"));
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains("  help               display this help and exit\n"));
         assert!(output.contains(

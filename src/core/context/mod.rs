@@ -97,19 +97,39 @@ impl Context {
     /// Returns `true` if elevated (`UID 0`) execution requires interactive confirmation for this action.
     #[must_use]
     pub const fn requires_elevation_confirmation(&self) -> bool {
-        !self.action.is_help()
-            && !matches!(self.action, ModeAction::Default(DefaultAction::Version))
+        self.requires_podman()
+            || matches!(
+                self.action,
+                ModeAction::Config(ConfigAction::Edit)
+                    | ModeAction::Init(InitAction::Create)
+                    | ModeAction::Recipe(RecipeAction::Edit)
+            )
     }
 
     /// Returns `true` if this context's mode and action require a supported Podman installation (`5.8.0+`).
     #[must_use]
     pub const fn requires_podman(&self) -> bool {
-        if self.action.is_help() {
-            return false;
+        match self.action {
+            ModeAction::Command(CommandAction::Exec)
+            | ModeAction::Connect(ConnectAction::Shell)
+            | ModeAction::Image(ImageAction::Prune | ImageAction::Update)
+            | ModeAction::Logs(LogsAction::Follow | LogsAction::Show) => true,
+            ModeAction::Default(action) => {
+                !matches!(action, DefaultAction::Help | DefaultAction::Version)
+            }
+            ModeAction::Command(CommandAction::Help | CommandAction::List)
+            | ModeAction::Config(_)
+            | ModeAction::Connect(ConnectAction::Help)
+            | ModeAction::Image(ImageAction::Help)
+            | ModeAction::Init(_)
+            | ModeAction::Logs(LogsAction::Help)
+            | ModeAction::Recipe(_) => false,
         }
-        !matches!(
-            self.action,
-            ModeAction::Default(DefaultAction::Version) | ModeAction::Init(_)
-        )
+    }
+
+    /// Returns `true` if this context's mode and action read the configured `pods.conf` file path.
+    #[must_use]
+    pub const fn uses_config_file(&self) -> bool {
+        self.requires_config() || matches!(self.action, ModeAction::Config(ConfigAction::Show))
     }
 }

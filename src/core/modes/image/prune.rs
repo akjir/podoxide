@@ -15,7 +15,7 @@
 
 //! Handler for `pods image prune`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, Write};
 
 use crate::core::context::Context;
@@ -25,9 +25,10 @@ use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::{self, FIELD_DELIMITER, RECORD_DELIMITER};
 use crate::io::system::env;
 use crate::utilities::collection::{self, MAX_COLLECTION_PREALLOC};
-use crate::utilities::format;
+use crate::utilities::format::{self, MAX_FORMATTED_LINE_BYTES};
 use super::preview::{self, PreviewEntry};
 
+const MAX_ALIAS_TAGS_PER_IMAGE: usize = 16;
 const MAX_PREVIEW_RECORDS: usize = 1024;
 const NONE_MARKER: &str = "<none>";
 const PRUNE_PREFIX: &str = "Prune images: ";
@@ -43,12 +44,13 @@ struct ImageRecord<'a> {
     tag: &'a str,
 }
 
-/// Aggregated distinct image count, preview entries, and total reclaimable bytes for prunable images.
+/// Aggregated distinct image count, preview entries, total reclaimable bytes, and truncation state for prunable images.
 #[derive(Debug, Default, Eq, PartialEq)]
 struct PruneScan {
     image_count: usize,
     preview_entries: Vec<PreviewEntry>,
     total_bytes: u64,
+    truncated: bool,
 }
 
 /// Previews reclaimable image disk space (`--preview`) or prunes dangling and unused
@@ -90,6 +92,28 @@ pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     )
 }
 
+/// Appends a distinct alias tag from `record` onto `entry.display_name`, bounded by [`MAX_ALIAS_TAGS_PER_IMAGE`] and [`MAX_FORMATTED_LINE_BYTES`].
+fn append_preview_alias(entry: &mut PreviewEntry, record: &ImageRecord<'_>) {
+    let alias = format_display_name(record);
+    let projected_len = entry
+        .display_name
+        .len()
+        .saturating_add(2)
+        .saturating_add(alias.len());
+    if projected_len > MAX_FORMATTED_LINE_BYTES {
+        return;
+    }
+    let mut tag_count = 0usize;
+    for existing in entry.display_name.split(", ") {
+        tag_count += 1;
+        if existing == alias || tag_count >= MAX_ALIAS_TAGS_PER_IMAGE {
+            return;
+        }
+    }
+    entry.display_name.push_str(", ");
+    entry.display_name.push_str(&alias);
+}
+
 /// Prompts the user on `stderr` and reads `reader` to confirm image pruning, returning `Ok(())` only when the user answers `"yes"`.
 ///
 /// # Errors
@@ -99,17 +123,28 @@ pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
 /// or exceeds the confirmation input byte bound.
 fn confirm_prune<R: BufRead, E: Write>(
     is_all: bool,
-    image_count: usize,
-    total_bytes: u64,
+    scan: &PruneScan,
     reader: &mut R,
     stderr: &mut E,
 ) -> Result<(), PodError> {
     let scope = if is_all { "unused" } else { "dangling" };
-    let noun = if image_count == 1 { "image" } else { "images" };
-    let reclaimable = format::format_bytes(total_bytes);
-    let prompt = format!(
-        "Are you sure you want to prune {image_count} {scope} {noun} ({reclaimable})? Type 'yes' to proceed: "
-    );
+    let noun = if scan.image_count == 1 && !scan.truncated {
+        "image"
+    } else {
+        "images"
+    };
+    let formatted_bytes = format::format_bytes(scan.total_bytes);
+    let prompt = if scan.truncated {
+        format!(
+            "Are you sure you want to prune at least {} {scope} {noun} (>= {formatted_bytes})? Type 'yes' to proceed: ",
+            scan.image_count
+        )
+    } else {
+        format!(
+            "Are you sure you want to prune {} {scope} {noun} ({formatted_bytes})? Type 'yes' to proceed: ",
+            scan.image_count
+        )
+    };
     stderr.write_all(prompt.as_bytes())?;
     stderr.flush()?;
     let Some(input) = env::read_bounded_confirmation_line(reader)? else {
@@ -154,11 +189,24 @@ where
         return Ok(ExecOutcome::Succeeded);
     }
     if is_preview {
-        preview::write_preview_results(&scan.preview_entries, scan.total_bytes, stdout);
+        preview::write_preview_results(
+            &scan.preview_entries,
+            scan.total_bytes,
+            scan.truncated,
+            stdout,
+        );
+        if scan.truncated {
+            log::write_warning(
+                stderr,
+                &format!(
+                    "Output truncated to {MAX_PREVIEW_RECORDS} images; total reclaimable space is a lower bound."
+                ),
+            );
+        }
         return Ok(ExecOutcome::Succeeded);
     }
     if !context.flags.force() {
-        confirm_prune(is_all, scan.image_count, scan.total_bytes, reader, stderr)?;
+        confirm_prune(is_all, &scan, reader, stderr)?;
     }
     podman::prune_images(is_all, PRUNE_PREFIX, false, stdout, stderr)
 }
@@ -240,13 +288,11 @@ where
         image_count: 0,
         preview_entries,
         total_bytes: 0,
+        truncated: false,
     };
-    let mut seen_ids = BTreeSet::new();
+    let mut seen_ids = BTreeMap::new();
 
     for raw_record in output.split(RECORD_DELIMITER) {
-        if scan.image_count >= MAX_PREVIEW_RECORDS {
-            break;
-        }
         let record_text = raw_record.trim_start_matches(['\r', '\n']);
         let Some(record) = parse_candidate_record(record_text, &in_use_images) else {
             continue;
@@ -256,9 +302,18 @@ where
         } else {
             record.long_id
         };
-        if !seen_ids.insert(dedup_key) {
+        if let Some(&entry_index) = seen_ids.get(dedup_key) {
+            if include_entries {
+                append_preview_alias(&mut scan.preview_entries[entry_index], &record);
+            }
             continue;
         }
+        if scan.image_count >= MAX_PREVIEW_RECORDS {
+            scan.truncated = true;
+            break;
+        }
+        let entry_index = scan.preview_entries.len();
+        seen_ids.insert(dedup_key, entry_index);
         scan.image_count += 1;
         scan.total_bytes = scan
             .total_bytes

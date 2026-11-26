@@ -23,7 +23,7 @@ use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
 use crate::io::system::fs;
-use crate::utilities::path::{is_valid_target_path, parent_or_cur_dir, relative_display_path};
+use crate::utilities::path;
 
 const CONFIG_TEMPLATE: &str = include_str!("../../../../pods.conf");
 const DEFAULT_RECIPE_PATH: &str = "./recipe.pod";
@@ -74,7 +74,7 @@ fn create_files<W: Write>(
     simulate: bool,
     stderr_writer: &mut W,
 ) -> Result<(), PodError> {
-    let workspace_dir = parent_or_cur_dir(recipe_path);
+    let workspace_dir = path::parent_or_cur_dir(recipe_path);
     ensure_target_creatable(recipe_path, workspace_dir)?;
     ensure_target_creatable(config_path, workspace_dir)?;
     ensure_distinct_targets(recipe_path, config_path)?;
@@ -120,13 +120,13 @@ fn ensure_distinct_targets(recipe_path: &Path, config_path: &Path) -> Result<(),
 
 /// Verifies that `path` is a safe target path and not an existing directory, symlink, or special file.
 fn ensure_target_creatable(path: &Path, workspace_dir: &Path) -> Result<(), PodError> {
-    if !is_valid_target_path(path) {
+    if !path::is_valid_target_path(path) {
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("Invalid target path '{}'!", path.display()),
         )));
     }
-    let display_path = relative_display_path(path, workspace_dir);
+    let display_path = path::relative_display_path(path, workspace_dir);
     if fs::directory_exists(path) {
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -147,7 +147,7 @@ fn write_template_file<W: Write>(
     simulate: bool,
     stderr_writer: &mut W,
 ) -> Result<(), PodError> {
-    let display_path = relative_display_path(path, workspace_dir);
+    let display_path = path::relative_display_path(path, workspace_dir);
     if simulate {
         if fs::file_exists(path) {
             log::write_warning(
@@ -194,7 +194,7 @@ mod tests {
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::context::Context;
     use crate::error::PodError;
-    use crate::io::psl::parse_psl;
+    use crate::io::psl;
     use crate::io::system::fs::{self, TestTempDir};
     use super::{
         CONFIG_TEMPLATE, DEFAULT_RECIPE_PATH, RECIPE_TEMPLATE, create_files,
@@ -340,7 +340,7 @@ mod tests {
             Some(&vec![String::from("recipe")])
         );
 
-        let parsed_recipe = parse_psl(&written_recipe).unwrap();
+        let parsed_recipe = psl::parse_psl(&written_recipe).unwrap();
         assert_eq!(parsed_recipe.blocks.len(), 3);
         assert_eq!(parsed_recipe.blocks[0].name, "pod");
         assert_eq!(parsed_recipe.blocks[1].name, "container");

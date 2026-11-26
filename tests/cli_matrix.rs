@@ -79,6 +79,30 @@ fn assert_debug_custom_config_outputs(workspace: &TestWorkspace) {
     );
 }
 
+fn assert_stdout_matrix(
+    workspace: &TestWorkspace,
+    cases: &[(&[&str], &str)],
+    expected_stderr: &str,
+) {
+    for (arguments, expected_stdout) in cases {
+        let output = workspace.run_pods(arguments, b"");
+        assert!(
+            output.success,
+            "expected {arguments:?} to succeed: {}",
+            output.stderr
+        );
+        assert_eq!(
+            output.stderr, expected_stderr,
+            "unexpected stderr for {arguments:?}"
+        );
+        assert!(
+            output.stdout.contains(expected_stdout),
+            "expected {expected_stdout:?} in stdout for {arguments:?}, got {:?}",
+            output.stdout
+        );
+    }
+}
+
 #[test]
 fn missing_config_bypasses_offline_actions_and_errors_on_operational_actions() {
     let workspace = TestWorkspace::new("missing_config");
@@ -103,24 +127,7 @@ fn missing_config_bypasses_offline_actions_and_errors_on_operational_actions() {
         ),
     ];
 
-    for (arguments, expected_stdout) in bypass_cases {
-        let output = workspace.run_pods(arguments, b"");
-        assert!(
-            output.success,
-            "expected bypass {arguments:?} to succeed: {}",
-            output.stderr
-        );
-        assert!(
-            output.stdout.contains(expected_stdout),
-            "expected {expected_stdout:?} in stdout for {arguments:?}, got {:?}",
-            output.stdout
-        );
-        assert!(
-            output.stderr.is_empty(),
-            "expected empty stderr for bypass {arguments:?}, got {:?}",
-            output.stderr
-        );
-    }
+    assert_stdout_matrix(&workspace, bypass_cases, "");
 
     let config_required_cases: &[&[&str]] = &[
         &["status"],
@@ -226,8 +233,12 @@ fn pipeline_handles_valid_and_invalid_arguments_and_podman_version_checks() {
         );
     }
 
-    // Unsupported Podman < 5.8.0 rejects operational actions while offline actions still succeed.
-    for operational in [&["status"][..], &["up", "recipe"][..], &["cfg", "show"][..]] {
+    // Unsupported Podman < 5.8.0 rejects Podman-backed actions while offline actions still succeed.
+    for operational in [
+        &["status"][..],
+        &["up", "recipe"][..],
+        &["cmd", "exec", "recipe", "migrate"][..],
+    ] {
         let output =
             workspace.run_pods_with_env(operational, b"", &[("MOCK_PODMAN_VERSION", "5.7.9")]);
         assert!(!output.success);
@@ -236,7 +247,15 @@ fn pipeline_handles_valid_and_invalid_arguments_and_podman_version_checks() {
             "ERROR: Podman 5.8.0 or higher is required.\n"
         );
     }
-    for bypass in [&["help"][..], &["version"][..], &["init", "--simulate"][..]] {
+    for bypass in [
+        &["help"][..],
+        &["version"][..],
+        &["init", "--simulate"][..],
+        &["cfg", "show"][..],
+        &["cfg", "inspect"][..],
+        &["rec", "list"][..],
+        &["cmd", "list", "recipe"][..],
+    ] {
         let output = workspace.run_pods_with_env(bypass, b"", &[("MOCK_PODMAN_VERSION", "5.7.9")]);
         assert!(
             output.success,
@@ -350,20 +369,11 @@ fn simulate_false_and_flag_override_matrix_runs_deterministically() {
         ),
     ];
 
-    for (arguments, expected_stdout) in flag_override_cases {
-        let output = workspace.run_pods(arguments, b"");
-        assert!(
-            output.success,
-            "expected {arguments:?} to succeed: {}",
-            output.stderr
-        );
-        assert_eq!(output.stderr, "INFO: Simulate mode is active.\n");
-        assert!(
-            output.stdout.contains(expected_stdout),
-            "expected {expected_stdout:?} in stdout for {arguments:?}, got {:?}",
-            output.stdout
-        );
-    }
+    assert_stdout_matrix(
+        &workspace,
+        flag_override_cases,
+        "INFO: Simulate mode is active.\n",
+    );
 
     let sim_show = workspace.run_pods(&["--simulate", "cfg", "show"], b"");
     assert!(sim_show.success);
@@ -473,23 +483,11 @@ fn simulate_true_matrix_verifies_init_and_all_modes() {
         (&["rec", "edit", "recipe"], "vim ./recipe.pod\n"),
     ];
 
-    for (arguments, expected_stdout) in simulate_true_cases {
-        let output = workspace.run_pods(arguments, b"");
-        assert!(
-            output.success,
-            "expected {arguments:?} to succeed: {}",
-            output.stderr
-        );
-        assert_eq!(
-            output.stderr, "INFO: Simulate mode is active.\n",
-            "missing or unexpected simulate info on stderr for {arguments:?}"
-        );
-        assert!(
-            output.stdout.contains(expected_stdout),
-            "expected {expected_stdout:?} in stdout for {arguments:?}, got {:?}",
-            output.stdout
-        );
-    }
+    assert_stdout_matrix(
+        &workspace,
+        simulate_true_cases,
+        "INFO: Simulate mode is active.\n",
+    );
 
     let show = workspace.run_pods(&["cfg", "show"], b"");
     assert!(show.success);

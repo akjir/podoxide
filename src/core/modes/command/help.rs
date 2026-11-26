@@ -54,7 +54,7 @@ pub(crate) fn write_help<W: Write>(writer: &mut W) {
     log::write_print(writer, "Alias: cmd");
     log::write_print(
         writer,
-        "Usage: pods command [OPTIONS] [ACTION] RECIPE [COMMAND|INDEX]",
+        "Usage: pods command [OPTIONS] [ACTION] [RECIPE] [COMMAND|INDEX]",
     );
     log::write_print(writer, "");
     write_actions_section(writer);
@@ -122,7 +122,9 @@ mod tests {
         )));
         assert!(output.contains("Execute or list predefined commands declared in a recipe.\n"));
         assert!(output.contains("Alias: cmd\n"));
-        assert!(output.contains("Usage: pods command [OPTIONS] [ACTION] RECIPE [COMMAND|INDEX]\n"));
+        assert!(
+            output.contains("Usage: pods command [OPTIONS] [ACTION] [RECIPE] [COMMAND|INDEX]\n")
+        );
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains(
             "  exec               execute a command defined in a recipe (default when COMMAND is provided)\n"

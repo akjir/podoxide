@@ -28,8 +28,7 @@ use crate::core::log;
 use crate::core::recipe::RECIPE_EXTENSION;
 use crate::error::{CliError, CliErrorKind, ConfigError, ConfigErrorKind, PodError};
 use crate::io::exec::command::ExecOutcome;
-use crate::utilities::path::{build_full_path, is_valid_directory, sanitize_path_token};
-use crate::utilities::string::is_valid_target_segment;
+use crate::utilities::{path, string};
 
 /// Dispatches `recipe` mode execution to the resolved sub-action (`edit`, `help`, `inspect`,
 /// `list`, or `show`).
@@ -77,13 +76,17 @@ pub(super) fn build_recipe_path(
     recipes_dir: &Path,
     recipe_name: &str,
 ) -> Result<PathBuf, PodError> {
-    if !is_valid_directory(recipes_dir) {
+    if !path::is_valid_directory(recipes_dir) {
         return Err(PodError::from(ConfigError::without_line(
             ConfigErrorKind::InvalidPath,
-            sanitize_path_token(recipes_dir),
+            path::sanitize_path_token(recipes_dir),
         )));
     }
-    Ok(build_full_path(recipes_dir, recipe_name, RECIPE_EXTENSION))
+    Ok(path::build_full_path(
+        recipes_dir,
+        recipe_name,
+        RECIPE_EXTENSION,
+    ))
 }
 
 /// Extracts the single `<recipe>` target from `context` and verifies that it is registered in
@@ -103,7 +106,7 @@ pub(super) fn extract_registered_recipe(context: &Context) -> Result<&str, PodEr
             extra,
         )));
     }
-    if !is_valid_target_segment(target) {
+    if !string::is_valid_target_segment(target) {
         return Err(PodError::from(CliError::with_argument(
             CliErrorKind::InvalidTarget,
             target,

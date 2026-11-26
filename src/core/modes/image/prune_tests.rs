@@ -35,6 +35,26 @@ impl Write for BrokenPipeWriter {
     }
 }
 
+fn run_preview_with_no_in_use(context: &Context, images_output: &str) -> (String, String) {
+    let mut no_in_use = || Ok(BTreeSet::new());
+    let mut query_images = |_: bool| Some(String::from(images_output));
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    execute_with(
+        context,
+        &mut no_in_use,
+        &mut query_images,
+        &mut Cursor::new(Vec::new()),
+        &mut stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    (
+        String::from_utf8(stdout).unwrap(),
+        String::from_utf8(stderr).unwrap(),
+    )
+}
+
 #[test]
 fn execute_with_confirm_prompt_writes_stderr_and_aborts_on_decline_or_eof() {
     let mut sim_context = Context::new();
@@ -196,44 +216,43 @@ fn execute_with_deduplicates_multitag_images_and_aligns_long_names() {
     let multi_tag_output = "\
 abcd1234efgh\x1fsha256:shared\x1fmy-repo\x1f1.0\x1f100 MB\x1f2 weeks ago\x1e\n\
 abcd1234efgh\x1fsha256:shared\x1fmy-repo\x1flatest\x1f100 MB\x1f2 weeks ago\x1e\n\
+abcd1234efgh\x1fsha256:shared\x1fmy-repo\x1flatest\x1f100 MB\x1f2 weeks ago\x1e\n\
 abcd1234efgh\x1fsha256:shared\x1fmy-repo\x1fstable\x1f100 MB\x1f2 weeks ago\x1e\n";
 
     let mut no_in_use = || Ok(BTreeSet::new());
     let mut multi_tag_images = |_: bool| Some(String::from(multi_tag_output));
     let scan = scan_prunable_images(true, true, &mut no_in_use, &mut multi_tag_images).unwrap();
-    assert_eq!(
-        scan.image_count, 1,
-        "3 tags sharing one long_id must count as 1 image"
-    );
+    assert_eq!(scan.image_count, 1, "shared long_id must count as 1 image");
     assert_eq!(
         scan.total_bytes, 100_000_000,
-        "3 tags sharing one long_id must sum size once (100 MB)"
+        "shared long_id must sum once"
     );
+    assert!(!scan.truncated);
     assert_eq!(scan.preview_entries.len(), 1);
-    assert_eq!(scan.preview_entries[0].display_name, "my-repo:1.0");
+    assert_eq!(
+        scan.preview_entries[0].display_name,
+        "my-repo:1.0, my-repo:latest, my-repo:stable"
+    );
 
     let mut context = Context::new();
     context.config.simulate = false;
     context.flags.set_all(true);
     context.flags.set_preview(true);
 
+    let (multi_preview_text, multi_preview_err) =
+        run_preview_with_no_in_use(&context, multi_tag_output);
+    assert!(
+        multi_preview_text.contains("my-repo:1.0, my-repo:latest, my-repo:stable"),
+        "expected all 3 tags in preview output:\n{multi_preview_text}"
+    );
+    assert!(multi_preview_text.contains("100.0 MB"));
+    assert!(multi_preview_err.is_empty());
+
     let long_names_output = "\
 id1\x1flong1\x1fshort\x1f1.0\x1f10.5 MB\x1f2 weeks ago\x1e\n\
 id2\x1flong2\x1fregistry.example.com/organization/project/very-long-service-image\x1fv1.2.3\x1f250 MB\x1f3 days ago\x1e\n";
-    let mut long_images = |_: bool| Some(String::from(long_names_output));
-    let mut preview_out = Vec::new();
-    let mut preview_err = Vec::new();
-    execute_with(
-        &context,
-        &mut no_in_use,
-        &mut long_images,
-        &mut Cursor::new(Vec::new()),
-        &mut preview_out,
-        &mut preview_err,
-    )
-    .unwrap();
+    let (preview_text, preview_err) = run_preview_with_no_in_use(&context, long_names_output);
     assert!(preview_err.is_empty());
-    let preview_text = String::from_utf8(preview_out).unwrap();
     let bullet_lines: Vec<&str> = preview_text
         .lines()
         .filter(|line| line.starts_with("  - "))
@@ -366,30 +385,62 @@ fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
     .unwrap_err();
     assert!(error.to_string().contains("Failed to query podman images."));
 
-    let mut oversized_images = String::new();
-    for index in 0..(MAX_PREVIEW_RECORDS + 10) {
+    let mut exact_images_str = String::new();
+    for index in 0..MAX_PREVIEW_RECORDS {
+        exact_images_str.push_str(&format!(
+            "id_{index}\x1funused_{index}\x1frepo\x1ftag\x1f1 B\x1fnow\x1e\n"
+        ));
+    }
+    let mut exact_images = |_: bool| Some(exact_images_str.clone());
+    let exact_scan = scan_prunable_images(true, false, &mut no_in_use, &mut exact_images).unwrap();
+    assert_eq!(exact_scan.image_count, MAX_PREVIEW_RECORDS);
+    assert!(!exact_scan.truncated);
+
+    let mut oversized_images = exact_images_str;
+    for index in MAX_PREVIEW_RECORDS..(MAX_PREVIEW_RECORDS + 10) {
         oversized_images.push_str(&format!(
             "id_{index}\x1funused_{index}\x1frepo\x1ftag\x1f1 B\x1fnow\x1e\n"
         ));
     }
 
+    let (bound_output, bound_warning) = run_preview_with_no_in_use(&context, &oversized_images);
     let mut bound_images = |_: bool| Some(oversized_images.clone());
-    let mut bound_stdout = Vec::new();
-    execute_with(
-        &context,
-        &mut no_in_use,
-        &mut bound_images,
-        &mut reader,
-        &mut bound_stdout,
-        &mut stderr,
-    )
-    .unwrap();
-    let bound_output = String::from_utf8(bound_stdout).unwrap();
     assert_eq!(bound_output.lines().count(), MAX_PREVIEW_RECORDS + 3);
+    assert!(bound_output.contains(">= "));
+    assert!(
+        bound_warning.contains(
+            "WARNING: Output truncated to 1024 images; total reclaimable space is a lower bound."
+        ),
+        "expected truncation warning on stderr, got {bound_warning:?}"
+    );
     let scan = scan_prunable_images(true, false, &mut no_in_use, &mut bound_images).unwrap();
     assert_eq!(scan.image_count, MAX_PREVIEW_RECORDS);
     assert!(scan.preview_entries.is_empty());
     assert_eq!(scan.total_bytes, MAX_PREVIEW_RECORDS as u64);
+    assert!(scan.truncated);
+
+    let mut truncated_confirm_ctx = Context::new();
+    truncated_confirm_ctx.config.simulate = false;
+    truncated_confirm_ctx.flags.set_all(true);
+    let mut decline_cursor = Cursor::new(b"no\n".to_vec());
+    let mut confirm_stderr = Vec::new();
+    let confirm_res = execute_with(
+        &truncated_confirm_ctx,
+        &mut no_in_use,
+        &mut bound_images,
+        &mut decline_cursor,
+        &mut Vec::new(),
+        &mut confirm_stderr,
+    );
+    assert!(matches!(
+        confirm_res,
+        Err(PodError::System(SystemError::AbortedExecution))
+    ));
+    let confirm_prompt = String::from_utf8(confirm_stderr).unwrap();
+    assert!(
+        confirm_prompt.contains("at least 1024") && confirm_prompt.contains(">="),
+        "expected truncated confirmation prompt with 'at least 1024' and '>=', got {confirm_prompt:?}"
+    );
 }
 
 #[test]

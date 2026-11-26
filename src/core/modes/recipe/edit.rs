@@ -17,11 +17,10 @@
 
 use std::io::{self, Write};
 
-use crate::core::config::validate_editor;
+use crate::core::config;
 use crate::core::context::Context;
 use crate::error::PodError;
 use crate::io::exec::command::{self, ExecOutcome};
-use super::{build_recipe_path, extract_registered_recipe};
 
 /// Opens the specified `.pod` recipe file in the external editor configured in `pods.conf` and returns its [`ExecOutcome`].
 ///
@@ -59,9 +58,9 @@ fn edit_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<ExecOutcome, PodError> {
-    let recipe_name = extract_registered_recipe(context)?;
-    let editor = validate_editor(&context.config.editor)?;
-    let recipe_path = build_recipe_path(&context.config.recipes.path, recipe_name)?;
+    let recipe_name = super::extract_registered_recipe(context)?;
+    let editor = config::validate_editor(&context.config.editor)?;
+    let recipe_path = super::build_recipe_path(&context.config.recipes.path, recipe_name)?;
     command::exec_editor_with(
         editor,
         &recipe_path,
@@ -84,14 +83,14 @@ mod tests {
     fn build_edit_context() -> Context {
         let mut context = Context::new();
         context.config.editor = String::from("vim");
-        context.config.recipes.path = PathBuf::from("./tests/pods/recipes");
+        context.config.recipes.path = PathBuf::from("./recipes");
         context
             .config
             .recipes
             .groups
-            .insert(String::from("all"), vec![String::from("recipe_002_no_pod")]);
+            .insert(String::from("all"), vec![String::from("example-app")]);
         context.config.simulate = true;
-        context.parameters = vec![String::from("recipe_002_no_pod")];
+        context.parameters = vec![String::from("example-app")];
         context
     }
 
@@ -112,7 +111,7 @@ mod tests {
         assert!(stdout.is_empty());
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
-            "DEBUG: Execute: false ./tests/pods/recipes/recipe_002_no_pod.pod\nWARNING: Command exited with code '1'!\n"
+            "DEBUG: Execute: false ./recipes/example-app.pod\nWARNING: Command exited with code '1'!\n"
         );
 
         context.config.editor = String::from("true");
@@ -148,7 +147,7 @@ mod tests {
             other => panic!("expected PodError::Config(RecipeNotFound), got {other:?}"),
         }
 
-        context.parameters = vec![String::from("recipe_002_no_pod")];
+        context.parameters = vec![String::from("example-app")];
         context.config.editor = String::new();
         let missing_editor = edit_with(&context, &mut stdout, &mut stderr).unwrap_err();
         match missing_editor {
@@ -194,7 +193,7 @@ mod tests {
         edit_with(&context, &mut stdout, &mut stderr).unwrap();
         assert_eq!(
             String::from_utf8(stdout).unwrap(),
-            "vim ./tests/pods/recipes/recipe_002_no_pod.pod\n"
+            "vim ./recipes/example-app.pod\n"
         );
         assert!(stderr.is_empty());
 
@@ -203,7 +202,7 @@ mod tests {
         edit_with(&context, &mut quoted_stdout, &mut stderr).unwrap();
         assert_eq!(
             String::from_utf8(quoted_stdout).unwrap(),
-            "vim './my recipes/O'\\''Hara/recipe_002_no_pod.pod'\n"
+            "vim './my recipes/O'\\''Hara/example-app.pod'\n"
         );
 
         context.config.recipes.path = PathBuf::from(".");

@@ -169,6 +169,16 @@ fn exec_command_rejects_flag_injection_and_reports_command_line() {
         trailing_escaped_space,
     );
 
+    let mut spaced_program = PodCommand::new();
+    spaced_program.name = String::from("spaced_program");
+    spaced_program.container = String::from("*db");
+    spaced_program.execute = String::from("'my script.sh' arg");
+    spaced_program.line = 15;
+    recipe
+        .pod
+        .commands
+        .insert(String::from("spaced_program"), spaced_program);
+
     let mut container = Container::new();
     container.name = String::from("*db");
     container.image = String::from("postgres");
@@ -184,6 +194,18 @@ fn exec_command_rejects_flag_injection_and_reports_command_line() {
         PodError::Recipe(recipe_error) => {
             assert_eq!(recipe_error.kind, RecipeErrorKind::InvalidCommand);
             assert_eq!(recipe_error.line, Some(12));
+        }
+        other => panic!("expected PodError::Recipe(InvalidCommand), got {other:?}"),
+    }
+
+    // Quoted program containing whitespace must fail with InvalidCommand at command.line, not PodError::Io.
+    let spaced_error =
+        exec_command(&recipe, "spaced_program", true, &mut stdout, &mut stderr).unwrap_err();
+    match spaced_error {
+        PodError::Recipe(recipe_error) => {
+            assert_eq!(recipe_error.kind, RecipeErrorKind::InvalidCommand);
+            assert_eq!(recipe_error.line, Some(15));
+            assert_eq!(recipe_error.token.as_deref(), Some("my script.sh"));
         }
         other => panic!("expected PodError::Recipe(InvalidCommand), got {other:?}"),
     }

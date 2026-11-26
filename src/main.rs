@@ -65,15 +65,25 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
+    run_with(arguments, &mut io::stderr())
+}
+
+/// Executes the CLI pipeline with startup debug logs written to `stderr`.
+fn run_with<I, T, E>(arguments: I, stderr: &mut E) -> Result<ExecOutcome, PodError>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString>,
+    E: Write,
+{
     let mut context = Context::new();
     cli::parse_args(&mut context, arguments)?;
     log::set_debug_enabled(context.flags.debug());
-    log::debug("Debug mode is enabled.");
-    if context.config.path != Path::new(DEFAULT_CONFIG_PATH) {
-        log::debug(&format!(
-            "Config '{}' is used.",
-            context.config.path.display()
-        ));
+    log::write_debug(stderr, "Debug mode is enabled.");
+    if context.uses_config_file() && context.config.path != Path::new(DEFAULT_CONFIG_PATH) {
+        log::write_debug(
+            stderr,
+            &format!("Config '{}' is used.", context.config.path.display()),
+        );
     }
 
     verify_environment_for(&context)?;
@@ -137,7 +147,7 @@ mod tests {
     use podoxide::core::log;
     use podoxide::error::{CliErrorKind, PodError, SystemError};
     use podoxide::io::exec::command::ExecOutcome;
-    use super::{execute, finish_execution, run, verify_environment_with};
+    use super::{execute, finish_execution, run, run_with, verify_environment_with};
 
     struct DebugGuard {
         previous: bool,
@@ -214,6 +224,33 @@ mod tests {
             missing_target,
             PodError::Cli(ref error) if error.kind == CliErrorKind::MissingTarget
         ));
+
+        let mut version_stderr = Vec::new();
+        assert_eq!(
+            run_with(
+                ["--debug", "--config=staging", "version"],
+                &mut version_stderr
+            )
+            .unwrap(),
+            ExecOutcome::Succeeded
+        );
+        let version_debug = String::from_utf8(version_stderr).unwrap();
+        assert!(version_debug.contains("DEBUG: Debug mode is enabled.\n"));
+        assert!(
+            !version_debug.contains("DEBUG: Config './staging.conf' is used."),
+            "version must not log unused config path: {version_debug:?}"
+        );
+
+        let mut show_stderr = Vec::new();
+        let _ = run_with(
+            ["--debug", "--config=staging", "cfg", "show"],
+            &mut show_stderr,
+        );
+        let show_debug = String::from_utf8(show_stderr).unwrap();
+        assert!(
+            show_debug.contains("DEBUG: Config './staging.conf' is used.\n"),
+            "config show must log custom config path: {show_debug:?}"
+        );
     }
 
     #[test]
@@ -251,10 +288,13 @@ mod tests {
 
     #[test]
     fn verify_environment_enforces_os_podman_and_elevation_checks() {
-        // Help and version actions bypass Podman version and elevated-execution checks.
+        // Read-only offline actions bypass both Podman version and elevated-execution checks.
         let bypass_actions = [
             ModeAction::Command(CommandAction::Help),
+            ModeAction::Command(CommandAction::List),
             ModeAction::Config(ConfigAction::Help),
+            ModeAction::Config(ConfigAction::Inspect),
+            ModeAction::Config(ConfigAction::Show),
             ModeAction::Connect(ConnectAction::Help),
             ModeAction::Default(DefaultAction::Help),
             ModeAction::Default(DefaultAction::Version),
@@ -262,6 +302,9 @@ mod tests {
             ModeAction::Init(InitAction::Help),
             ModeAction::Logs(LogsAction::Help),
             ModeAction::Recipe(RecipeAction::Help),
+            ModeAction::Recipe(RecipeAction::Inspect),
+            ModeAction::Recipe(RecipeAction::List),
+            ModeAction::Recipe(RecipeAction::Show),
         ];
         for action in bypass_actions {
             let (ok_res, prompt_err) = check_env(action, true, false, true, b"");
@@ -271,18 +314,23 @@ mod tests {
             assert_eq!(os_err.unwrap_err().to_string(), "Only Linux is supported.");
         }
 
-        // `pods init` bypasses Podman version check while still checking OS and elevation;
-        // operational actions require Linux OS, Podman 5.8.0+, and elevation confirmation.
-        let init = ModeAction::Init(InitAction::Create);
-        let up = ModeAction::Default(DefaultAction::Up);
+        // Write/editor offline actions bypass Podman version check while still checking OS and elevation.
         let os_err = Some("Only Linux is supported.");
         let podman_err = Some("Podman 5.8.0 or higher is required.");
         let abort_err = Some("Aborting execution.");
 
-        assert_env(init, true, false, false, b"", None);
-        assert_env(init, false, false, false, b"", os_err);
-        assert_env(init, true, false, true, b"yes\n", None);
-        assert_env(init, true, false, true, b"no\n", abort_err);
+        for offline_write in [
+            ModeAction::Config(ConfigAction::Edit),
+            ModeAction::Init(InitAction::Create),
+            ModeAction::Recipe(RecipeAction::Edit),
+        ] {
+            assert_env(offline_write, true, false, false, b"", None);
+            assert_env(offline_write, false, false, false, b"", os_err);
+            assert_env(offline_write, true, false, true, b"yes\n", None);
+            assert_env(offline_write, true, false, true, b"no\n", abort_err);
+        }
+
+        let up = ModeAction::Default(DefaultAction::Up);
 
         assert_env(up, false, true, false, b"", os_err);
         assert_env(up, true, false, false, b"", podman_err);

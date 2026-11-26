@@ -139,7 +139,7 @@ fn write_options_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "OPTIONS:");
     log::write_print(
         writer,
-        "  --all              include all unmanaged podman containers (status only)",
+        "  --all              include all unmanaged podman containers (status only; invalid with targets)",
     );
     log::write_print(
         writer,
@@ -213,7 +213,7 @@ mod tests {
         assert!(output.find("ACTIONS:").unwrap() < output.find("OPTIONS:").unwrap());
         assert!(output.contains("OPTIONS:\n"));
         assert!(output.contains(
-            "  --all              include all unmanaged podman containers (status only)\n"
+            "  --all              include all unmanaged podman containers (status only; invalid with targets)\n"
         ));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));

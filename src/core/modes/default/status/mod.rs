@@ -37,14 +37,16 @@ const MAX_STATUS_RECORDS: usize = 1024;
 /// Expected metadata for a managed container declared in a configured `.pod` recipe.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ExpectedContainer {
-    pod_id: String,
     target_name: String,
 }
+
+/// Expected managed containers indexed by `pod_id -> container_name -> ExpectedContainer`.
+type ExpectedContainerMap = BTreeMap<String, BTreeMap<String, ExpectedContainer>>;
 
 /// Resolved expected container metadata paired with sorted invalid and missing recipe names.
 #[derive(Debug, Default)]
 struct ExpectedTargets {
-    expected: BTreeMap<String, ExpectedContainer>,
+    expected: ExpectedContainerMap,
     invalid_recipes: Vec<String>,
     missing_recipes: Vec<String>,
 }
@@ -79,6 +81,27 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
     execute_with(context, &mut query_status, &mut stdout)
 }
 
+/// Appends synthesized `"Not Found"` rows for expected containers in `pod_id` absent from `found_keys`.
+fn append_missing_pod_rows<'a>(
+    pod_id: &'a str,
+    pod_containers: &'a BTreeMap<String, ExpectedContainer>,
+    found_keys: &BTreeSet<(&'a str, &'a str)>,
+    display_rows: &mut Vec<StatusRow<'a>>,
+) {
+    for (expected_name, container) in pod_containers {
+        if display_rows.len() >= MAX_STATUS_RECORDS {
+            break;
+        }
+        if !found_keys.contains(&(pod_id, expected_name.as_str())) {
+            display_rows.push(StatusRow::missing(
+                expected_name.as_str(),
+                pod_id,
+                container.target_name.as_str(),
+            ));
+        }
+    }
+}
+
 /// Appends synthesized `"Not Found"` rows for configured recipes whose `.pod` file does not exist on disk.
 fn append_missing_recipe_rows<'a>(
     missing_recipes: &'a [String],
@@ -92,23 +115,17 @@ fn append_missing_recipe_rows<'a>(
     }
 }
 
-/// Appends synthesized `"Not Found"` rows for expected containers absent from `found_names`.
+/// Appends synthesized `"Not Found"` rows for expected containers absent from `found_keys`.
 fn append_missing_rows<'a>(
-    expected: &'a BTreeMap<String, ExpectedContainer>,
-    found_names: &BTreeSet<&str>,
+    expected: &'a ExpectedContainerMap,
+    found_keys: &BTreeSet<(&'a str, &'a str)>,
     display_rows: &mut Vec<StatusRow<'a>>,
 ) {
-    for (expected_name, container) in expected {
+    for (pod_id, pod_containers) in expected {
         if display_rows.len() >= MAX_STATUS_RECORDS {
             break;
         }
-        if !found_names.contains(expected_name.as_str()) {
-            display_rows.push(StatusRow::missing(
-                expected_name.as_str(),
-                container.pod_id.as_str(),
-                container.target_name.as_str(),
-            ));
-        }
+        append_missing_pod_rows(pod_id.as_str(), pod_containers, found_keys, display_rows);
     }
 }
 
@@ -129,13 +146,12 @@ fn append_recipe_error_rows<'a>(
 #[must_use]
 fn build_display_rows<'a>(
     ps_output: &'a str,
-    expected: &'a BTreeMap<String, ExpectedContainer>,
+    expected: &'a ExpectedContainerMap,
     missing_recipes: &'a [String],
     invalid_recipes: &'a [String],
     include_all: bool,
 ) -> Vec<StatusRow<'a>> {
-    let base_count = expected
-        .len()
+    let base_count = count_expected_containers(expected)
         .saturating_add(missing_recipes.len())
         .saturating_add(invalid_recipes.len());
     let estimated = if include_all {
@@ -145,7 +161,7 @@ fn build_display_rows<'a>(
     };
     let capacity = collection::bounded_capacity(estimated, MAX_COLLECTION_PREALLOC);
     let mut display_rows = Vec::with_capacity(capacity);
-    let mut found_names = BTreeSet::new();
+    let mut found_keys = BTreeSet::new();
 
     for raw_record in ps_output.split(RECORD_DELIMITER) {
         if display_rows.len() >= MAX_STATUS_RECORDS {
@@ -155,16 +171,19 @@ fn build_display_rows<'a>(
         let Some(mut row) = table::parse_status_record(record) else {
             continue;
         };
-        if let Some(expected_container) = expected.get(row.name) {
+        if let Some(expected_container) = expected
+            .get(row.pod)
+            .and_then(|pod_map| pod_map.get(row.name))
+        {
             row.target_name = expected_container.target_name.as_str();
-            found_names.insert(row.name);
+            found_keys.insert((row.pod, row.name));
             display_rows.push(row);
         } else if include_all {
             display_rows.push(row);
         }
     }
 
-    append_missing_rows(expected, &found_names, &mut display_rows);
+    append_missing_rows(expected, &found_keys, &mut display_rows);
     append_missing_recipe_rows(missing_recipes, &mut display_rows);
     append_recipe_error_rows(invalid_recipes, &mut display_rows);
     display_rows.sort_unstable_by(|left, right| {
@@ -179,11 +198,11 @@ fn build_display_rows<'a>(
 #[must_use]
 fn collect_expected_containers(config: &Config, targets: &[Cow<'_, str>]) -> ExpectedTargets {
     let mut expected = BTreeMap::new();
+    let mut expected_count = 0usize;
     let mut invalid_set = BTreeSet::new();
     let mut missing_set = BTreeSet::new();
     for target in targets {
-        let total = expected
-            .len()
+        let total = expected_count
             .saturating_add(invalid_set.len())
             .saturating_add(missing_set.len());
         if total >= MAX_STATUS_RECORDS {
@@ -193,6 +212,7 @@ fn collect_expected_containers(config: &Config, targets: &[Cow<'_, str>]) -> Exp
             config,
             target.as_ref(),
             &mut expected,
+            &mut expected_count,
             &mut missing_set,
             &mut invalid_set,
         );
@@ -209,17 +229,33 @@ fn collect_targeted_containers(context: &Context) -> Result<ExpectedTargets, Pod
     let specs = targets::collect_container_specs(context)?;
     let (recipes, resolved) = targets::resolve_container_targets(&context.config, &specs)?;
     let mut expected = BTreeMap::new();
+    let mut expected_count = 0usize;
     for (recipe_name, container_index) in resolved {
-        if expected.len() >= MAX_STATUS_RECORDS {
+        if expected_count >= MAX_STATUS_RECORDS {
             break;
         }
-        insert_targeted_container(&recipes, recipe_name, container_index, &mut expected);
+        insert_targeted_container(
+            &recipes,
+            recipe_name,
+            container_index,
+            &mut expected,
+            &mut expected_count,
+        );
     }
     Ok(ExpectedTargets {
         expected,
         invalid_recipes: Vec::new(),
         missing_recipes: Vec::new(),
     })
+}
+
+/// Returns the total number of expected containers across all pods in `expected`.
+#[must_use]
+fn count_expected_containers(expected: &ExpectedContainerMap) -> usize {
+    expected
+        .values()
+        .map(BTreeMap::len)
+        .fold(0usize, usize::saturating_add)
 }
 
 /// Orchestrates `pods status` target resolution, Podman querying, recipe cross-referencing, and table rendering.
@@ -254,7 +290,8 @@ where
 fn insert_recipe_containers(
     config: &Config,
     target: &str,
-    expected: &mut BTreeMap<String, ExpectedContainer>,
+    expected: &mut ExpectedContainerMap,
+    expected_count: &mut usize,
     missing_recipes: &mut BTreeSet<String>,
     invalid_recipes: &mut BTreeSet<String>,
 ) {
@@ -269,19 +306,18 @@ fn insert_recipe_containers(
             return;
         }
     };
-    let pod_id = &recipe.pod.id;
+    let pod_map = expected.entry(recipe.pod.id).or_default();
     for (index, container) in recipe.containers.into_iter().enumerate() {
-        if expected.len() >= MAX_STATUS_RECORDS {
+        if *expected_count >= MAX_STATUS_RECORDS {
             break;
         }
         let target_name = format!("{target}/{}", index + 1);
-        expected.insert(
-            container.name,
-            ExpectedContainer {
-                pod_id: pod_id.clone(),
-                target_name,
-            },
-        );
+        if pod_map
+            .insert(container.name, ExpectedContainer { target_name })
+            .is_none()
+        {
+            *expected_count += 1;
+        }
     }
 }
 
@@ -290,7 +326,8 @@ fn insert_targeted_container(
     recipes: &BTreeMap<&str, Recipe>,
     recipe_name: &str,
     container_index: usize,
-    expected: &mut BTreeMap<String, ExpectedContainer>,
+    expected: &mut ExpectedContainerMap,
+    expected_count: &mut usize,
 ) {
     let Some(recipe) = recipes.get(recipe_name) else {
         return;
@@ -299,13 +336,13 @@ fn insert_targeted_container(
         return;
     };
     let target_name = format!("{recipe_name}/{}", container_index + 1);
-    expected.insert(
-        container.name.clone(),
-        ExpectedContainer {
-            pod_id: recipe.pod.id.clone(),
-            target_name,
-        },
-    );
+    let pod_map = expected.entry(recipe.pod.id.clone()).or_default();
+    if pod_map
+        .insert(container.name.clone(), ExpectedContainer { target_name })
+        .is_none()
+    {
+        *expected_count += 1;
+    }
 }
 
 /// Queries `podman ps -a` status output via `query_status` and returns the raw output.

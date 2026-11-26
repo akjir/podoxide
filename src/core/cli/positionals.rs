@@ -333,22 +333,20 @@ fn validate_group_or_recipe_target(target: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-/// Validates a slice of lifecycle targets, enforcing either all `<recipe>`/`@<group>` targets or all `<recipe>/<container>` targets.
+/// Validates a single lifecycle target as `<recipe>/<container>` (when containing `'/'`) or `<recipe>`/`@<group>`.
+fn validate_lifecycle_target(target: &str) -> Result<(), CliError> {
+    if target.contains('/') {
+        return validate_explicit_container_target(target);
+    }
+    validate_group_or_recipe_target(target)
+}
+
+/// Validates a slice of lifecycle targets, checking syntax on every target before enforcing uniform `<recipe>`/`@<group>` or `<recipe>/<container>` targeting.
 fn validate_lifecycle_targets(parameters: &[String]) -> Result<(), CliError> {
-    let Some(first) = parameters.first() else {
-        return Ok(());
-    };
-    validate_mixed_targets(parameters)?;
-    if first.contains('/') {
-        for parameter in parameters {
-            validate_explicit_container_target(parameter)?;
-        }
-        return Ok(());
-    }
     for parameter in parameters {
-        validate_group_or_recipe_target(parameter)?;
+        validate_lifecycle_target(parameter)?;
     }
-    Ok(())
+    validate_mixed_targets(parameters)
 }
 
 /// Rejects mixing `<recipe>`/`@<group>` targets with `<recipe>/<container>` targets.

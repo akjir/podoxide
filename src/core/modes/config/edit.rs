@@ -18,11 +18,11 @@
 use std::io::{self, Write};
 use std::path::Path;
 
-use crate::core::config::{extract_config_stem, validate_editor};
+use crate::core::config;
 use crate::core::context::Context;
 use crate::error::{ConfigError, ConfigErrorKind, PodError};
 use crate::io::exec::command::{self, ExecOutcome};
-use crate::utilities::path::{has_parent_dir, sanitize_path_token};
+use crate::utilities::path;
 
 /// Opens the active `pods.conf` configuration file in the configured external editor and returns its [`ExecOutcome`].
 ///
@@ -56,7 +56,7 @@ fn edit_with<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<ExecOutcome, PodError> {
-    let editor = validate_editor(&context.config.editor)?;
+    let editor = config::validate_editor(&context.config.editor)?;
     let config_path = validate_config_path(&context.config.path)?;
     command::exec_editor_with(editor, config_path, context.config.simulate, stdout, stderr)
 }
@@ -64,12 +64,12 @@ fn edit_with<W: Write, E: Write>(
 /// Verifies that `path` is a safe UTF-8 configuration file path without `..` traversal or leading dashes.
 fn validate_config_path(path: &Path) -> Result<&Path, PodError> {
     path.to_str()
-        .filter(|raw| !has_parent_dir(path) && extract_config_stem(raw).is_some())
+        .filter(|raw| !path::has_parent_dir(path) && config::extract_config_stem(raw).is_some())
         .map(|_| path)
         .ok_or_else(|| {
             PodError::from(ConfigError::without_line(
                 ConfigErrorKind::InvalidPath,
-                sanitize_path_token(path),
+                path::sanitize_path_token(path),
             ))
         })
 }
@@ -90,7 +90,7 @@ mod tests {
     fn edit_with_executes_and_logs_debug_when_not_simulated() {
         let mut context = Context::new();
         context.config.editor = String::from("false");
-        context.config.path = PathBuf::from("./tests/pods/configs/config_012_invalid_editor.conf");
+        context.config.path = PathBuf::from("./configs/staging.conf");
         context.config.simulate = false;
 
         let mut stdout = Vec::new();
@@ -104,7 +104,7 @@ mod tests {
         assert!(stdout.is_empty());
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
-            "DEBUG: Execute: false ./tests/pods/configs/config_012_invalid_editor.conf\nWARNING: Command exited with code '1'!\n"
+            "DEBUG: Execute: false ./configs/staging.conf\nWARNING: Command exited with code '1'!\n"
         );
 
         context.config.editor = String::from("true");

@@ -44,13 +44,18 @@ struct PreviewLayout {
     target_column: usize,
 }
 
-/// Formats and writes the aligned image prune preview list, dynamic separator, and reclaimable space total to `stdout`.
+/// Formats and writes the aligned image prune preview list, dynamic separator, and reclaimable space total (prefixed with `>= ` when `truncated` is `true`) to `stdout`.
 pub(super) fn write_preview_results<W: Write>(
     entries: &[PreviewEntry],
     total_bytes: u64,
+    truncated: bool,
     stdout: &mut W,
 ) {
-    let reclaimable = format::format_bytes(total_bytes);
+    let reclaimable = if truncated {
+        format!(">= {}", format::format_bytes(total_bytes))
+    } else {
+        format::format_bytes(total_bytes)
+    };
     let layout = compute_preview_layout(entries, &reclaimable);
     log::write_print(stdout, "Images to be pruned:");
     for entry in entries {

@@ -89,11 +89,11 @@ fn write_options_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "  --debug            enable debug output");
     log::write_print(
         writer,
-        "  --force            skip confirmation prompt (prune only)",
+        "  --force            skip confirmation prompt (prune only; invalid with --preview)",
     );
     log::write_print(
         writer,
-        "  --preview          preview images and space that would be deleted (prune only)",
+        "  --preview          preview images and space that would be deleted (prune only; invalid with --force)",
     );
     log::write_print(
         writer,
@@ -145,9 +145,11 @@ mod tests {
         ));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(output.contains("  --force            skip confirmation prompt (prune only)\n"));
         assert!(output.contains(
-            "  --preview          preview images and space that would be deleted (prune only)\n"
+            "  --force            skip confirmation prompt (prune only; invalid with --preview)\n"
+        ));
+        assert!(output.contains(
+            "  --preview          preview images and space that would be deleted (prune only; invalid with --force)\n"
         ));
         assert!(
             output.contains(

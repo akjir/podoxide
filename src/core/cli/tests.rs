@@ -331,6 +331,32 @@ fn red_team_target_injection_and_bypass_exploits() {
     let group_with_container = parse_args(&mut context, ["up", "@backend/db"]).unwrap_err();
     assert_eq!(group_with_container.kind, CliErrorKind::InvalidTarget);
 
+    for (args, expected_bad) in [
+        (
+            ["up", "@backend/db", "valid_recipe"].as_slice(),
+            "@backend/db",
+        ),
+        (["up", "/", "valid_recipe"].as_slice(), "/"),
+        (
+            ["up", "valid_recipe", "@backend/db"].as_slice(),
+            "@backend/db",
+        ),
+        (["up", "valid_recipe", "/"].as_slice(), "/"),
+    ] {
+        let mut invalid_context = Context::new();
+        let error = parse_args(&mut invalid_context, args).unwrap_err();
+        assert_eq!(
+            error.kind,
+            CliErrorKind::InvalidTarget,
+            "expected InvalidTarget instead of MixedTargets for {args:?}"
+        );
+        assert_eq!(
+            error.argument.as_deref(),
+            Some(expected_bad),
+            "expected offending token {expected_bad:?} for {args:?}"
+        );
+    }
+
     let slash_in_recipe = parse_args(&mut context, ["recipe", "show", "app/db"]).unwrap_err();
     assert_eq!(slash_in_recipe.kind, CliErrorKind::InvalidTarget);
 

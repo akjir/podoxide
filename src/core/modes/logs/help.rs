@@ -53,10 +53,7 @@ pub(crate) fn write_help<W: Write>(writer: &mut W) {
         "Show or follow logs for a recipe's pod or container.",
     );
     log::write_print(writer, "Alias: log");
-    log::write_print(
-        writer,
-        "Usage: pods logs [OPTIONS] [ACTION] <recipe>[/<container>]",
-    );
+    log::write_print(writer, "Usage: pods logs [OPTIONS] [ACTION] [TARGET]");
     log::write_print(writer, "");
     write_actions_section(writer);
     log::write_print(writer, "");
@@ -88,16 +85,22 @@ fn write_options_section<W: Write>(writer: &mut W) {
         writer,
         "  --simulate         preview generated commands without executing them",
     );
-    log::write_print(writer, "  --since=<time>     show logs since timestamp");
     log::write_print(
         writer,
-        "  --tail=<n>         output the specified number of lines at the end",
+        "  --since=<time>     show logs since timestamp (show/follow only)",
     );
     log::write_print(
         writer,
-        "  --timestamps       show timestamps in the log output",
+        "  --tail=<n>         output the specified number of lines at the end (show/follow only)",
     );
-    log::write_print(writer, "  --until=<time>     show logs until timestamp");
+    log::write_print(
+        writer,
+        "  --timestamps       show timestamps in the log output (show/follow only)",
+    );
+    log::write_print(
+        writer,
+        "  --until=<time>     show logs until timestamp (show/follow only)",
+    );
 }
 
 /// Writes the `TARGET:` section for `pods logs` to `writer`.
@@ -132,7 +135,7 @@ mod tests {
         )));
         assert!(output.contains("Show or follow logs for a recipe's pod or container.\n"));
         assert!(output.contains("Alias: log\n"));
-        assert!(output.contains("Usage: pods logs [OPTIONS] [ACTION] <recipe>[/<container>]\n"));
+        assert!(output.contains("Usage: pods logs [OPTIONS] [ACTION] [TARGET]\n"));
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains("  follow             fetch and follow logs\n"));
         assert!(output.contains("  help               display this help and exit\n"));
@@ -148,13 +151,18 @@ mod tests {
                 "  --simulate         preview generated commands without executing them\n"
             )
         );
-        assert!(output.contains("  --since=<time>     show logs since timestamp\n"));
         assert!(
-            output
-                .contains("  --tail=<n>         output the specified number of lines at the end\n")
+            output.contains("  --since=<time>     show logs since timestamp (show/follow only)\n")
         );
-        assert!(output.contains("  --timestamps       show timestamps in the log output\n"));
-        assert!(output.contains("  --until=<time>     show logs until timestamp\n"));
+        assert!(output.contains(
+            "  --tail=<n>         output the specified number of lines at the end (show/follow only)\n"
+        ));
+        assert!(output.contains(
+            "  --timestamps       show timestamps in the log output (show/follow only)\n"
+        ));
+        assert!(
+            output.contains("  --until=<time>     show logs until timestamp (show/follow only)\n")
+        );
         assert!(output.contains("TARGET:\n"));
         assert!(
             output.contains(

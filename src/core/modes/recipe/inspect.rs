@@ -21,7 +21,6 @@ use crate::core::context::Context;
 use crate::core::log;
 use crate::core::recipe::Recipe;
 use crate::error::PodError;
-use super::extract_registered_recipe;
 
 /// Loads and validates a single registered `.pod` recipe file, printing a confirmation message
 /// when valid or returning a diagnostic error when invalid.
@@ -43,7 +42,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 
 /// Validates `<recipe>` via [`Recipe::inspect`] and writes the success status to `stdout`.
 fn inspect_with<W: Write>(context: &Context, stdout: &mut W) -> Result<(), PodError> {
-    let recipe_name = extract_registered_recipe(context)?;
+    let recipe_name = super::extract_registered_recipe(context)?;
     Recipe::inspect(&context.config, recipe_name)?;
     log::write_print(stdout, &format!("Recipe '{recipe_name}' is valid."));
     Ok(())

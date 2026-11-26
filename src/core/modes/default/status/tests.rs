@@ -276,33 +276,34 @@ fn execute_with_handles_groups_empty_results_bounds_and_errors() {
 
     // Scans past 1024 ps records to find managed containers while capping displayed rows at MAX_STATUS_RECORDS.
     let mut oversized_ps = String::new();
-    let mut oversized_expected = BTreeMap::new();
+    let mut oversized_pod = BTreeMap::new();
     for index in 0..(MAX_STATUS_RECORDS + 10) {
         oversized_ps.push_str(&format!(
             "id_{index}\x1fimg\x1fcmd\x1fnow\x1fUp 1h\x1f80\x1fcnt_{index}\x1fpod\x1f0\x1e\n"
         ));
-        oversized_expected.insert(
+        oversized_pod.insert(
             format!("missing_{index}"),
             ExpectedContainer {
-                pod_id: String::from("pod"),
                 target_name: format!("recipe/{}", index + 1),
             },
         );
     }
+    let oversized_expected = BTreeMap::from([(String::from("pod"), oversized_pod)]);
     let empty_expected = BTreeMap::new();
     let bounded_ps_rows = build_display_rows(&oversized_ps, &empty_expected, &[], &[], true);
     assert_eq!(bounded_ps_rows.len(), MAX_STATUS_RECORDS);
     let bounded_missing_rows = build_display_rows("", &oversized_expected, &[], &[], false);
     assert_eq!(bounded_missing_rows.len(), MAX_STATUS_RECORDS);
 
-    let mut single_expected = BTreeMap::new();
-    single_expected.insert(
-        format!("cnt_{MAX_STATUS_RECORDS}"),
-        ExpectedContainer {
-            pod_id: String::from("pod"),
-            target_name: String::from("recipe/1"),
-        },
-    );
+    let single_expected = BTreeMap::from([(
+        String::from("pod"),
+        BTreeMap::from([(
+            format!("cnt_{MAX_STATUS_RECORDS}"),
+            ExpectedContainer {
+                target_name: String::from("recipe/1"),
+            },
+        )]),
+    )]);
     let found_after_1024 = build_display_rows(&oversized_ps, &single_expected, &[], &[], false);
     assert_eq!(found_after_1024.len(), 1);
     assert_eq!(found_after_1024[0].status, "Up 1h");
@@ -318,6 +319,10 @@ fn execute_with_handles_groups_empty_results_bounds_and_errors() {
     assert_eq!(
         format_table_row(&["ID", "IMAGE"], &[14, 12]),
         "ID               IMAGE"
+    );
+    assert_eq!(
+        format_table_row(&["id", "cmd", ""], &[4, 10, 5]),
+        "id     cmd"
     );
 
     let empty_targets = collect_expected_containers(&context.config, &[]);
@@ -409,4 +414,70 @@ Recipe 'invalid_recipe' has errors! Run 'pods recipe inspect invalid_recipe' for
     assert!(all_full_output.contains("test_pod-my-db              recipe_017_container_naming/2"));
     assert!(all_full_output.contains("totally_custom              recipe_017_container_naming/3"));
     assert!(all_full_output.contains("test_simple_cnt_pod-app-1   recipe_011_simple_container/1"));
+    assert!(
+        !all_full_output.lines().any(|line| line.ends_with(' ')),
+        "--full rows with empty PORTS must have zero trailing spaces:\n{all_full_output}"
+    );
+
+    let mut empty_image_capture = || {
+        Some(String::from(
+            "d4e5f6a1b2c3\x1f\x1fsh\x1f1 day ago\x1fExited (0) 1 day ago\x1f\x1fno_image_cnt\x1f\x1f0\x1e\n",
+        ))
+    };
+    context.flags.set_full(false);
+    let mut empty_image_stdout = Vec::new();
+    execute_with(&context, &mut empty_image_capture, &mut empty_image_stdout).unwrap();
+    let empty_image_output = String::from_utf8(empty_image_stdout).unwrap();
+    assert!(empty_image_output.contains("no_image_cnt"));
+    assert!(
+        !empty_image_output.lines().any(|line| line.ends_with(' ')),
+        "--all rows with empty IMAGE must have zero trailing spaces:\n{empty_image_output}"
+    );
+}
+
+#[test]
+fn execute_with_keeps_same_container_name_distinct_across_pods() {
+    let temp_dir = TestTempDir::new("status_same_name_pods");
+    let pods_dir = temp_dir.join("pods");
+    let recipes_dir = temp_dir.join("recipes");
+    std_fs::create_dir_all(&pods_dir).unwrap();
+    std_fs::create_dir_all(&recipes_dir).unwrap();
+
+    fs::write_file(
+        &recipes_dir.join("dev.pod"),
+        "pod dev_pod {\n    name \"Dev\"\n    registry docker.io\n}\ncontainer redis {\n    image redis:7\n}\n",
+    )
+    .unwrap();
+    fs::write_file(
+        &recipes_dir.join("staging.pod"),
+        "pod staging_pod {\n    name \"Staging\"\n    registry docker.io\n}\ncontainer redis {\n    image redis:7\n}\n",
+    )
+    .unwrap();
+
+    let mut context = Context::new();
+    context.config.pods.path = pods_dir;
+    context.config.recipes.path = recipes_dir;
+    context.config.recipes.groups.insert(
+        String::from("all"),
+        vec![String::from("dev"), String::from("staging")],
+    );
+    context.flags.set_full(true);
+
+    let mut capture = || {
+        Some(String::from(
+            "1111aaaa2222\x1fredis:7\x1fredis-server\x1f1h ago\x1fUp 1h\x1f6379/tcp\x1fredis\x1fdev_pod\x1f0\x1e\n",
+        ))
+    };
+    let mut stdout = Vec::new();
+    execute_with(&context, &mut capture, &mut stdout).unwrap();
+    let output = String::from_utf8(stdout).unwrap();
+
+    assert!(
+        output.contains("dev_pod       redis   dev/1         Up 1h"),
+        "expected running dev_pod/redis with target dev/1:\n{output}"
+    );
+    assert!(
+        output.contains("staging_pod   redis   staging/1     Not Found"),
+        "expected missing staging_pod/redis with target staging/1:\n{output}"
+    );
 }

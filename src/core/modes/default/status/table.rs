@@ -133,7 +133,7 @@ impl<'a> StatusRow<'a> {
     }
 }
 
-/// Formats a slice of table `cells` padded to `widths` (omitting trailing spaces on the final column) and separated by [`COLUMN_SEPARATOR`].
+/// Formats a slice of table `cells` padded to `widths`, separated by [`COLUMN_SEPARATOR`], with trailing ASCII spaces trimmed.
 #[must_use]
 pub(super) fn format_table_row(cells: &[&str], widths: &[usize]) -> String {
     let pair_count = cells.len().min(widths.len());
@@ -159,6 +159,7 @@ pub(super) fn format_table_row(cells: &[&str], widths: &[usize]) -> String {
             push_padded_cell(&mut line, cell, width);
         }
     }
+    line.truncate(line.trim_end_matches(' ').len());
     line
 }
 

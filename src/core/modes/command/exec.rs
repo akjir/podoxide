@@ -160,8 +160,8 @@ fn resolve_command<'a, E: Write>(
 /// # Errors
 ///
 /// Returns [`PodError`] with [`RecipeErrorKind::InvalidCommand`] at `line` if `key`/`name`,
-/// `container`, or `execute` is missing/invalid, `execute` has unclosed quotes or starts with `-`,
-/// or `user` is not a valid token.
+/// `container`, or `execute` is missing/invalid, `execute` has unclosed quotes or an invalid
+/// program token, or `user` is not a valid token.
 fn validate_command(key: &str, command: &PodCommand, line: usize) -> Result<Vec<String>, PodError> {
     if !string::is_valid_identifier(key) || key != command.name {
         return Err(PodError::from(RecipeError::at_line_or_none(
@@ -191,14 +191,18 @@ fn validate_command(key: &str, command: &PodCommand, line: usize) -> Result<Vec<
             &command.name,
         )));
     };
-    if tokens
-        .first()
-        .is_none_or(|program| program.is_empty() || program.starts_with('-'))
-    {
+    let Some(program) = tokens.first() else {
         return Err(PodError::from(RecipeError::at_line_or_none(
             RecipeErrorKind::InvalidCommand,
             line,
             &command.name,
+        )));
+    };
+    if !string::is_valid_token(program) {
+        return Err(PodError::from(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            program,
         )));
     }
     if let Some(user) = &command.user

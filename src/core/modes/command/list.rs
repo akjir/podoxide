@@ -22,8 +22,7 @@ use crate::core::log;
 use crate::core::pod::PodCommand;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError};
-use crate::utilities::format::format_index_prefix;
-use super::{get_valid_commands, load_target_recipe};
+use crate::utilities::format;
 
 /// Collects, sorts, and displays all valid maintenance commands defined in a target recipe.
 ///
@@ -52,7 +51,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 /// Formats a single 1-based indexed command entry for `pods command list`.
 #[must_use]
 fn format_command_entry(command: &PodCommand, index: usize, total: usize) -> String {
-    let prefix = format_index_prefix(index, total);
+    let prefix = format::format_index_prefix(index, total);
     let description = command.description.trim();
     if description.is_empty() {
         format!("  {prefix} {}", command.name)
@@ -75,7 +74,7 @@ fn list_commands<W: Write, E: Write>(
         );
         return;
     }
-    let valid_commands = get_valid_commands(recipe, false, stderr);
+    let valid_commands = super::get_valid_commands(recipe, false, stderr);
     if valid_commands.is_empty() {
         log::write_print(
             stdout,
@@ -105,7 +104,7 @@ fn list_with<W: Write, E: Write>(
     let Some(target) = context.parameters.first() else {
         return Err(PodError::from(CliError::new(CliErrorKind::MissingTarget)));
     };
-    let recipe = load_target_recipe(context, target)?;
+    let recipe = super::load_target_recipe(context, target)?;
     list_commands(&recipe, target, stdout, stderr);
     Ok(())
 }

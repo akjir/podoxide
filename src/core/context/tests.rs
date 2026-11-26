@@ -15,13 +15,14 @@
 
 //! Unit tests for [`super::Context`], [`super::Flags`], and mode/action enumerations.
 
+use std::fmt::Debug;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use crate::core::cli;
 use crate::core::config::{Config, PodsConfig, RecipesConfig};
-use crate::error::CliErrorKind;
+use crate::error::{CliError, CliErrorKind};
 use crate::io::system::fs::TestTempDir;
 use super::{
     CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, Flags, ImageAction,
@@ -65,6 +66,13 @@ fn assert_action_simulate_transitions(
     assert!(
         true_context.config.simulate,
         "expected simulate=true from config for action {action:?}"
+    );
+}
+
+fn assert_unknown_action<T: FromStr<Err = CliError> + Debug>() {
+    assert_eq!(
+        T::from_str("unknown").unwrap_err().kind,
+        CliErrorKind::UnknownAction
     );
 }
 
@@ -151,44 +159,17 @@ fn context_defaults_and_cli_population() {
 
 #[test]
 fn display_from_str_and_mode_derivation() {
-    assert_eq!(
-        CommandAction::from_str("unknown").unwrap_err().kind,
-        CliErrorKind::UnknownAction
-    );
-    assert_eq!(
-        ConfigAction::from_str("unknown").unwrap_err().kind,
-        CliErrorKind::UnknownAction
-    );
-    assert_eq!(
-        ConnectAction::from_str("unknown").unwrap_err().kind,
-        CliErrorKind::UnknownAction
-    );
-    assert_eq!(
-        DefaultAction::from_str("unknown").unwrap_err().kind,
-        CliErrorKind::UnknownAction
-    );
-    assert_eq!(
-        ImageAction::from_str("unknown").unwrap_err().kind,
-        CliErrorKind::UnknownAction
-    );
+    assert_unknown_action::<CommandAction>();
+    assert_unknown_action::<ConfigAction>();
+    assert_unknown_action::<ConnectAction>();
+    assert_unknown_action::<DefaultAction>();
+    assert_unknown_action::<ImageAction>();
     assert_eq!(InitAction::from_str("create").unwrap(), InitAction::Create);
     assert_eq!(InitAction::from_str("help").unwrap(), InitAction::Help);
-    assert_eq!(
-        InitAction::from_str("unknown").unwrap_err().kind,
-        CliErrorKind::UnknownAction
-    );
-    assert_eq!(
-        LogsAction::from_str("unknown").unwrap_err().kind,
-        CliErrorKind::UnknownAction
-    );
-    assert_eq!(
-        Mode::from_str("unknown").unwrap_err().kind,
-        CliErrorKind::UnknownAction
-    );
-    assert_eq!(
-        RecipeAction::from_str("unknown").unwrap_err().kind,
-        CliErrorKind::UnknownAction
-    );
+    assert_unknown_action::<InitAction>();
+    assert_unknown_action::<LogsAction>();
+    assert_unknown_action::<Mode>();
+    assert_unknown_action::<RecipeAction>();
 
     assert_eq!(Mode::Command.to_string(), "command");
     assert_eq!(Mode::Config.to_string(), "config");
@@ -409,16 +390,17 @@ fn requires_config_podman_elevation_and_simulate_sync_across_all_actions() {
             !context.requires_config(),
             "expected {action:?} to bypass config loading"
         );
-        let expects_podman = action == ModeAction::Config(ConfigAction::Show);
+        let expects_config_file = action == ModeAction::Config(ConfigAction::Show);
         assert_eq!(
-            context.requires_podman(),
-            expects_podman,
-            "unexpected requires_podman() for {action:?}"
+            context.uses_config_file(),
+            expects_config_file,
+            "unexpected uses_config_file() for {action:?}"
         );
-        let expects_elevation = matches!(
-            action,
-            ModeAction::Config(ConfigAction::Show) | ModeAction::Init(InitAction::Create)
+        assert!(
+            !context.requires_podman(),
+            "expected {action:?} to bypass Podman check"
         );
+        let expects_elevation = action == ModeAction::Init(InitAction::Create);
         assert_eq!(
             context.requires_elevation_confirmation(),
             expects_elevation,
@@ -470,12 +452,31 @@ fn requires_config_podman_elevation_and_simulate_sync_across_all_actions() {
         let mut context = Context::new();
         context.action = action;
         assert!(
-            context.requires_podman(),
-            "expected {action:?} to require Podman"
+            context.uses_config_file(),
+            "expected {action:?} to use the configured pods.conf file"
         );
-        assert!(
+        let expects_podman = matches!(
+            action,
+            ModeAction::Command(CommandAction::Exec)
+                | ModeAction::Connect(ConnectAction::Shell)
+                | ModeAction::Default(_)
+                | ModeAction::Image(_)
+                | ModeAction::Logs(_)
+        );
+        assert_eq!(
+            context.requires_podman(),
+            expects_podman,
+            "unexpected requires_podman() for {action:?}"
+        );
+        let expects_elevation = expects_podman
+            || matches!(
+                action,
+                ModeAction::Config(ConfigAction::Edit) | ModeAction::Recipe(RecipeAction::Edit)
+            );
+        assert_eq!(
             context.requires_elevation_confirmation(),
-            "expected {action:?} to require elevation confirmation"
+            expects_elevation,
+            "unexpected requires_elevation_confirmation() for {action:?}"
         );
         assert_action_simulate_transitions(action, &simulate_false_path, &simulate_true_path);
     }

@@ -21,7 +21,6 @@ use crate::core::context::Context;
 use crate::core::log;
 use crate::core::recipe::Recipe;
 use crate::error::PodError;
-use super::{build_recipe_path, extract_registered_recipe};
 
 /// Reads a single `.pod` recipe file and outputs its raw contents prefixed with 1-based line
 /// numbers.
@@ -50,8 +49,8 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 /// Returns [`PodError`] if `<recipe>` is missing, invalid, or not registered in `pods.conf`,
 /// `context.config.recipes.path` is invalid, or reading `<recipes.path>/<recipe>.pod` fails.
 fn show_with<W: Write>(context: &Context, stdout: &mut W) -> Result<(), PodError> {
-    let recipe_name = extract_registered_recipe(context)?;
-    let recipe_path = build_recipe_path(&context.config.recipes.path, recipe_name)?;
+    let recipe_name = super::extract_registered_recipe(context)?;
+    let recipe_path = super::build_recipe_path(&context.config.recipes.path, recipe_name)?;
     let content = Recipe::read_file(&recipe_path)?;
     log::write_numbered_lines(stdout, &content);
     Ok(())
