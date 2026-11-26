@@ -199,6 +199,26 @@ fn read_write_exclusive_nofollow_nonblock_and_error_source_preservation() {
     ));
     assert_eq!(read_file(&protected_target).unwrap(), "safe");
 
+    struct FailingWriter;
+    impl io::Write for FailingWriter {
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("simulated ENOSPC"))
+        }
+    }
+    let partial_target = temp_dir.join("partial_exclusive.pod");
+    fs::write(&partial_target, "").unwrap();
+    assert!(
+        super::write_all_or_remove(FailingWriter, &partial_target, &partial_target, "data")
+            .is_err()
+    );
+    assert!(
+        !partial_target.exists(),
+        "failed exclusive write must remove newly created empty/partial file"
+    );
+
     for invalid in [
         Path::new(""),
         Path::new("."),
@@ -211,6 +231,15 @@ fn read_write_exclusive_nofollow_nonblock_and_error_source_preservation() {
     ] {
         assert!(ensure_writable_target(invalid).is_err());
     }
+    let missing_parent_err =
+        ensure_writable_target(&temp_dir.join("missing_parent/pods.conf")).unwrap_err();
+    let missing_parent_text = missing_parent_err.to_string();
+    assert!(
+        missing_parent_text.contains("parent directory '")
+            && missing_parent_text.contains("does not exist")
+            && !missing_parent_text.contains('!'),
+        "missing parent error must use lowercase without '!': {missing_parent_text}"
+    );
     assert!(write_file_exclusive(Path::new(""), "x").is_err());
     assert!(ensure_writable_target(&temp_dir.join("new_target.conf")).is_ok());
 

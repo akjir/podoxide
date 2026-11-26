@@ -96,6 +96,11 @@ fn query_in_use_images_and_format_templates_use_atomic_ps_and_control_delimiters
     assert!(IMAGES_FORMAT.contains(r#"\x1e"#));
     assert!(PS_FORMAT.contains(r#"\x1f"#));
     assert!(PS_FORMAT.contains(r#"\x1e"#));
+    assert!(
+        PS_FORMAT.contains("{{json .Command}}"),
+        "PS_FORMAT must JSON-escape Command to prevent record/field delimiter injection"
+    );
+    assert!(!PS_FORMAT.contains("{{.Command}}"));
 
     let mut captured_calls: Vec<Vec<String>> = Vec::new();
     let mut capture = |arguments: &[&str]| -> Option<String> {
@@ -143,6 +148,12 @@ fn query_in_use_images_and_format_templates_use_atomic_ps_and_control_delimiters
 
     let ps_failure = collect_in_use_images_with(&mut |_: &[&str]| None).unwrap_err();
     assert!(matches!(ps_failure, PodError::Io(_)));
+    assert!(
+        ps_failure
+            .to_string()
+            .contains("failed to query in-use Podman images"),
+        "unexpected error wording: {ps_failure}"
+    );
     assert!(
         collect_in_use_images_with(&mut |_: &[&str]| Some(String::new()))
             .unwrap()

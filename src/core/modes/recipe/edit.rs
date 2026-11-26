@@ -111,7 +111,7 @@ mod tests {
         assert!(stdout.is_empty());
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
-            "DEBUG: Execute: false ./recipes/example-app.pod\nWARNING: Command exited with code '1'!\n"
+            "DEBUG: Execute: false ./recipes/example-app.pod\nWARNING: Command exited with code '1'.\n"
         );
 
         context.config.editor = String::from("true");

@@ -253,15 +253,13 @@ pub fn write_file_exclusive(target_path: &Path, content: &str) -> Result<(), Pod
         return Err(invalid_target_error(target_path));
     }
     let working_path = path_resolve::resolve_working_path(target_path);
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .custom_flags(LINUX_O_NOFOLLOW)
         .open(working_path.as_ref())
         .map_err(|error| io_path_error(target_path, error))?;
-    file.write_all(content.as_bytes())
-        .map_err(|error| io_path_error(target_path, error))?;
-    Ok(())
+    write_all_or_remove(file, working_path.as_ref(), target_path, content)
 }
 
 /// Writes `content` to `target_path`, creating or truncating the target regular file with `O_NOFOLLOW`.
@@ -320,7 +318,7 @@ fn ensure_parent_directory(target_path: &Path) -> Result<(), PodError> {
     if !directory_exists(parent) {
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("Parent directory '{}' does not exist!", parent.display()),
+            format!("parent directory '{}' does not exist", parent.display()),
         )));
     }
     Ok(())
@@ -383,6 +381,21 @@ fn read_bounded_utf8<R: Read>(
             io::Error::new(io::ErrorKind::InvalidData, error),
         )
     })
+}
+
+/// Writes `content` to `writer` and removes `cleanup_path` if writing fails so partial files are not left behind.
+fn write_all_or_remove<W: Write>(
+    mut writer: W,
+    cleanup_path: &Path,
+    target_path: &Path,
+    content: &str,
+) -> Result<(), PodError> {
+    if let Err(error) = writer.write_all(content.as_bytes()) {
+        drop(writer);
+        let _ = fs::remove_file(cleanup_path);
+        return Err(io_path_error(target_path, error));
+    }
+    Ok(())
 }
 
 /// Opens `target_path` for writing with `O_NOFOLLOW`, truncating or creating it, and writes `content`.

@@ -140,17 +140,17 @@ fn container_lifecycle_commands_and_simulation() {
     assert_eq!(
         lines,
         vec![
-            "Create pod 'Commandos' ('commandos'): ",
+            "Create pod 'Commandos' ('commandos'):",
             "podman pod create --name commandos",
-            "Create container 'commandos-1': ",
+            "Create container 'commandos-1':",
             "podman create --name commandos-1 --pod commandos --restart on-failure:5 --volume /my_pod_path/relative/path:/container/dir/relative:z --unknown thing --another unknown bel.io/squad:1998 'O'\\''Hara' 'Hancock 2' Woolridge3 Brooklyn:4 Blackwood=5 Duchamp-6",
-            "Start container 'commandos-1': ",
+            "Start container 'commandos-1':",
             "podman start commandos-1",
-            "Stop container 'commandos-1': ",
+            "Stop container 'commandos-1':",
             "podman stop commandos-1",
-            "Remove container 'commandos-1': ",
+            "Remove container 'commandos-1':",
             "podman rm commandos-1",
-            "Trying to pull bel.io/squad:1998 (commandos-1): ",
+            "Trying to pull bel.io/squad:1998 (commandos-1):",
             "podman pull bel.io/squad:1998",
         ]
     );
@@ -179,7 +179,7 @@ fn container_lifecycle_commands_and_simulation() {
         .lines()
         .collect();
     assert_eq!(existing_lines.len(), 2);
-    assert_eq!(existing_lines[0], "Create container 'commandos-1': ");
+    assert_eq!(existing_lines[0], "Create container 'commandos-1':");
 
     let mut composite_out = Vec::new();
     assert_eq!(
@@ -302,14 +302,14 @@ fn container_update_detects_stale_image_on_pre_pulled_up_to_date() {
         .find(notice)
         .expect("expected stale-container notice before reload");
     let stop_pos = stale_text
-        .find("Stop container 'db_pod-db': ")
+        .find("Stop container 'db_pod-db':")
         .expect("expected Stop container output");
     assert!(
         notice_pos < stop_pos,
         "stale notice must appear before reload output:\n{stale_text}"
     );
-    assert!(stale_text.contains("Create container 'db_pod-db': "));
-    assert!(stale_text.contains("Start container 'db_pod-db': "));
+    assert!(stale_text.contains("Create container 'db_pod-db':\n"));
+    assert!(stale_text.contains("Start container 'db_pod-db':\n"));
 
     // Container running sha256:new matching pulled image sha256:new -> UpToDate, no reload.
     let mut current_cache = PullCache::new();
@@ -469,8 +469,8 @@ fn container_update_with_sanitizes_errors_and_tolerates_broken_pipe() {
     .unwrap();
     assert_eq!(changed_result.action, UpdateAction::Reloaded);
     let changed_lines: Vec<&str> = std::str::from_utf8(&changed_out).unwrap().lines().collect();
-    assert!(changed_lines.contains(&"Stop container 'app_1': "));
-    assert!(changed_lines.contains(&"Create container 'app_1': "));
-    assert!(changed_lines.contains(&"Start container 'app_1': "));
+    assert!(changed_lines.contains(&"Stop container 'app_1':"));
+    assert!(changed_lines.contains(&"Create container 'app_1':"));
+    assert!(changed_lines.contains(&"Start container 'app_1':"));
     assert!(!changed_lines.contains(&"Container 'app_1' is up to date."));
 }

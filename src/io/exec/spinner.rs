@@ -39,6 +39,10 @@ const SPINNER_INTERVAL_MS: u64 = 80;
 const SPINNER_MAX_PREFIX_BYTES: usize = log::MAX_LOG_MESSAGE_BYTES - SPINNER_MAX_SUMMARY_BYTES;
 /// Maximum byte length of the sanitized spinner completion summary suffix.
 const SPINNER_MAX_SUMMARY_BYTES: usize = 16;
+/// VT100 DECRC sequence restoring the saved post-prefix cursor position on TTY frames.
+const SPINNER_RESTORE_CURSOR: &str = "\x1b8";
+/// VT100 DECSC sequence saving the post-prefix cursor position on TTY startup.
+const SPINNER_SAVE_CURSOR: &str = "\x1b7";
 
 /// Configuration controlling spinner simulation, terminal animation, prefixing, and polling cadence.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,20 +213,28 @@ fn wait_with_spinner<W: Write>(
     poll_interval: Duration,
     stdout: &mut W,
 ) -> Result<ExitStatus, PodError> {
+    let _ = write!(stdout, "{sanitized_prefix}{SPINNER_SAVE_CURSOR}");
+    let _ = stdout.flush();
     let mut frames = SPINNER_FRAMES.iter().copied().cycle();
     loop {
         let frame = frames.next().unwrap_or("⠋");
-        write_spinner_frame(stdout, sanitized_prefix, frame);
+        write_spinner_frame(stdout, frame);
         let poll_result = child.try_wait();
-        if let Some(status) = poll_child_status(child, poll_result, poll_interval)? {
-            return Ok(status);
+        match poll_child_status(child, poll_result, poll_interval) {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {}
+            Err(error) => {
+                let _ = writeln!(stdout);
+                let _ = stdout.flush();
+                return Err(error);
+            }
         }
     }
 }
 
-/// Writes a single carriage-returned spinner frame (`\r<prefix><frame>`) to `stdout` and flushes the stream.
-fn write_spinner_frame<W: Write>(stdout: &mut W, sanitized_prefix: &str, frame: &str) {
-    let _ = write!(stdout, "\r{sanitized_prefix}{frame}");
+/// Writes a single restored-cursor spinner frame (`\x1b8<frame>`) to `stdout` and flushes the stream.
+fn write_spinner_frame<W: Write>(stdout: &mut W, frame: &str) {
+    let _ = write!(stdout, "{SPINNER_RESTORE_CURSOR}{frame}");
     let _ = stdout.flush();
 }
 
@@ -237,7 +249,7 @@ fn write_spinner_result<W: Write>(
     if is_tty {
         let _ = writeln!(
             stdout,
-            "\r{sanitized_prefix}{sanitized_summary}{SPINNER_CLEAR_EOL}"
+            "{SPINNER_RESTORE_CURSOR}{sanitized_summary}{SPINNER_CLEAR_EOL}"
         );
     } else {
         let _ = writeln!(stdout, "{sanitized_prefix}{sanitized_summary}");

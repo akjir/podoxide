@@ -18,10 +18,12 @@
 use std::borrow::Cow;
 use std::env;
 use std::fs;
+use std::ops::ControlFlow;
 use std::path::{Component, Path, PathBuf};
 
 use crate::utilities::path;
 
+const MAX_RESOLVED_PATH_BYTES: usize = 4096;
 const MAX_SYMLINK_DEPTH: usize = 40;
 
 /// Resolves the normalized absolute path for `target_path` without requiring the target to exist on disk.
@@ -57,10 +59,11 @@ fn append_resolved_path(
     resolved: &mut PathBuf,
     target_path: &Path,
     remaining_symlinks: &mut usize,
-) {
+) -> ControlFlow<()> {
     for component in target_path.components() {
-        apply_resolved_component(resolved, component, remaining_symlinks);
+        apply_resolved_component(resolved, component, remaining_symlinks)?;
     }
+    ControlFlow::Continue(())
 }
 
 /// Applies a path component to `resolved` and resolves existing or symlinked prefixes before `..`.
@@ -68,7 +71,7 @@ fn apply_resolved_component(
     resolved: &mut PathBuf,
     component: Component<'_>,
     remaining_symlinks: &mut usize,
-) {
+) -> ControlFlow<()> {
     match component {
         Component::Prefix(prefix) => resolved.push(prefix.as_os_str()),
         Component::RootDir => {
@@ -79,34 +82,50 @@ fn apply_resolved_component(
         Component::ParentDir => path::pop_relative_or_absolute(resolved),
         Component::Normal(part) => {
             resolved.push(part);
-            resolve_normal_component(resolved, remaining_symlinks);
+            resolve_normal_component(resolved, remaining_symlinks)?;
         }
     }
+    if resolved.as_os_str().len() > MAX_RESOLVED_PATH_BYTES {
+        return ControlFlow::Break(());
+    }
+    ControlFlow::Continue(())
 }
 
 /// Resolves `target_path` component by component, canonicalizing existing prefixes and expanding symlinks along the way.
 fn resolve_absolute_components(target_path: &Path) -> PathBuf {
-    let mut resolved = PathBuf::with_capacity(target_path.as_os_str().len());
+    let mut resolved =
+        PathBuf::with_capacity(target_path.as_os_str().len().min(MAX_RESOLVED_PATH_BYTES));
     let mut remaining_symlinks = MAX_SYMLINK_DEPTH;
-    append_resolved_path(&mut resolved, target_path, &mut remaining_symlinks);
+    if append_resolved_path(&mut resolved, target_path, &mut remaining_symlinks).is_break() {
+        return path::normalize_lexical_path(target_path);
+    }
     resolved
 }
 
 /// Resolves the most recently appended normal component in `resolved` via canonicalization or bounded symlink expansion.
-fn resolve_normal_component(resolved: &mut PathBuf, remaining_symlinks: &mut usize) {
-    if let Ok(canonical) = fs::canonicalize(&*resolved) {
-        *resolved = canonical;
-        return;
+fn resolve_normal_component(
+    resolved: &mut PathBuf,
+    remaining_symlinks: &mut usize,
+) -> ControlFlow<()> {
+    if resolved.as_os_str().len() > MAX_RESOLVED_PATH_BYTES {
+        return ControlFlow::Break(());
     }
-    if *remaining_symlinks == 0 {
-        return;
+    if let Ok(canonical) = fs::canonicalize(&*resolved) {
+        if canonical.as_os_str().len() > MAX_RESOLVED_PATH_BYTES {
+            return ControlFlow::Break(());
+        }
+        *resolved = canonical;
+        return ControlFlow::Continue(());
     }
     let Ok(link_target) = fs::read_link(&*resolved) else {
-        return;
+        return ControlFlow::Continue(());
     };
+    if *remaining_symlinks == 0 {
+        return ControlFlow::Break(());
+    }
     *remaining_symlinks -= 1;
     let _ = resolved.pop();
-    append_resolved_path(resolved, &link_target, remaining_symlinks);
+    append_resolved_path(resolved, &link_target, remaining_symlinks)
 }
 
 #[cfg(test)]
@@ -188,5 +207,25 @@ mod tests {
         unix_fs::symlink(&loop_b, &loop_a).unwrap();
         unix_fs::symlink(&loop_a, &loop_b).unwrap();
         assert!(get_absolute_path(&loop_a.join("cycle.pod")).ends_with("cycle.pod"));
+
+        let self_loop = temp_dir.join("self_x");
+        unix_fs::symlink("self_x/y", &self_loop).unwrap();
+        let resolved_self_loop = get_absolute_path(&self_loop);
+        assert!(
+            !resolved_self_loop.to_string_lossy().contains("/y/y"),
+            "self-loop must not repeat trailing components while unwinding, got {resolved_self_loop:?}"
+        );
+        assert!(resolved_self_loop.ends_with("self_x"));
+
+        let amp_link = temp_dir.join("amp_x");
+        let amp_target = format!("{}amp_x", "amp_x/".repeat(400));
+        unix_fs::symlink(&amp_target, &amp_link).unwrap();
+        let resolved_amp = get_absolute_path(&amp_link);
+        assert!(
+            resolved_amp.as_os_str().len() <= 4096,
+            "amplified symlink must stay bounded, got len {}",
+            resolved_amp.as_os_str().len()
+        );
+        assert!(resolved_amp.ends_with("amp_x"));
     }
 }

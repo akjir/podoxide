@@ -338,35 +338,35 @@ fn execute_with_simulates_named_and_indexed_commands() {
     let cases = [
         (
             "add_index",
-            "Execute command 'script.sh add-missing-indices' in container 'cmd_pod-db': \npodman exec -it -u 33 cmd_pod-db script.sh add-missing-indices\n",
+            "Execute command 'script.sh add-missing-indices' in container 'cmd_pod-db':\npodman exec -it -u 33 cmd_pod-db script.sh add-missing-indices\n",
         ),
         (
             "run_absolute",
-            "Execute command 'script.sh run-absolute' in container 'absolute_db': \npodman exec -it absolute_db script.sh run-absolute\n",
+            "Execute command 'script.sh run-absolute' in container 'absolute_db':\npodman exec -it absolute_db script.sh run-absolute\n",
         ),
         (
             "run_int_user",
-            "Execute command 'script.sh run-int-user' in container 'absolute_db': \npodman exec -it -u 1000 absolute_db script.sh run-int-user\n",
+            "Execute command 'script.sh run-int-user' in container 'absolute_db':\npodman exec -it -u 1000 absolute_db script.sh run-int-user\n",
         ),
         (
             "run_int_container",
-            "Execute command 'script.sh run-int-container' in container 'cmd_pod-1': \npodman exec -it cmd_pod-1 script.sh run-int-container\n",
+            "Execute command 'script.sh run-int-container' in container 'cmd_pod-1':\npodman exec -it cmd_pod-1 script.sh run-int-container\n",
         ),
         (
             "run_int_container_2",
-            "Execute command 'script.sh run-int-container-2' in container 'cmd_pod-db': \npodman exec -it cmd_pod-db script.sh run-int-container-2\n",
+            "Execute command 'script.sh run-int-container-2' in container 'cmd_pod-db':\npodman exec -it cmd_pod-db script.sh run-int-container-2\n",
         ),
         (
             "run_quoted",
-            "Execute command 'sh -c 'echo hello'' in container 'cmd_pod-db': \npodman exec -it cmd_pod-db sh -c 'echo hello'\n",
+            "Execute command 'sh -c 'echo hello'' in container 'cmd_pod-db':\npodman exec -it cmd_pod-db sh -c 'echo hello'\n",
         ),
         (
             "1",
-            "Execute command 'script.sh add-missing-indices' in container 'cmd_pod-db': \npodman exec -it -u 33 cmd_pod-db script.sh add-missing-indices\n",
+            "Execute command 'script.sh add-missing-indices' in container 'cmd_pod-db':\npodman exec -it -u 33 cmd_pod-db script.sh add-missing-indices\n",
         ),
         (
             "3",
-            "Execute command 'script.sh run-absolute' in container 'absolute_db': \npodman exec -it absolute_db script.sh run-absolute\n",
+            "Execute command 'script.sh run-absolute' in container 'absolute_db':\npodman exec -it absolute_db script.sh run-absolute\n",
         ),
     ];
 

@@ -17,7 +17,7 @@
 
 use std::env;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::str;
 
 use crate::core::log;
@@ -32,6 +32,25 @@ pub const MAX_CONFIRMATION_BYTES: usize = 64;
 const MAX_PROC_STATUS_BYTES: usize = 16 * 1024;
 const MAX_PROC_STATUS_LINE_BYTES: usize = 4096;
 const PROC_SELF_STATUS_PATH: &str = "/proc/self/status";
+
+/// Whether confirmation input originates from an interactive TTY that echoes the user's newline.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfirmationInput {
+    NonTty,
+    Tty,
+}
+
+impl ConfirmationInput {
+    /// Detects whether process standard input is connected to an interactive terminal.
+    #[must_use]
+    pub fn from_stdin() -> Self {
+        if io::stdin().is_terminal() {
+            Self::Tty
+        } else {
+            Self::NonTty
+        }
+    }
+}
 
 /// Evaluates whether the host operating system is Linux.
 #[must_use]
@@ -48,20 +67,49 @@ pub fn check_os() -> bool {
 pub fn confirm_elevated_execution<R, E>(
     reader: &mut R,
     stderr_writer: &mut E,
+    input_mode: ConfirmationInput,
 ) -> Result<(), PodError>
 where
     R: BufRead,
     E: Write,
 {
     log::write_warning(stderr_writer, ELEVATED_WARNING);
-    stderr_writer.write_all(ELEVATED_PROMPT.as_bytes())?;
+    confirm_prompt(ELEVATED_PROMPT, input_mode, reader, stderr_writer)
+}
+
+/// Writes `prompt` to `stderr_writer`, reads a bounded confirmation line from `reader`, terminates
+/// the prompt line on `stderr_writer` when not echoed by a TTY or on read/EOF failure, and requires exact `"yes"`.
+///
+/// # Errors
+///
+/// Returns [`PodError::Io`] if writing, flushing, or reading fails, or [`PodError::System`] with
+/// [`SystemError::AbortedExecution`] if the response is not `"yes"`.
+pub fn confirm_prompt<R, E>(
+    prompt: &str,
+    input_mode: ConfirmationInput,
+    reader: &mut R,
+    stderr_writer: &mut E,
+) -> Result<(), PodError>
+where
+    R: BufRead,
+    E: Write,
+{
+    stderr_writer.write_all(prompt.as_bytes())?;
     stderr_writer.flush()?;
-    let Some(input) = read_bounded_confirmation_line(reader)? else {
-        let _ = stderr_writer.write_all(b"\n");
-        let _ = stderr_writer.flush();
-        return Err(PodError::from(SystemError::AbortedExecution));
+    let input = match read_bounded_confirmation_line(reader) {
+        Ok(Some(line)) => line,
+        Ok(None) => {
+            let _ = stderr_writer.write_all(b"\n");
+            let _ = stderr_writer.flush();
+            return Err(PodError::from(SystemError::AbortedExecution));
+        }
+        Err(error) => {
+            let _ = stderr_writer.write_all(b"\n");
+            let _ = stderr_writer.flush();
+            return Err(PodError::from(error));
+        }
     };
-    if !input.ends_with('\n') {
+    if input_mode == ConfirmationInput::NonTty || !input.ends_with('\n') {
         let _ = stderr_writer.write_all(b"\n");
         let _ = stderr_writer.flush();
     }
@@ -160,9 +208,10 @@ mod tests {
     use crate::error::{PodError, SystemError};
     use crate::io::system::fs::TestTempDir;
     use super::{
-        MAX_CONFIRMATION_BYTES, MAX_PROC_STATUS_BYTES, MAX_PROC_STATUS_LINE_BYTES,
-        PROC_SELF_STATUS_PATH, check_os, confirm_elevated_execution, parse_effective_uid_is_root,
-        read_bounded_confirmation_line, read_proc_status_is_root, runs_elevated,
+        ConfirmationInput, MAX_CONFIRMATION_BYTES, MAX_PROC_STATUS_BYTES,
+        MAX_PROC_STATUS_LINE_BYTES, PROC_SELF_STATUS_PATH, check_os, confirm_elevated_execution,
+        parse_effective_uid_is_root, read_bounded_confirmation_line, read_proc_status_is_root,
+        runs_elevated,
     };
 
     struct FailingFlushWriter;
@@ -265,68 +314,117 @@ mod tests {
     fn confirm_elevated_execution_writes_to_stderr_and_handles_inputs_and_errors() {
         let mut yes_input = Cursor::new(b"yes\n".to_vec());
         let mut stderr = Vec::new();
-        assert!(confirm_elevated_execution(&mut yes_input, &mut stderr).is_ok());
+        assert!(
+            confirm_elevated_execution(&mut yes_input, &mut stderr, ConfirmationInput::NonTty)
+                .is_ok()
+        );
         let stderr_text = String::from_utf8(stderr).unwrap();
         assert!(
             stderr_text.contains("WARNING: Podoxide is running with elevated privileges (UID 0).")
         );
-        assert!(stderr_text.contains("Are you sure you want to continue? Type 'yes' to proceed: "));
+        assert!(
+            stderr_text.ends_with("Are you sure you want to continue? Type 'yes' to proceed: \n"),
+            "non-TTY confirmation must terminate prompt with newline, got {stderr_text:?}"
+        );
+
+        let mut tty_yes = Cursor::new(b"yes\n".to_vec());
+        let mut tty_err = Vec::new();
+        assert!(
+            confirm_elevated_execution(&mut tty_yes, &mut tty_err, ConfirmationInput::Tty).is_ok()
+        );
+        assert!(
+            String::from_utf8(tty_err)
+                .unwrap()
+                .ends_with("Type 'yes' to proceed: "),
+            "TTY confirmation with echoed newline must not append a duplicate newline"
+        );
 
         let mut crlf_yes = Cursor::new(b"yes\r\n".to_vec());
         let mut crlf_err = Vec::new();
-        assert!(confirm_elevated_execution(&mut crlf_yes, &mut crlf_err).is_ok());
+        assert!(
+            confirm_elevated_execution(&mut crlf_yes, &mut crlf_err, ConfirmationInput::Tty)
+                .is_ok()
+        );
 
         for rejected in [&b"no\n"[..], &b"y\n"[..], &b"YES\n"[..], &b"\n"[..]] {
             let mut reader = Cursor::new(rejected.to_vec());
             let mut err = Vec::new();
-            let result = confirm_elevated_execution(&mut reader, &mut err);
+            let result =
+                confirm_elevated_execution(&mut reader, &mut err, ConfirmationInput::NonTty);
             assert!(
                 matches!(result, Err(PodError::System(SystemError::AbortedExecution))),
                 "expected AbortedExecution for {rejected:?}, got {result:?}"
             );
+            assert!(
+                String::from_utf8(err)
+                    .unwrap()
+                    .ends_with("Type 'yes' to proceed: \n"),
+                "non-TTY rejection must terminate prompt line before ERROR:"
+            );
         }
 
-        let mut eof_reader = Cursor::new(Vec::<u8>::new());
-        let mut eof_err = Vec::new();
-        let eof_result = confirm_elevated_execution(&mut eof_reader, &mut eof_err);
-        assert!(matches!(
-            eof_result,
-            Err(PodError::System(SystemError::AbortedExecution))
-        ));
-        let eof_text = String::from_utf8(eof_err).unwrap();
-        assert!(
-            eof_text.ends_with("Type 'yes' to proceed: \n"),
-            "EOF must emit trailing newline to avoid colliding with ERROR:, got {eof_text:?}"
-        );
-
         let oversized = vec![b'a'; MAX_CONFIRMATION_BYTES + 1];
-        let mut oversized_reader = Cursor::new(oversized);
-        let mut oversized_err = Vec::new();
-        assert!(matches!(
-            confirm_elevated_execution(&mut oversized_reader, &mut oversized_err),
-            Err(PodError::System(SystemError::AbortedExecution))
-        ));
+        for (mut reader, mode, expected_newline) in [
+            (Cursor::new(Vec::<u8>::new()), ConfirmationInput::Tty, true),
+            (Cursor::new(oversized), ConfirmationInput::Tty, true),
+        ] {
+            let mut err = Vec::new();
+            assert!(matches!(
+                confirm_elevated_execution(&mut reader, &mut err, mode),
+                Err(PodError::System(SystemError::AbortedExecution))
+            ));
+            if expected_newline {
+                assert!(
+                    String::from_utf8(err)
+                        .unwrap()
+                        .ends_with("Type 'yes' to proceed: \n"),
+                    "EOF/oversized prompt must emit trailing newline before ERROR:"
+                );
+            }
+        }
 
-        let mut yes_for_write_err = Cursor::new(b"yes\n".to_vec());
-        let mut broken_write = FailingWriteWriter;
+        let mut yes_for_err = Cursor::new(b"yes\n".to_vec());
         assert!(matches!(
-            confirm_elevated_execution(&mut yes_for_write_err, &mut broken_write),
+            confirm_elevated_execution(&mut yes_for_err, &mut FailingWriteWriter, ConfirmationInput::Tty),
+            Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
+        ));
+        let mut yes_for_flush = Cursor::new(b"yes\n".to_vec());
+        assert!(matches!(
+            confirm_elevated_execution(&mut yes_for_flush, &mut FailingFlushWriter, ConfirmationInput::Tty),
             Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
         ));
 
-        let mut yes_for_flush_err = Cursor::new(b"yes\n".to_vec());
-        let mut broken_flush = FailingFlushWriter;
-        assert!(matches!(
-            confirm_elevated_execution(&mut yes_for_flush_err, &mut broken_flush),
-            Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
-        ));
-
-        let mut broken_reader = FailingReader;
         let mut read_err_out = Vec::new();
         assert!(matches!(
-            confirm_elevated_execution(&mut broken_reader, &mut read_err_out),
+            confirm_elevated_execution(
+                &mut FailingReader,
+                &mut read_err_out,
+                ConfirmationInput::Tty
+            ),
             Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::BrokenPipe
         ));
+        assert!(
+            String::from_utf8(read_err_out)
+                .unwrap()
+                .ends_with("Type 'yes' to proceed: \n"),
+            "read error must emit trailing newline before ERROR:"
+        );
+
+        let mut invalid_utf8_err = Vec::new();
+        assert!(matches!(
+            confirm_elevated_execution(
+                &mut Cursor::new(vec![0xFF, 0xFE]),
+                &mut invalid_utf8_err,
+                ConfirmationInput::Tty
+            ),
+            Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::InvalidData
+        ));
+        assert!(
+            String::from_utf8(invalid_utf8_err)
+                .unwrap()
+                .ends_with("Type 'yes' to proceed: \n"),
+            "invalid UTF-8 confirmation input must emit trailing newline before ERROR:"
+        );
 
         assert_eq!(
             read_bounded_confirmation_line(&mut Cursor::new(b"yes\n".to_vec())).unwrap(),
@@ -348,6 +446,7 @@ mod tests {
         let straddling_result = confirm_elevated_execution(
             &mut Cursor::new(straddling.into_bytes()),
             &mut straddling_err,
+            ConfirmationInput::Tty,
         );
         assert!(matches!(
             straddling_result,

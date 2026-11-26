@@ -89,7 +89,7 @@ fn spinner_non_tty_emits_clean_line_without_escapes_and_handles_stderr_policies(
     .unwrap();
     assert_eq!(
         String::from_utf8(sim_stdout).unwrap(),
-        "  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine): \n  podman pull docker.io/library/nginx:stable-alpine\n"
+        "  Pull 'proxy-nginx' (docker.io/library/nginx:stable-alpine):\n  podman pull docker.io/library/nginx:stable-alpine\n"
     );
     assert!(sim_stderr.is_empty());
 
@@ -189,11 +189,21 @@ fn spinner_tty_animates_clears_eol_omits_cursor_escapes_and_enforces_bounds() {
     )
     .unwrap();
     let tty_text = String::from_utf8(tty_stdout).unwrap();
-    assert!(tty_text.starts_with(&format!("\r  Pull 'proxy-nginx'... {}", SPINNER_FRAMES[0])));
-    assert!(tty_text.contains(&format!("\r  Pull 'proxy-nginx'... {}", SPINNER_FRAMES[1])));
-    assert!(tty_text.ends_with(&format!(
-        "\r  Pull 'proxy-nginx'... Updated.{SPINNER_CLEAR_EOL}\n"
-    )));
+    assert!(
+        tty_text.starts_with(&format!(
+            "  Pull 'proxy-nginx'... \x1b7\x1b8{}",
+            SPINNER_FRAMES[0]
+        )),
+        "TTY spinner must emit prefix once with DECSC/DECRC, got {tty_text:?}"
+    );
+    assert!(tty_text.contains(&format!("\x1b8{}", SPINNER_FRAMES[1])));
+    assert_eq!(
+        tty_text.matches("  Pull 'proxy-nginx'... ").count(),
+        1,
+        "TTY spinner must never reprint prefix per frame (prevents wrapped-line flooding)"
+    );
+    assert!(tty_text.ends_with(&format!("\x1b8Updated.{SPINNER_CLEAR_EOL}\n")));
+    assert!(!tty_text.contains('\r'));
     assert!(!tty_text.contains("\x1b[?25l"));
     assert!(!tty_text.contains("\x1b[?25h"));
     assert!(tty_stderr.is_empty());
@@ -216,18 +226,20 @@ fn spinner_tty_animates_clears_eol_omits_cursor_escapes_and_enforces_bounds() {
     )
     .unwrap();
     let oversized_text = String::from_utf8(oversized_stdout).unwrap();
-    let final_line = oversized_text
+    let (rendered_prefix, after_save) = oversized_text.split_once("\x1b7").unwrap();
+    let final_summary = after_save
         .trim_end_matches('\n')
-        .rsplit('\r')
+        .rsplit("\x1b8")
         .next()
         .unwrap()
         .strip_suffix(SPINNER_CLEAR_EOL)
         .unwrap();
+    assert_eq!(rendered_prefix.len(), SPINNER_MAX_PREFIX_BYTES);
+    assert_eq!(final_summary.len(), SPINNER_MAX_SUMMARY_BYTES);
     assert_eq!(
-        final_line.len(),
-        SPINNER_MAX_PREFIX_BYTES + SPINNER_MAX_SUMMARY_BYTES
+        rendered_prefix.len() + final_summary.len(),
+        log::MAX_LOG_MESSAGE_BYTES
     );
-    assert_eq!(final_line.len(), log::MAX_LOG_MESSAGE_BYTES);
 
     let missing_err = exec_spinner_with(
         "/nonexistent/podoxide_missing_bin",

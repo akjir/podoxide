@@ -169,10 +169,10 @@ fn pod_composite_lifecycles_up_down_restart_reload_pull_update() {
     );
     let up_down_lines: Vec<&str> = std::str::from_utf8(&up_down_out).unwrap().lines().collect();
     assert_eq!(up_down_lines.len(), 30);
-    assert_eq!(up_down_lines[0], "Create pod 'Order Stack' ('order'): ");
-    assert_eq!(up_down_lines[8], "Start container 'order-1': ");
-    assert_eq!(up_down_lines[14], "Stop container 'three': ");
-    assert_eq!(up_down_lines[28], "Remove pod 'Order Stack' ('order'): ");
+    assert_eq!(up_down_lines[0], "Create pod 'Order Stack' ('order'):");
+    assert_eq!(up_down_lines[8], "Start container 'order-1':");
+    assert_eq!(up_down_lines[14], "Stop container 'three':");
+    assert_eq!(up_down_lines[28], "Remove pod 'Order Stack' ('order'):");
 
     let mut restart_out = Vec::new();
     restart_with(&recipe, true, &mut restart_out, &mut stderr).unwrap();
@@ -180,19 +180,19 @@ fn pod_composite_lifecycles_up_down_restart_reload_pull_update() {
     assert_eq!(
         restart_lines,
         vec![
-            "Stop container 'three': ",
+            "Stop container 'three':",
             "podman stop three",
-            "Stop container 'order-two': ",
+            "Stop container 'order-two':",
             "podman stop order-two",
-            "Stop container 'order-1': ",
+            "Stop container 'order-1':",
             "podman stop order-1",
-            "Stop pod 'Order Stack' ('order'): ",
+            "Stop pod 'Order Stack' ('order'):",
             "podman pod stop order",
-            "Start container 'order-1': ",
+            "Start container 'order-1':",
             "podman start order-1",
-            "Start container 'order-two': ",
+            "Start container 'order-two':",
             "podman start order-two",
-            "Start container 'three': ",
+            "Start container 'three':",
             "podman start three",
         ]
     );
@@ -316,10 +316,10 @@ fn pod_create_start_stop_remove_ordering() {
     let output = String::from_utf8(stdout).unwrap();
     let lines: Vec<&str> = output.lines().collect();
     assert_eq!(lines.len(), 30);
-    assert_eq!(lines[0], "Create pod 'Order Stack' ('order'): ");
-    assert_eq!(lines[12], "Start container 'three': ");
-    assert_eq!(lines[14], "Stop container 'three': ");
-    assert_eq!(lines[28], "Remove pod 'Order Stack' ('order'): ");
+    assert_eq!(lines[0], "Create pod 'Order Stack' ('order'):");
+    assert_eq!(lines[12], "Start container 'three':");
+    assert_eq!(lines[14], "Stop container 'three':");
+    assert_eq!(lines[28], "Remove pod 'Order Stack' ('order'):");
     assert!(stderr.is_empty());
 }
 

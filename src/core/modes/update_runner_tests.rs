@@ -115,7 +115,7 @@ fn mock_mixed_pull<W: Write, E: Write>(
     };
     log::write_print(stdout, &format!("{prefix}{suffix}"));
     if outcome == PullOutcome::Failed {
-        log::write_warning(stderr, "Command exited with code '1'!");
+        log::write_warning(stderr, "Command exited with code '1'.");
     }
     Ok(outcome)
 }
@@ -214,14 +214,14 @@ fn execute_update_with_renders_grouped_summary_for_pods_and_containers() {
     assert!(output.contains(
         "  Trying to pull docker.io/example/example-app:latest (example-stack-app): Updated.\n"
     ));
-    assert!(output.contains("  Stop container 'example-stack-app': \n"));
-    assert!(output.contains("  Start container 'example-stack-app': \n"));
+    assert!(output.contains("  Stop container 'example-stack-app':\n"));
+    assert!(output.contains("  Start container 'example-stack-app':\n"));
     assert!(output.contains("\nUpdate pod 'Redis Cache' ('cache') ...\n"));
     assert!(output.contains("  Pod 'Redis Cache' ('cache') is up to date.\n"));
     assert!(output.contains("\nUpdate pod 'Reverse Proxy' ('proxy') ...\n"));
     assert!(output.contains("  Pod 'Reverse Proxy' ('proxy') update failed.\n"));
     assert!(!output.contains("Pod 'Reverse Proxy' ('proxy') is up to date."));
-    assert!(err_output.contains("WARNING: Command exited with code '1'!"));
+    assert!(err_output.contains("WARNING: Command exited with code '1'."));
     assert!(output.ends_with(concat!(
         "\n",
         "Update Summary:\n",
@@ -255,7 +255,7 @@ fn execute_update_with_renders_grouped_summary_for_pods_and_containers() {
     assert_eq!(cnt_outcome, ExecOutcome::Failed);
     let cnt_output = String::from_utf8(cnt_stdout).unwrap();
     assert!(cnt_output.contains("Container 'example-stack-db' is up to date.\n\n"));
-    assert!(cnt_output.contains("Stop container 'example-stack-app': \n"));
+    assert!(cnt_output.contains("Stop container 'example-stack-app':\n"));
     assert!(cnt_output.contains("Container 'proxy-nginx' update failed.\n"));
     assert!(cnt_output.ends_with(concat!(
         "\n",
@@ -451,8 +451,8 @@ container *db {
     assert_eq!(stale_pull_calls, 1);
     let stale_text = String::from_utf8(stale_stdout).unwrap();
     assert!(stale_text.contains("Pod 'Pod One' ('one') is up to date."));
-    assert!(stale_text.contains("Stop container 'two-db': "));
-    assert!(stale_text.contains("Start container 'two-db': "));
+    assert!(stale_text.contains("Stop container 'two-db':\n"));
+    assert!(stale_text.contains("Start container 'two-db':\n"));
     assert!(
         stale_text.contains("Checked 2 pods (2 containers): 1 reloaded, 1 up to date, 0 failed.")
     );

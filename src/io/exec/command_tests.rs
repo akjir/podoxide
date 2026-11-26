@@ -137,7 +137,7 @@ fn exec_editor_with_validates_normalizes_and_runs() {
     assert!(
         String::from_utf8(fail_stderr)
             .unwrap()
-            .contains("WARNING: Command exited with code '1'!")
+            .contains("WARNING: Command exited with code '1'.")
     );
 
     for invalid_editor in [
@@ -233,9 +233,31 @@ fn exec_with_routes_streams_bounds_capture_and_handles_sigint_policy() {
     assert_eq!(sim_outcome, ExecOutcome::Succeeded);
     assert_eq!(
         String::from_utf8(sim_stdout).unwrap(),
-        "Create container 'app': \npodman create --name app\n"
+        "Create container 'app':\npodman create --name app\n"
     );
     assert!(sim_stderr.is_empty());
+
+    let mut indented_sim_stdout = Vec::new();
+    let mut indented_sim_stderr = Vec::new();
+    let indented_sim_outcome = exec_with(
+        "podman",
+        &["start", "app"],
+        &ExecOptions {
+            interrupt_policy: InterruptPolicy::WarnOnInterrupt,
+            mode: ExecMode::Captured,
+            prefix: "  Start container 'app': ",
+            simulate: true,
+        },
+        &mut indented_sim_stdout,
+        &mut indented_sim_stderr,
+    )
+    .unwrap();
+    assert_eq!(indented_sim_outcome, ExecOutcome::Succeeded);
+    assert_eq!(
+        String::from_utf8(indented_sim_stdout).unwrap(),
+        "  Start container 'app':\n  podman start app\n"
+    );
+    assert!(indented_sim_stderr.is_empty());
 
     let mut cap_stdout = Vec::new();
     let mut cap_stderr = Vec::new();
@@ -308,6 +330,7 @@ fn exec_with_routes_streams_bounds_capture_and_handles_sigint_policy() {
         &["0123456789abcdef_overflow"],
         "",
         16,
+        InterruptPolicy::WarnOnInterrupt,
         &mut bounded_stdout,
         &mut bounded_stderr,
     )
@@ -376,7 +399,7 @@ fn exec_with_routes_streams_bounds_capture_and_handles_sigint_policy() {
     );
     assert_eq!(
         String::from_utf8(interactive_fail_stderr).unwrap(),
-        "WARNING: Command exited with code '1'!\n"
+        "WARNING: Command exited with code '1'.\n"
     );
 
     let mut sigint_quiet_stderr = Vec::new();
@@ -387,6 +410,28 @@ fn exec_with_routes_streams_bounds_capture_and_handles_sigint_policy() {
     );
     assert!(sigint_quiet_stderr.is_empty());
 
+    let mut sigint_code_130_quiet_stderr = Vec::new();
+    warn_on_exit_failure(
+        ExitStatus::from_raw(130 << 8),
+        InterruptPolicy::QuietOnSigint,
+        &mut sigint_code_130_quiet_stderr,
+    );
+    assert!(
+        sigint_code_130_quiet_stderr.is_empty(),
+        "QuietOnSigint must suppress POSIX 128+SIGINT exit code 130"
+    );
+
+    let mut sigint_code_130_warn_stderr = Vec::new();
+    warn_on_exit_failure(
+        ExitStatus::from_raw(130 << 8),
+        InterruptPolicy::WarnOnInterrupt,
+        &mut sigint_code_130_warn_stderr,
+    );
+    assert_eq!(
+        String::from_utf8(sigint_code_130_warn_stderr).unwrap(),
+        "WARNING: Command exited with code '130'.\n"
+    );
+
     let mut sigint_warn_stderr = Vec::new();
     warn_on_exit_failure(
         ExitStatus::from_raw(2),
@@ -395,7 +440,7 @@ fn exec_with_routes_streams_bounds_capture_and_handles_sigint_policy() {
     );
     assert_eq!(
         String::from_utf8(sigint_warn_stderr).unwrap(),
-        "WARNING: Command terminated by signal!\n"
+        "WARNING: Command terminated by signal.\n"
     );
 
     let mut sigkill_quiet_stderr = Vec::new();
@@ -406,7 +451,7 @@ fn exec_with_routes_streams_bounds_capture_and_handles_sigint_policy() {
     );
     assert_eq!(
         String::from_utf8(sigkill_quiet_stderr).unwrap(),
-        "WARNING: Command terminated by signal!\n"
+        "WARNING: Command terminated by signal.\n"
     );
 
     for mode in [ExecMode::Captured, ExecMode::Interactive] {

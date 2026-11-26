@@ -252,7 +252,7 @@ fn live_image_prune_handles_preview_abort_confirm_and_podman_failure() {
     assert!(
         failed_prune
             .stderr
-            .contains("WARNING: Command exited with code '125'!")
+            .contains("WARNING: Command exited with code '125'.")
     );
     assert!(
         !failed_prune.stderr.contains("ERROR:"),
@@ -280,7 +280,7 @@ fn live_podman_nonzero_exit_propagates_failure_without_duplicate_error_line() {
     assert!(
         failed_start
             .stderr
-            .contains("WARNING: Command exited with code '125'!")
+            .contains("WARNING: Command exited with code '125'.")
     );
     assert!(
         !failed_start.stderr.contains("ERROR:"),
@@ -300,7 +300,7 @@ fn live_podman_nonzero_exit_propagates_failure_without_duplicate_error_line() {
     assert!(
         failed_up
             .stderr
-            .contains("WARNING: Command exited with code '125'!")
+            .contains("WARNING: Command exited with code '125'.")
     );
     assert!(
         !failed_up.stderr.contains("ERROR:"),

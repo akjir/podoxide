@@ -268,40 +268,40 @@ fn execute_with_simulates_single_multi_direct_and_unreferenced_pod_targets() {
     let cases = [
         (
             "recipe_001_valid",
-            "Execute connect command: \npodman exec -it si_po-1 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
+            "Execute connect command:\npodman exec -it si_po-1 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
         (
             "recipe_006_commands/1",
-            "Execute connect command: \npodman exec -it cmd_pod-1 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
+            "Execute connect command:\npodman exec -it cmd_pod-1 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
         (
             "recipe_006_commands/2",
-            "Execute connect command: \npodman exec -it cmd_pod-db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
+            "Execute connect command:\npodman exec -it cmd_pod-db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
         (
             "recipe_006_commands/*db",
-            "Execute connect command: \npodman exec -it cmd_pod-db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
+            "Execute connect command:\npodman exec -it cmd_pod-db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
         (
             "recipe_006_commands/db",
-            "Execute connect command: \npodman exec -it cmd_pod-db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
+            "Execute connect command:\npodman exec -it cmd_pod-db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
         (
             "recipe_006_commands/absolute_db",
-            "Execute connect command: \npodman exec -it absolute_db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
+            "Execute connect command:\npodman exec -it absolute_db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
         (
             "my_custom_container",
-            "Execute connect command: \npodman exec -it my_custom_container sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
+            "Execute connect command:\npodman exec -it my_custom_container sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
         (
             "MyApp_1",
-            "Execute connect command: \npodman exec -it MyApp_1 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
+            "Execute connect command:\npodman exec -it MyApp_1 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
         // Unreferenced `unmanaged_app.pod` on disk must NOT hijack direct container name resolution.
         (
             "unmanaged_app",
-            "Execute connect command: \npodman exec -it unmanaged_app sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
+            "Execute connect command:\npodman exec -it unmanaged_app sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
     ];
 

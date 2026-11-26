@@ -31,7 +31,7 @@ use podoxide::core::modes;
 use podoxide::error::{PodError, SystemError};
 use podoxide::io::exec::command::ExecOutcome;
 use podoxide::io::exec::podman;
-use podoxide::io::system::env as system_env;
+use podoxide::io::system::env::{self as system_env, ConfirmationInput};
 
 /// Runs the CLI pipeline for `arguments`, logs any error to standard error, and returns the process exit code.
 fn execute<I, T>(arguments: I) -> ExitCode
@@ -105,6 +105,7 @@ fn verify_environment_for(context: &Context) -> Result<(), PodError> {
         system_env::check_os(),
         podman_supported,
         elevated,
+        ConfirmationInput::from_stdin(),
         &mut stdin,
         &mut stderr,
     )
@@ -116,6 +117,7 @@ fn verify_environment_with<R, E>(
     os_supported: bool,
     podman_supported: bool,
     elevated: bool,
+    input_mode: ConfirmationInput,
     reader: &mut R,
     stderr_writer: &mut E,
 ) -> Result<(), PodError>
@@ -130,7 +132,7 @@ where
         return Err(PodError::from(SystemError::UnsupportedPodmanVersion));
     }
     if context.requires_elevation_confirmation() && elevated {
-        system_env::confirm_elevated_execution(reader, stderr_writer)?;
+        system_env::confirm_elevated_execution(reader, stderr_writer, input_mode)?;
     }
     Ok(())
 }
@@ -147,6 +149,7 @@ mod tests {
     use podoxide::core::log;
     use podoxide::error::{CliErrorKind, PodError, SystemError};
     use podoxide::io::exec::command::ExecOutcome;
+    use podoxide::io::system::env::ConfirmationInput;
     use super::{execute, finish_execution, run, run_with, verify_environment_with};
 
     struct DebugGuard {
@@ -198,6 +201,7 @@ mod tests {
             os_supported,
             podman_supported,
             elevated,
+            ConfirmationInput::NonTty,
             &mut reader,
             &mut stderr,
         );

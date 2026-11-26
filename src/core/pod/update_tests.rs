@@ -131,13 +131,13 @@ container *b {
         .find(notice)
         .expect("expected indented stale-container notice before pod reload");
     let stop_pos = stale_text
-        .find("  Stop container 'shared-b': ")
+        .find("  Stop container 'shared-b':\n")
         .expect("expected indented Stop container output");
     assert!(
         notice_pos < stop_pos,
         "stale notice must appear before pod reload output:\n{stale_text}"
     );
-    assert!(stale_text.contains("  Start container 'shared-b': "));
+    assert!(stale_text.contains("  Start container 'shared-b':\n"));
 
     let mut current_cache = PullCache::new();
     let mut current_out = Vec::new();

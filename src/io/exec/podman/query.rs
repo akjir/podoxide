@@ -36,7 +36,7 @@ const MIN_PODMAN_MAJOR: u32 = 5;
 /// Minimum supported Podman minor version when major equals [`MIN_PODMAN_MAJOR`].
 const MIN_PODMAN_MINOR: u32 = 8;
 /// Format template passed to `podman ps -a --format`.
-const PS_FORMAT: &str = r#"{{.ID}}{{"\x1f"}}{{.Image}}{{"\x1f"}}{{.Command}}{{"\x1f"}}{{.CreatedAt}}{{"\x1f"}}{{.Status}}{{"\x1f"}}{{.Ports}}{{"\x1f"}}{{.Names}}{{"\x1f"}}{{.PodName}}{{"\x1f"}}{{.Restarts}}{{"\x1e"}}"#;
+const PS_FORMAT: &str = r#"{{.ID}}{{"\x1f"}}{{.Image}}{{"\x1f"}}{{json .Command}}{{"\x1f"}}{{.CreatedAt}}{{"\x1f"}}{{.Status}}{{"\x1f"}}{{.Ports}}{{"\x1f"}}{{.Names}}{{"\x1f"}}{{.PodName}}{{"\x1f"}}{{.Restarts}}{{"\x1e"}}"#;
 /// ASCII Record Separator (`0x1E`) terminating records in Podman `--format` query output.
 pub const RECORD_DELIMITER: char = '\x1e';
 
@@ -106,7 +106,7 @@ where
     F: FnMut(&[&str]) -> Option<String>,
 {
     let ps_output = capture(&["ps", "-a", "--no-trunc", "--format", "{{.ImageID}}"])
-        .ok_or_else(|| PodError::from(io::Error::other("Failed to query in-use podman images.")))?;
+        .ok_or_else(|| PodError::from(io::Error::other("failed to query in-use Podman images")))?;
     parse_in_use_output(&ps_output)
 }
 

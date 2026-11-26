@@ -77,7 +77,7 @@ fn execute_with_confirm_prompt_writes_stderr_and_aborts_on_decline_or_eof() {
     .unwrap();
     assert_eq!(
         String::from_utf8(stdout).unwrap(),
-        "Prune images: \npodman image prune -f\n"
+        "Prune images:\npodman image prune -f\n"
     );
     assert!(stderr.is_empty());
 
@@ -98,7 +98,7 @@ fn execute_with_confirm_prompt_writes_stderr_and_aborts_on_decline_or_eof() {
     .unwrap();
     assert_eq!(
         String::from_utf8(all_stdout).unwrap(),
-        "Prune images: \npodman image prune -f -a\n"
+        "Prune images:\npodman image prune -f -a\n"
     );
 
     assert!(handle(&sim_context).is_ok());

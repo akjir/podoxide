@@ -182,7 +182,7 @@ fn live_editor_nonzero_exit_propagates_failure_for_config_and_recipe_edit() {
         assert!(
             output
                 .stderr
-                .contains("WARNING: Command exited with code '1'!"),
+                .contains("WARNING: Command exited with code '1'."),
             "expected exit-code warning for {arguments:?}, got: {:?}",
             output.stderr
         );

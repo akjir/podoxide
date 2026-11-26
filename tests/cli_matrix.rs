@@ -75,7 +75,7 @@ fn assert_debug_custom_config_outputs(workspace: &TestWorkspace) {
     );
     assert_eq!(
         simulated_prune.stdout,
-        "Prune images: \npodman image prune -f\n"
+        "Prune images:\npodman image prune -f\n"
     );
 }
 
@@ -335,11 +335,11 @@ fn simulate_false_and_flag_override_matrix_runs_deterministically() {
     let flag_override_cases: &[(&[&str], &str)] = &[
         (
             &["--simulate", "image", "prune"],
-            "Prune images: \npodman image prune -f\n",
+            "Prune images:\npodman image prune -f\n",
         ),
         (
             &["--simulate", "image", "prune", "--all"],
-            "Prune images: \npodman image prune -f -a\n",
+            "Prune images:\npodman image prune -f -a\n",
         ),
         (&["--simulate", "cfg", "inspect"], "  Simulate:     true\n"),
         (&["--simulate", "cfg", "edit"], "true ./pods.conf\n"),
@@ -361,7 +361,7 @@ fn simulate_false_and_flag_override_matrix_runs_deterministically() {
         ),
         (
             &["--simulate", "log", "show", "recipe"],
-            "Execute log command: \npodman pod logs -n --color example-stack\n",
+            "Execute log command:\npodman pod logs -n --color example-stack\n",
         ),
         (
             &["--simulate", "img", "update", "recipe"],
@@ -419,7 +419,7 @@ fn simulate_true_matrix_verifies_init_and_all_modes() {
         ),
         (
             &["create", "recipe/db"],
-            "podman pod create --name example-stack --publish 8080:80/TCP --userns=keep-id\nCreate container 'example-stack-db': \npodman create --name example-stack-db --pod example-stack",
+            "podman pod create --name example-stack --publish 8080:80/TCP --userns=keep-id\nCreate container 'example-stack-db':\npodman create --name example-stack-db --pod example-stack",
         ),
         (&["remove", "recipe"], "podman rm example-stack-db\n"),
         (&["start", "recipe"], "podman start example-stack-db\n"),
@@ -455,10 +455,10 @@ fn simulate_true_matrix_verifies_init_and_all_modes() {
             &["con", "recipe/db"],
             "podman exec -it example-stack-db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
         ),
-        (&["img", "prune"], "Prune images: \npodman image prune -f\n"),
+        (&["img", "prune"], "Prune images:\npodman image prune -f\n"),
         (
             &["img", "prune", "--all"],
-            "Prune images: \npodman image prune -f -a\n",
+            "Prune images:\npodman image prune -f -a\n",
         ),
         (
             &["img", "update", "recipe"],
@@ -470,11 +470,11 @@ fn simulate_true_matrix_verifies_init_and_all_modes() {
         ),
         (
             &["log", "show", "recipe"],
-            "Execute log command: \npodman pod logs -n --color example-stack\n",
+            "Execute log command:\npodman pod logs -n --color example-stack\n",
         ),
         (
             &["log", "follow", "recipe/db"],
-            "Execute log command: \npodman pod logs -n --color -f -c example-stack-db example-stack\n",
+            "Execute log command:\npodman pod logs -n --color -f -c example-stack-db example-stack\n",
         ),
         (&["status"], "example-stack-app"),
         (&["rec", "list"], "Recipes:\n"),

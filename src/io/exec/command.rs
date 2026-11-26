@@ -26,6 +26,8 @@ use crate::core::log;
 use crate::error::PodError;
 use crate::utilities::{format, path, string};
 
+/// POSIX exit code emitted by processes that handle `SIGINT` and exit via `128 + SIGINT`.
+const EXIT_CODE_SIGINT: i32 = 128 + SIGINT;
 /// Initial allocation size for bounded process stream capture buffers.
 const INITIAL_CAPTURE_CAPACITY: usize = 4096;
 /// Maximum bytes captured from a single child process stream (`4 MiB`).
@@ -177,11 +179,7 @@ where
     E: Write,
 {
     if options.simulate {
-        let formatted = format::format_command(program, arguments);
-        if !options.prefix.is_empty() {
-            log::write_print(stdout, options.prefix);
-        }
-        log::write_print(stdout, &formatted);
+        write_simulated_command(program, arguments, options.prefix, stdout);
         return Ok(ExecOutcome::Succeeded);
     }
     if log::is_debug_enabled() {
@@ -194,6 +192,7 @@ where
             arguments,
             options.prefix,
             MAX_CAPTURED_OUTPUT_BYTES,
+            options.interrupt_policy,
             stdout,
             stderr,
         ),
@@ -232,17 +231,19 @@ pub(super) fn warn_on_exit_failure<E: Write>(
     if status.success() {
         return;
     }
+    if interrupt_policy == InterruptPolicy::QuietOnSigint
+        && (status.signal() == Some(SIGINT) || status.code() == Some(EXIT_CODE_SIGINT))
+    {
+        return;
+    }
     if let Some(code) = status.code() {
-        log::write_warning(stderr, &format!("Command exited with code '{code}'!"));
+        log::write_warning(stderr, &format!("Command exited with code '{code}'."));
         return;
     }
-    if interrupt_policy == InterruptPolicy::QuietOnSigint && status.signal() == Some(SIGINT) {
-        return;
-    }
-    log::write_warning(stderr, "Command terminated by signal!");
+    log::write_warning(stderr, "Command terminated by signal.");
 }
 
-/// Writes `prefix` (when non-empty) and the shell-escaped simulated command line, preserving leading space indentation from `prefix`.
+/// Writes `prefix` (when non-empty, without trailing spaces) and the shell-escaped simulated command line, preserving leading space indentation from `prefix`.
 pub(super) fn write_simulated_command<S: AsRef<str>, W: Write>(
     program: &str,
     arguments: &[S],
@@ -250,8 +251,9 @@ pub(super) fn write_simulated_command<S: AsRef<str>, W: Write>(
     stdout: &mut W,
 ) {
     let formatted = format::format_command(program, arguments);
-    if !prefix.is_empty() {
-        log::write_print(stdout, prefix);
+    let trimmed_prefix = prefix.trim_end_matches(' ');
+    if !trimmed_prefix.is_empty() {
+        log::write_print(stdout, trimmed_prefix);
     }
     let indent_len = prefix
         .len()
@@ -368,6 +370,7 @@ fn run_captured<S, W, E>(
     arguments: &[S],
     prefix: &str,
     max_bytes: usize,
+    interrupt_policy: InterruptPolicy,
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<ExecOutcome, PodError>
@@ -391,7 +394,7 @@ where
     if !output_captured {
         log::write_print(stdout, &format!("{clamped_prefix}..."));
     }
-    warn_on_exit_failure(captured.status, InterruptPolicy::WarnOnInterrupt, stderr);
+    warn_on_exit_failure(captured.status, interrupt_policy, stderr);
     Ok(ExecOutcome::from_status(captured.status))
 }
 
