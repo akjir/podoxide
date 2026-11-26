@@ -23,10 +23,11 @@ pub mod show;
 
 use std::path::{Path, PathBuf};
 
-use crate::core::context::{Context, ModeAction, RecipeAction};
+use crate::core::context::{Context, RecipeAction};
 use crate::core::log;
 use crate::core::recipe::RECIPE_EXTENSION;
 use crate::error::{CliError, CliErrorKind, ConfigError, ConfigErrorKind, PodError};
+use crate::io::exec::command::ExecOutcome;
 use crate::utilities::path::{build_full_path, is_valid_directory, sanitize_path_token};
 use crate::utilities::string::is_valid_target_segment;
 
@@ -36,27 +37,23 @@ use crate::utilities::string::is_valid_target_segment;
 /// # Workflow
 ///
 /// 1. Log that `recipe` mode is active when debug logging is enabled.
-/// 2. Route [`ModeAction::Recipe`] in enum declaration order (`Edit`, `Help`, `Inspect`, `List`,
+/// 2. Route [`RecipeAction`] in enum declaration order (`Edit`, `Help`, `Inspect`, `List`,
 ///    `Show`) to the corresponding action module ([`edit::handle`], [`help::handle`],
 ///    [`inspect::handle`], [`list::handle`], [`show::handle`]).
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if `context.action` does not belong to `recipe` mode or if the
-/// selected action handler fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+/// Returns [`PodError`] if the selected action handler fails.
+pub fn handle(context: &Context, action: RecipeAction) -> Result<ExecOutcome, PodError> {
     log::debug("Recipe mode is used.");
-    match context.action() {
-        ModeAction::Recipe(RecipeAction::Edit) => edit::handle(context),
-        ModeAction::Recipe(RecipeAction::Help) => help::handle(context),
-        ModeAction::Recipe(RecipeAction::Inspect) => inspect::handle(context),
-        ModeAction::Recipe(RecipeAction::List) => list::handle(context),
-        ModeAction::Recipe(RecipeAction::Show) => show::handle(context),
-        _ => Err(PodError::from(CliError::with_argument(
-            CliErrorKind::UnknownAction,
-            context.action().to_string(),
-        ))),
+    match action {
+        RecipeAction::Edit => edit::handle(context)?,
+        RecipeAction::Help => help::handle(context)?,
+        RecipeAction::Inspect => inspect::handle(context)?,
+        RecipeAction::List => list::handle(context)?,
+        RecipeAction::Show => show::handle(context)?,
     }
+    Ok(ExecOutcome::Succeeded)
 }
 
 /// Validates `recipes_dir` and constructs the `<recipes.path>/<recipe_name>.pod` path.
@@ -117,8 +114,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
-    use crate::core::context::{Context, DefaultAction, Mode, ModeAction, RecipeAction};
+    use crate::core::context::{Context, RecipeAction};
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
+    use crate::io::exec::command::ExecOutcome;
     use super::{build_recipe_path, extract_registered_recipe, handle};
 
     #[test]
@@ -188,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_routes_recipe_actions_and_rejects_mismatched_action() {
+    fn handle_routes_recipe_actions() {
         let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
 
         for action in [
@@ -200,24 +198,17 @@ mod tests {
         ] {
             let mut context = Context::new();
             context.config = root_config.clone();
-            context.mode = Mode::Recipe;
-            context.action = ModeAction::Recipe(action);
             if matches!(
                 action,
                 RecipeAction::Edit | RecipeAction::Inspect | RecipeAction::Show
             ) {
                 context.parameters = vec![String::from("recipe")];
             }
-            assert!(handle(&context).is_ok());
-        }
-
-        let mut invalid_context = Context::new();
-        invalid_context.mode = Mode::Recipe;
-        invalid_context.action = ModeAction::Default(DefaultAction::Help);
-        let error = handle(&invalid_context).unwrap_err();
-        match error {
-            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::UnknownAction),
-            other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
+            assert_eq!(
+                handle(&context, action).unwrap(),
+                ExecOutcome::Succeeded,
+                "expected recipe::{action} to succeed"
+            );
         }
     }
 }

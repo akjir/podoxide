@@ -22,6 +22,7 @@ use std::io::{self, BufRead, Write};
 use crate::core::context::Context;
 use crate::core::log;
 use crate::error::PodError;
+use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::{self, FIELD_DELIMITER, RECORD_DELIMITER};
 use crate::io::system::env;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
@@ -75,7 +76,7 @@ struct PruneScan {
 ///
 /// Returns [`PodError`] if querying or pruning images via `podman` fails or interactive I/O
 /// fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
@@ -121,7 +122,7 @@ fn execute_with<R, W, E, F, G>(
     reader: &mut R,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError>
+) -> Result<ExecOutcome, PodError>
 where
     R: BufRead,
     W: Write,
@@ -129,29 +130,27 @@ where
     F: FnMut() -> Result<BTreeSet<String>, PodError>,
     G: FnMut(bool) -> Option<String>,
 {
-    let is_all = context.flags.all;
-    let is_preview = context.flags.preview;
+    let is_all = context.flags.all();
+    let is_preview = context.flags.preview();
     if !is_preview && context.config.simulate {
-        let _ = podman::prune_images(is_all, PRUNE_PREFIX, true, stdout, stderr)?;
-        return Ok(());
+        return podman::prune_images(is_all, PRUNE_PREFIX, true, stdout, stderr);
     }
     let scan = scan_prunable_images(is_all, is_preview, query_in_use, query_images)?;
     if scan.image_count == 0 {
         log::write_print(stdout, "No images found to prune.");
-        return Ok(());
+        return Ok(ExecOutcome::Succeeded);
     }
     if is_preview {
         write_preview_results(&scan.preview_lines, scan.total_bytes, stdout);
-        return Ok(());
+        return Ok(ExecOutcome::Succeeded);
     }
-    if !context.flags.force
+    if !context.flags.force()
         && !confirm_prune(is_all, scan.image_count, scan.total_bytes, reader, stdout)?
     {
         log::write_print(stdout, "Aborted.");
-        return Ok(());
+        return Ok(ExecOutcome::Succeeded);
     }
-    let _ = podman::prune_images(is_all, PRUNE_PREFIX, false, stdout, stderr)?;
-    Ok(())
+    podman::prune_images(is_all, PRUNE_PREFIX, false, stdout, stderr)
 }
 
 /// Resolves the human-readable image label (`<id>`, `<repo>:<tag>`, or `<repo>`) for `record`.
@@ -304,7 +303,7 @@ mod tests {
     fn execute_with_confirm_prompt_and_simulate_prune_variants() {
         let mut sim_context = Context::new();
         sim_context.config.simulate = true;
-        sim_context.flags.force = false;
+        sim_context.flags.set_force(false);
 
         let mut reader = Cursor::new(Vec::<u8>::new());
         let mut stdout = Vec::new();
@@ -328,9 +327,9 @@ mod tests {
 
         let mut flag_sim_context = Context::new();
         flag_sim_context.config.simulate = true;
-        flag_sim_context.flags.simulate = true;
-        flag_sim_context.flags.all = true;
-        flag_sim_context.flags.force = true;
+        flag_sim_context.flags.set_simulate(true);
+        flag_sim_context.flags.set_all(true);
+        flag_sim_context.flags.set_force(true);
         let mut all_stdout = Vec::new();
         execute_with(
             &flag_sim_context,
@@ -351,12 +350,12 @@ mod tests {
         // When simulate is false and no prunable images exist, prints "No images found to prune." without prompting.
         let mut interactive_context = Context::new();
         interactive_context.config.simulate = false;
-        interactive_context.flags.simulate = false;
-        interactive_context.flags.force = false;
+        interactive_context.flags.set_simulate(false);
+        interactive_context.flags.set_force(false);
 
         let mut empty_images = |_: bool| Some(String::new());
         for force in [false, true] {
-            interactive_context.flags.force = force;
+            interactive_context.flags.set_force(force);
             let mut empty_out = Vec::new();
             let mut empty_err = Vec::new();
             execute_with(
@@ -374,7 +373,7 @@ mod tests {
             );
             assert!(empty_err.is_empty());
         }
-        interactive_context.flags.force = false;
+        interactive_context.flags.set_force(false);
 
         // Interactive confirmation declined or EOF prints "Aborted." with image count and reclaimable space.
         let single_image_line =
@@ -410,7 +409,7 @@ qrst9012uvwx\x1flong3\x1funtagged-repo\x1f<none>\x1f1.5 MB\x1f5 weeks ago\x1e\n"
                 &vec![b'y'; MAX_CONFIRMATION_BYTES + 1][..],
             ),
         ] {
-            interactive_context.flags.all = is_all;
+            interactive_context.flags.set_all(is_all);
             let mut candidate_images = |_: bool| Some(String::from(images_output));
             let mut input_cursor = Cursor::new(raw_input.to_vec());
             let mut out = Vec::new();
@@ -448,8 +447,8 @@ qrst9012uvwx\x1flong3\x1funtagged-repo\x1f<none>\x1f1.5 MB\x1f5 weeks ago\x1e\n"
     #[test]
     fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
         let mut context = Context::new();
-        context.flags.preview = true;
-        context.flags.all = true;
+        context.flags.set_preview(true);
+        context.flags.set_all(true);
 
         // 1. --all passes true to query_images and prints "No images found to prune." when empty
         let mut captured_is_all = false;
@@ -584,8 +583,8 @@ qrst9012uvwx\x1flong3\x1funtagged-repo\x1f<none>\x1f1.5 MB\x1f5 weeks ago\x1e\n"
     #[test]
     fn execute_with_preview_queries_podman_and_excludes_in_use_images() {
         let mut context = Context::new();
-        context.flags.preview = true;
-        context.flags.all = false;
+        context.flags.set_preview(true);
+        context.flags.set_all(false);
 
         let mut in_use = || Ok(BTreeSet::from([String::from("long2")]));
         let mut query_images = |is_all: bool| -> Option<String> {

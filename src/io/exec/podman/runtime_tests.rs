@@ -258,9 +258,30 @@ fn exec_logs_and_pull_validate_inputs_and_support_uppercase_unmanaged_names() {
             tail: Some("-f"),
             ..base_logs
         },
+        PodLogs {
+            tail: Some("abc"),
+            ..base_logs
+        },
     ] {
         assert!(logs_pod(&bad_logs, "", true, &mut Vec::new(), &mut Vec::new()).is_err());
     }
+
+    let spaced_logs = PodLogs {
+        since: Some("2026-01-01 12:00:00"),
+        tail: Some("all"),
+        until: Some("2026-01-01 13:00:00"),
+        ..base_logs
+    };
+    let mut spaced_out = Vec::new();
+    assert_eq!(
+        logs_pod(&spaced_logs, "Logs: ", true, &mut spaced_out, &mut stderr).unwrap(),
+        ExecOutcome::Succeeded
+    );
+    assert!(
+        String::from_utf8(spaced_out)
+            .unwrap()
+            .contains("--since '2026-01-01 12:00:00' --until '2026-01-01 13:00:00' --tail all")
+    );
 
     let mut logs_out = Vec::new();
     assert_eq!(

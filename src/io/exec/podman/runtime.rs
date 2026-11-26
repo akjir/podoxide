@@ -378,15 +378,15 @@ fn validate_pod_logs(request: &PodLogs<'_>) -> Result<(), PodError> {
         "invalid container name",
     )?;
     super::ensure_valid(
-        request.since.is_none_or(string::is_valid_token),
+        request.since.is_none_or(string::is_valid_log_time),
         "invalid since flag",
     )?;
     super::ensure_valid(
-        request.until.is_none_or(string::is_valid_token),
+        request.until.is_none_or(string::is_valid_log_time),
         "invalid until flag",
     )?;
     super::ensure_valid(
-        request.tail.is_none_or(string::is_valid_token),
+        request.tail.is_none_or(string::is_valid_log_tail),
         "invalid tail flag",
     )
 }

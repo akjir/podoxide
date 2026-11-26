@@ -20,14 +20,16 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 use std::process::ExitCode;
 
 use podoxide::core::cli;
-use podoxide::core::config::DEFAULT_CONFIG_NAME;
+use podoxide::core::config::DEFAULT_CONFIG_PATH;
 use podoxide::core::context::Context;
 use podoxide::core::log;
 use podoxide::core::modes;
 use podoxide::error::{PodError, SystemError};
+use podoxide::io::exec::command::ExecOutcome;
 use podoxide::io::exec::podman;
 use podoxide::io::system::env as system_env;
 
@@ -37,10 +39,16 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
-    match run(arguments) {
-        Ok(()) => ExitCode::SUCCESS,
+    finish_execution(run(arguments), &mut io::stderr().lock())
+}
+
+/// Maps a CLI run result to an [`ExitCode`], logging structured errors to `stderr` without duplicating output for [`ExecOutcome::Failed`].
+fn finish_execution<E: Write>(result: Result<ExecOutcome, PodError>, stderr: &mut E) -> ExitCode {
+    match result {
+        Ok(ExecOutcome::Succeeded) => ExitCode::SUCCESS,
+        Ok(ExecOutcome::Failed) => ExitCode::FAILURE,
         Err(error) => {
-            log::pod_error(&error);
+            log::write_pod_error(stderr, &error);
             ExitCode::FAILURE
         }
     }
@@ -51,46 +59,50 @@ fn main() -> ExitCode {
     execute(env::args_os().skip(1))
 }
 
-/// Verifies host environment prerequisites, parses CLI arguments, loads `pods.conf` when required, and dispatches the selected mode.
-fn run<I, T>(arguments: I) -> Result<(), PodError>
+/// Parses CLI arguments, verifies host environment prerequisites for the selected action, loads `pods.conf` when required, and dispatches the selected mode.
+fn run<I, T>(arguments: I) -> Result<ExecOutcome, PodError>
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
-    verify_environment()?;
-
     let mut context = Context::new();
     cli::parse_args(&mut context, arguments)?;
-    log::set_debug_enabled(context.flags.debug);
+    log::set_debug_enabled(context.flags.debug());
     log::debug("Debug mode is enabled.");
-    if context.config.name != DEFAULT_CONFIG_NAME {
+    if context.config.path != Path::new(DEFAULT_CONFIG_PATH) {
         log::debug(&format!(
             "Config '{}' is used.",
             context.config.path.display()
         ));
     }
 
+    verify_environment_for(&context)?;
+
     // Load pods.conf only when required by the selected mode and action.
-    // Bypassed for help actions, version, and init.
+    // Bypassed for help actions, version, init, and config show.
     context.load_config_if_required()?;
     modes::dispatch_mode(&context)
 }
 
-/// Verifies that the host OS is Linux, Podman is version 5.8.0+, and elevated execution is confirmed by the user.
-fn verify_environment() -> Result<(), PodError> {
+/// Verifies host OS, Podman `5.8.0+`, and elevated execution confirmation as required by `context`.
+fn verify_environment_for(context: &Context) -> Result<(), PodError> {
     let mut stdin = io::stdin().lock();
     let mut stderr = io::stderr().lock();
+    let podman_supported = !context.requires_podman() || podman::check_version();
+    let elevated = context.requires_elevation_confirmation() && system_env::runs_elevated();
     verify_environment_with(
+        context,
         system_env::check_os(),
-        podman::check_version(),
-        system_env::runs_elevated(),
+        podman_supported,
+        elevated,
         &mut stdin,
         &mut stderr,
     )
 }
 
-/// Evaluates environment check flags and prompts for confirmation on `reader` and `stderr_writer` when `elevated` is `true`.
+/// Evaluates OS, Podman version, and elevated-execution checks required by `context`, prompting on `reader` and `stderr_writer` when elevated confirmation is required.
 fn verify_environment_with<R, E>(
+    context: &Context,
     os_supported: bool,
     podman_supported: bool,
     elevated: bool,
@@ -104,10 +116,10 @@ where
     if !os_supported {
         return Err(PodError::from(SystemError::UnsupportedOs));
     }
-    if !podman_supported {
+    if context.requires_podman() && !podman_supported {
         return Err(PodError::from(SystemError::UnsupportedPodmanVersion));
     }
-    if elevated {
+    if context.requires_elevation_confirmation() && elevated {
         system_env::confirm_elevated_execution(reader, stderr_writer)?;
     }
     Ok(())
@@ -122,7 +134,13 @@ mod tests {
     use std::path::Path;
     use std::process::{self, Command, ExitCode, Stdio};
 
-    use super::{execute, run, verify_environment_with};
+    use podoxide::core::context::{
+        CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, ImageAction,
+        InitAction, LogsAction, ModeAction, RecipeAction,
+    };
+    use podoxide::error::{PodError, SystemError};
+    use podoxide::io::exec::command::ExecOutcome;
+    use super::{execute, finish_execution, run, verify_environment_with};
 
     const SUBPROCESS_MARKER: &str = "<<<PODOXIDE_CLI_OUTPUT_START>>>\n";
 
@@ -321,7 +339,6 @@ mod tests {
                 "Prune images: \npodman image prune -f -a\n",
             ),
             (&["--simulate", "cfg", "inspect"], "  Simulate:     true\n"),
-            (&["--simulate", "cfg", "show"], "  1: general {\n"),
             (&["--simulate", "cfg", "edit"], "true ./pods.conf\n"),
             (
                 &["--simulate", "rec", "edit", "recipe"],
@@ -358,6 +375,12 @@ mod tests {
                 "expected {expected_stdout:?} in stdout for {arguments:?}, got {stdout:?}"
             );
         }
+
+        let (sim_show_ok, sim_show_stdout, sim_show_stderr) =
+            run_cli_in_dir(working_dir, &["--simulate", "cfg", "show"], b"");
+        assert!(sim_show_ok);
+        assert!(sim_show_stderr.is_empty());
+        assert!(sim_show_stdout.contains("  1: general {\n"));
 
         assert_debug_custom_config_outputs(working_dir);
     }
@@ -423,7 +446,6 @@ mod tests {
                 "podman exec -it -u dbuser example-stack-db db-cli -U dbuser -d app -f /migrations/run.sql\n",
             ),
             (&["cfg", "inspect"], "  Simulate:     true\n"),
-            (&["cfg", "show"], "  5: general {\n"),
             (&["cfg", "edit"], "vim ./pods.conf\n"),
             (
                 &["con", "recipe/db"],
@@ -469,6 +491,12 @@ mod tests {
                 "expected {expected_stdout:?} in stdout for {arguments:?}, got {stdout:?}"
             );
         }
+
+        let (show_ok, show_stdout, show_stderr) =
+            run_cli_in_dir(working_dir, &["cfg", "show"], b"");
+        assert!(show_ok);
+        assert!(show_stderr.is_empty());
+        assert!(show_stdout.contains("  5: general {\n"));
     }
 
     #[test]
@@ -634,29 +662,203 @@ mod tests {
     }
 
     #[test]
+    fn finish_execution_maps_outcomes_and_avoids_duplicate_error_on_failed_outcome() {
+        let mut ok_stderr = Vec::new();
+        assert_eq!(
+            finish_execution(Ok(ExecOutcome::Succeeded), &mut ok_stderr),
+            ExitCode::SUCCESS
+        );
+        assert!(ok_stderr.is_empty());
+
+        let mut failed_stderr = Vec::new();
+        assert_eq!(
+            finish_execution(Ok(ExecOutcome::Failed), &mut failed_stderr),
+            ExitCode::FAILURE
+        );
+        assert!(
+            failed_stderr.is_empty(),
+            "expected no duplicate ERROR line on ExecOutcome::Failed, got {failed_stderr:?}"
+        );
+
+        let mut err_stderr = Vec::new();
+        assert_eq!(
+            finish_execution(
+                Err(PodError::from(SystemError::UnsupportedOs)),
+                &mut err_stderr
+            ),
+            ExitCode::FAILURE
+        );
+        assert_eq!(
+            String::from_utf8(err_stderr).unwrap(),
+            "ERROR: Only Linux is supported.\n"
+        );
+    }
+
+    #[test]
     fn verify_environment_enforces_os_podman_and_elevation_checks() {
         let mut empty_input = Cursor::new(Vec::<u8>::new());
         let mut stderr = Vec::new();
 
-        let os_error =
-            verify_environment_with(false, true, false, &mut empty_input, &mut stderr).unwrap_err();
+        // Help and version actions bypass Podman version and elevated-execution checks.
+        let bypass_actions = [
+            ModeAction::Command(CommandAction::Help),
+            ModeAction::Config(ConfigAction::Help),
+            ModeAction::Connect(ConnectAction::Help),
+            ModeAction::Default(DefaultAction::Help),
+            ModeAction::Default(DefaultAction::Version),
+            ModeAction::Image(ImageAction::Help),
+            ModeAction::Init(InitAction::Help),
+            ModeAction::Logs(LogsAction::Help),
+            ModeAction::Recipe(RecipeAction::Help),
+        ];
+        for action in bypass_actions {
+            let mut context = Context::new();
+            context.action = action;
+            let mut prompt_err = Vec::new();
+            assert!(
+                verify_environment_with(
+                    &context,
+                    true,
+                    false,
+                    true,
+                    &mut empty_input,
+                    &mut prompt_err
+                )
+                .is_ok(),
+                "expected {action:?} to succeed without Podman or root confirmation"
+            );
+            assert!(
+                prompt_err.is_empty(),
+                "expected no root warning prompt for {action:?}"
+            );
+            let os_err = verify_environment_with(
+                &context,
+                false,
+                false,
+                false,
+                &mut empty_input,
+                &mut prompt_err,
+            )
+            .unwrap_err();
+            assert_eq!(os_err.to_string(), "Only Linux is supported.");
+        }
+
+        // `pods init` bypasses Podman version check while still checking OS and elevated confirmation.
+        let mut init_context = Context::new();
+        init_context.action = ModeAction::Init(InitAction::Create);
+        assert!(
+            verify_environment_with(
+                &init_context,
+                true,
+                false,
+                false,
+                &mut empty_input,
+                &mut stderr
+            )
+            .is_ok()
+        );
+        let init_os_err = verify_environment_with(
+            &init_context,
+            false,
+            false,
+            false,
+            &mut empty_input,
+            &mut stderr,
+        )
+        .unwrap_err();
+        assert_eq!(init_os_err.to_string(), "Only Linux is supported.");
+        let mut init_yes = Cursor::new(b"yes\n".to_vec());
+        assert!(
+            verify_environment_with(&init_context, true, false, true, &mut init_yes, &mut stderr)
+                .is_ok()
+        );
+        let mut init_no = Cursor::new(b"no\n".to_vec());
+        let init_abort =
+            verify_environment_with(&init_context, true, false, true, &mut init_no, &mut stderr)
+                .unwrap_err();
+        assert_eq!(init_abort.to_string(), "Aborting execution.");
+
+        // Operational actions require Linux OS, Podman 5.8.0+, and elevation confirmation.
+        let mut up_context = Context::new();
+        up_context.action = ModeAction::Default(DefaultAction::Up);
+
+        let os_error = verify_environment_with(
+            &up_context,
+            false,
+            true,
+            false,
+            &mut empty_input,
+            &mut stderr,
+        )
+        .unwrap_err();
         assert_eq!(os_error.to_string(), "Only Linux is supported.");
 
-        let podman_error =
-            verify_environment_with(true, false, false, &mut empty_input, &mut stderr).unwrap_err();
+        let podman_error = verify_environment_with(
+            &up_context,
+            true,
+            false,
+            false,
+            &mut empty_input,
+            &mut stderr,
+        )
+        .unwrap_err();
         assert_eq!(
             podman_error.to_string(),
             "Podman 5.8.0 or higher is required."
         );
 
-        assert!(verify_environment_with(true, true, false, &mut empty_input, &mut stderr).is_ok());
+        assert!(
+            verify_environment_with(
+                &up_context,
+                true,
+                true,
+                false,
+                &mut empty_input,
+                &mut stderr
+            )
+            .is_ok()
+        );
 
         let mut yes_input = Cursor::new(b"yes\n".to_vec());
-        assert!(verify_environment_with(true, true, true, &mut yes_input, &mut stderr).is_ok());
+        assert!(
+            verify_environment_with(&up_context, true, true, true, &mut yes_input, &mut stderr)
+                .is_ok()
+        );
 
         let mut no_input = Cursor::new(b"no\n".to_vec());
         let abort_error =
-            verify_environment_with(true, true, true, &mut no_input, &mut stderr).unwrap_err();
+            verify_environment_with(&up_context, true, true, true, &mut no_input, &mut stderr)
+                .unwrap_err();
         assert_eq!(abort_error.to_string(), "Aborting execution.");
+    }
+
+    #[test]
+    fn custom_pods_conf_logs_debug_path_and_broken_config_shows_lines() {
+        let temp_dir = env::temp_dir().join(format!("podoxide_custom_conf_test_{}", process::id()));
+        let _ = fs::remove_dir_all(&temp_dir);
+        let sub_dir = temp_dir.join("nested");
+        fs::create_dir_all(&sub_dir).unwrap();
+
+        let nested_conf = sub_dir.join("pods.conf");
+        fs::write(&nested_conf, "broken {{{ syntax\nline two\n").unwrap();
+        let config_arg = format!("--config={}", nested_conf.display());
+
+        let (show_ok, show_stdout, show_stderr) =
+            run_cli_in_dir(&temp_dir, &["--debug", &config_arg, "cfg", "show"], b"");
+        assert!(
+            show_ok,
+            "expected cfg show to succeed on broken pods.conf: {show_stderr}"
+        );
+        assert!(show_stdout.contains("  1: broken {{{ syntax\n"));
+        assert!(show_stdout.contains("  2: line two\n"));
+        assert!(
+            show_stderr.contains(&format!(
+                "DEBUG: Config '{}' is used.\n",
+                nested_conf.display()
+            )),
+            "expected debug log for custom pods.conf path, got: {show_stderr:?}"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

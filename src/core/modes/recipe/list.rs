@@ -193,7 +193,7 @@ fn list_with<W: Write>(context: &Context, stdout: &mut W) -> Result<(), PodError
     let recipes_path = &context.config.recipes.path;
     let configured_recipes = context.config.get_recipes();
     let unreferenced =
-        collect_unreferenced_files(recipes_path, &configured_recipes, context.flags.all)?;
+        collect_unreferenced_files(recipes_path, &configured_recipes, context.flags.all())?;
     if configured_recipes.is_empty() && unreferenced.is_empty() {
         log::write_print(stdout, "There are no recipes defined in config.");
         return Ok(());
@@ -315,7 +315,7 @@ container *simple {
         assert!(!output.contains("[UNREFERENCED]"));
         assert!(!output.contains("pods recipe inspect"));
 
-        context.flags.all = true;
+        context.flags.set_all(true);
         let mut all_stdout = Vec::new();
         list_with(&context, &mut all_stdout).unwrap();
         let all_output = String::from_utf8(all_stdout).unwrap();
@@ -345,7 +345,7 @@ container *simple {
             "There are no recipes defined in config.\n"
         );
 
-        context.flags.all = true;
+        context.flags.set_all(true);
         let mut all_stdout = Vec::new();
         list_with(&context, &mut all_stdout).unwrap();
         let all_output = String::from_utf8(all_stdout).unwrap();
@@ -418,7 +418,7 @@ container *simple {
         ));
 
         // With --all (4 configured + 8 unreferenced = 12 items, indices 1..9 padded)
-        context.flags.all = true;
+        context.flags.set_all(true);
         let mut all_stdout = Vec::new();
         list_with(&context, &mut all_stdout).unwrap();
         let all_output = String::from_utf8(all_stdout).unwrap();

@@ -134,6 +134,18 @@ pub fn is_valid_identifier(identifier: &str) -> bool {
     is_identifier_start(first) && rest.iter().copied().all(is_identifier_continue)
 }
 
+/// Evaluates whether `value` is a valid `--tail` argument (non-negative ASCII integer or `"all"` case-insensitively).
+#[must_use]
+pub fn is_valid_log_tail(value: &str) -> bool {
+    parse_ascii_u32(value).is_some() || value.eq_ignore_ascii_case("all")
+}
+
+/// Evaluates whether `value` is a valid `--since` or `--until` duration or timestamp without control characters or a leading dash.
+#[must_use]
+pub fn is_valid_log_time(value: &str) -> bool {
+    is_valid_text(value) && !value.trim_start().starts_with('-')
+}
+
 /// Evaluates whether `name` is a valid normalized pod or container name (`[a-z0-9][a-z0-9_.-]*` without `..`).
 #[must_use]
 pub fn is_valid_pod_or_container_name(name: &str) -> bool {
@@ -272,9 +284,10 @@ mod tests {
         clamp_utf8_prefix, contains_control_or_bidi, contains_control_or_whitespace, escape_shell,
         is_bidi_control, is_empty_value_literal, is_identifier_continue, is_identifier_start,
         is_safe_shell_byte, is_valid_container_suffix, is_valid_group_target, is_valid_identifier,
-        is_valid_pod_or_container_name, is_valid_recipe_identifier, is_valid_target_segment,
-        is_valid_text, is_valid_token, is_valid_unmanaged_container_name, normalize_name,
-        parse_ascii_u32, sanitize_char, sanitize_text,
+        is_valid_log_tail, is_valid_log_time, is_valid_pod_or_container_name,
+        is_valid_recipe_identifier, is_valid_target_segment, is_valid_text, is_valid_token,
+        is_valid_unmanaged_container_name, normalize_name, parse_ascii_u32, sanitize_char,
+        sanitize_text,
     };
 
     #[test]
@@ -350,6 +363,24 @@ mod tests {
         assert!(!is_valid_token("-flag"));
         assert!(!is_valid_token("two tokens"));
         assert!(!is_valid_token("bad\ntoken"));
+
+        assert!(is_valid_log_tail("0"));
+        assert!(is_valid_log_tail("25"));
+        assert!(is_valid_log_tail("all"));
+        assert!(is_valid_log_tail("ALL"));
+        assert!(is_valid_log_tail("All"));
+        assert!(!is_valid_log_tail(""));
+        assert!(!is_valid_log_tail("-10"));
+        assert!(!is_valid_log_tail("abc"));
+        assert!(!is_valid_log_tail("10\n"));
+
+        assert!(is_valid_log_time("1h"));
+        assert!(is_valid_log_time("2026-01-01 12:00:00"));
+        assert!(!is_valid_log_time(""));
+        assert!(!is_valid_log_time("   "));
+        assert!(!is_valid_log_time("-1h"));
+        assert!(!is_valid_log_time(" -f"));
+        assert!(!is_valid_log_time("1h\n"));
     }
 
     #[test]

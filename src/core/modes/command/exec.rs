@@ -22,6 +22,7 @@ use crate::core::context::Context;
 use crate::core::pod::PodCommand;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
+use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::{self, ExecContainer};
 use crate::io::psl::MAX_ARGS_PER_STMT;
 use crate::utilities::string::{is_valid_text, is_valid_token, parse_ascii_u32};
@@ -65,7 +66,7 @@ enum QuoteState {
 /// Returns [`PodError`] if `<recipe>` or `<command|index>` is missing, the recipe is not
 /// registered, reading or validating the `.pod` file fails, the command or target container
 /// cannot be resolved, or `podman exec` fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     execute_with(context, &mut stdout, &mut stderr)
@@ -83,7 +84,7 @@ fn exec_command<W: Write, E: Write>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     let command = resolve_command(recipe, command_spec, stderr)?;
     let line = if command.line == 0 {
         recipe.pod.line
@@ -96,7 +97,7 @@ fn exec_command<W: Write, E: Write>(
         "Execute command '{}' in container '{container_name}': ",
         command.execute
     );
-    let _ = podman::exec_container(
+    podman::exec_container(
         &ExecContainer {
             command: &execute_tokens,
             container_name: &container_name,
@@ -107,8 +108,7 @@ fn exec_command<W: Write, E: Write>(
         simulate,
         stdout,
         stderr,
-    )?;
-    Ok(())
+    )
 }
 
 /// Loads the target recipe from `context` and executes the requested command.
@@ -121,7 +121,7 @@ fn execute_with<W: Write, E: Write>(
     context: &Context,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     let (Some(target), Some(command_spec)) =
         (context.parameters.first(), context.parameters.get(1))
     else {

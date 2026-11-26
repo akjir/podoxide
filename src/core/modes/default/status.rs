@@ -314,12 +314,12 @@ where
     let (expected, invalid_recipes) = resolve_expected_containers(context)?;
     let ps_output = query_podman_status(query_status)?;
     let display_rows =
-        build_display_rows(&ps_output, &expected, &invalid_recipes, context.flags.all);
+        build_display_rows(&ps_output, &expected, &invalid_recipes, context.flags.all());
     if display_rows.is_empty() {
         log::write_print(stdout, "No containers found.");
         return Ok(());
     }
-    write_status_table(&display_rows, context.flags.full, stdout);
+    write_status_table(&display_rows, context.flags.full(), stdout);
     write_invalid_recipes_hint(&invalid_recipes, stdout);
     Ok(())
 }
@@ -617,7 +617,7 @@ container \"*app-1\" {
         let (temp_dir, config) = create_status_workspace("container_targets");
         let mut context = Context::new();
         context.config = config;
-        context.flags.full = true;
+        context.flags.set_full(true);
         context.parameters = vec![
             String::from("recipe_017_container_naming/*my-db"),
             String::from("recipe_017_container_naming/1"),
@@ -656,8 +656,8 @@ container \"*app-1\" {
         ];
         let mixed_error = execute_with(&context, &mut never_capture, &mut Vec::new()).unwrap_err();
         match mixed_error {
-            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::InvalidTarget),
-            other => panic!("expected PodError::Cli(InvalidTarget), got {other:?}"),
+            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::MixedTargets),
+            other => panic!("expected PodError::Cli(MixedTargets), got {other:?}"),
         }
 
         context.parameters = vec![
@@ -667,8 +667,8 @@ container \"*app-1\" {
         let pod_first_mixed_error =
             execute_with(&context, &mut never_capture, &mut Vec::new()).unwrap_err();
         match pod_first_mixed_error {
-            PodError::Cli(error) => assert_eq!(error.kind, CliErrorKind::InvalidTarget),
-            other => panic!("expected PodError::Cli(InvalidTarget), got {other:?}"),
+            PodError::Cli(error) => assert_eq!(error.kind, CliErrorKind::MixedTargets),
+            other => panic!("expected PodError::Cli(MixedTargets), got {other:?}"),
         }
 
         let _ = std_fs::remove_dir_all(&temp_dir);
@@ -829,7 +829,7 @@ container \"*app-1\" {
         assert_eq!(output, format!("{expected_header}{expected_row}"));
 
         // With --full, TARGET NAME is inserted after NAME, and COMMAND and PORTS columns are appended.
-        context.flags.full = true;
+        context.flags.set_full(true);
         let mut full_stdout = Vec::new();
         execute_with(&context, &mut capture, &mut full_stdout).unwrap();
         assert_eq!(query_count, 2);
@@ -865,7 +865,7 @@ b2c3d4e5f6a1   test_pod   test_pod-1       Up 5 mins   1          5 mins ago   a
 
         // Default target resolution (empty parameters) with --all includes unmanaged containers, Recipe Error rows, and all configured recipes.
         context.parameters.clear();
-        context.flags.all = true;
+        context.flags.set_all(true);
         let mut all_stdout = Vec::new();
         execute_with(&context, &mut capture, &mut all_stdout).unwrap();
         let all_output = String::from_utf8(all_stdout).unwrap();
@@ -884,7 +884,7 @@ Recipes 'invalid_recipe' and 'missing_recipe' have errors! Run 'pods recipe insp
         assert_eq!(all_output, expected_all_table);
 
         // With --all --full, unmanaged containers display `-` in TARGET NAME, Recipe Error rows display `<recipe>`, and managed containers display `<recipe>/<index>`.
-        context.flags.full = true;
+        context.flags.set_full(true);
         let mut all_full_stdout = Vec::new();
         execute_with(&context, &mut capture, &mut all_full_stdout).unwrap();
         let all_full_output = String::from_utf8(all_full_stdout).unwrap();

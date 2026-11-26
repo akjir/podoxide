@@ -20,6 +20,7 @@ use std::io::{self, Write};
 use crate::core::context::Context;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
+use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::{self, ExecContainer, SHELL_FALLBACK_COMMAND};
 use crate::utilities::string::{
     is_valid_target_segment, is_valid_text, is_valid_unmanaged_container_name,
@@ -55,7 +56,7 @@ const DEFAULT_CONTAINER_INDEX: &str = "1";
 ///
 /// Returns [`PodError`] if the recipe or container cannot be resolved, the target container
 /// is not running, or the interactive `podman exec` process fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     execute_with(context, podman::container_running, &mut stdout, &mut stderr)
@@ -72,7 +73,7 @@ fn execute_with<W, E, F>(
     is_running: F,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError>
+) -> Result<ExecOutcome, PodError>
 where
     W: Write,
     E: Write,
@@ -90,7 +91,7 @@ where
         context.config.simulate,
         is_running,
     )?;
-    let _ = podman::exec_container(
+    podman::exec_container(
         &ExecContainer {
             command: &SHELL_FALLBACK_COMMAND,
             container_name: &container_name,
@@ -101,8 +102,7 @@ where
         context.config.simulate,
         stdout,
         stderr,
-    )?;
-    Ok(())
+    )
 }
 
 /// Extracts and validates the single positional `<target>` parameter from `context.parameters`.

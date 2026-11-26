@@ -21,12 +21,13 @@ pub mod show;
 
 use std::io::{self, Write};
 
-use crate::core::context::{Context, Flags, LogsAction, ModeAction};
+use crate::core::context::{Context, Flags, LogsAction};
 use crate::core::log;
 use crate::core::recipe::Recipe;
 use crate::error::{CliError, CliErrorKind, PodError};
+use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::{self, PodLogs};
-use crate::utilities::string::{is_valid_target_segment, is_valid_token};
+use crate::utilities::string;
 
 /// Output prefix printed before simulating or executing the `podman pod logs` command.
 const LOGS_PREFIX: &str = "Execute log command: ";
@@ -36,23 +37,21 @@ const LOGS_PREFIX: &str = "Execute log command: ";
 /// # Workflow
 ///
 /// 1. Log that `logs` mode is active when debug logging is enabled.
-/// 2. Route [`ModeAction::Logs`] in enum declaration order (`Follow`, `Help`, `Show`)
+/// 2. Route [`LogsAction`] in enum declaration order (`Follow`, `Help`, `Show`)
 ///    to the corresponding action module ([`follow::handle`], [`help::handle`], [`show::handle`]).
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if `context.action` does not belong to `logs` mode or if the
-/// selected action handler fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+/// Returns [`PodError`] if the selected action handler fails.
+pub fn handle(context: &Context, action: LogsAction) -> Result<ExecOutcome, PodError> {
     log::debug("Logs mode is used.");
-    match context.action() {
-        ModeAction::Logs(LogsAction::Follow) => follow::handle(context),
-        ModeAction::Logs(LogsAction::Help) => help::handle(context),
-        ModeAction::Logs(LogsAction::Show) => show::handle(context),
-        _ => Err(PodError::from(CliError::with_argument(
-            CliErrorKind::UnknownAction,
-            context.action().to_string(),
-        ))),
+    match action {
+        LogsAction::Follow => follow::handle(context),
+        LogsAction::Help => {
+            help::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
+        LogsAction::Show => show::handle(context),
     }
 }
 
@@ -62,7 +61,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 ///
 /// Returns [`PodError`] if the target is missing or invalid, loading or validating the recipe
 /// fails, the container specification cannot be resolved, or `podman pod logs` fails.
-pub(super) fn execute_logs(context: &Context, follow: bool) -> Result<(), PodError> {
+pub(super) fn execute_logs(context: &Context, follow: bool) -> Result<ExecOutcome, PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     execute_logs_with(context, follow, &mut stdout, &mut stderr)
@@ -79,27 +78,26 @@ pub(super) fn execute_logs_with<W: Write, E: Write>(
     follow: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     let target = extract_target_parameter(context)?;
     let (recipe_name, container_spec) = parse_target(target)?;
     let (pod_id, container_name) = load_and_resolve_target(context, recipe_name, container_spec)?;
     validate_log_flags(&context.flags)?;
-    let _ = podman::logs_pod(
+    podman::logs_pod(
         &PodLogs {
             container_name: container_name.as_deref(),
             follow,
             pod_name: &pod_id,
             since: context.flags.since.as_deref(),
             tail: context.flags.tail.as_deref(),
-            timestamps: context.flags.timestamps,
+            timestamps: context.flags.timestamps(),
             until: context.flags.until.as_deref(),
         },
         LOGS_PREFIX,
         context.config.simulate,
         stdout,
         stderr,
-    )?;
-    Ok(())
+    )
 }
 
 /// Extracts the single positional `<recipe>[/<container>]` parameter from `context.parameters`.
@@ -148,7 +146,9 @@ fn load_and_resolve_target(
 /// container segment is empty, starts with `-` or `@`, or contains invalid characters.
 fn parse_target(target: &str) -> Result<(&str, Option<&str>), PodError> {
     if let Some((recipe_name, container_spec)) = target.split_once('/') {
-        if !is_valid_target_segment(recipe_name) || !is_valid_target_segment(container_spec) {
+        if !string::is_valid_target_segment(recipe_name)
+            || !string::is_valid_target_segment(container_spec)
+        {
             return Err(PodError::from(CliError::with_argument(
                 CliErrorKind::InvalidTarget,
                 target,
@@ -156,7 +156,7 @@ fn parse_target(target: &str) -> Result<(&str, Option<&str>), PodError> {
         }
         return Ok((recipe_name, Some(container_spec)));
     }
-    if !is_valid_target_segment(target) {
+    if !string::is_valid_target_segment(target) {
         return Err(PodError::from(CliError::with_argument(
             CliErrorKind::InvalidTarget,
             target,
@@ -167,20 +167,34 @@ fn parse_target(target: &str) -> Result<(&str, Option<&str>), PodError> {
 
 /// Validates `--since`, `--until`, and `--tail` flag values in `flags`.
 fn validate_log_flags(flags: &Flags) -> Result<(), PodError> {
-    validate_optional_flag(flags.since.as_deref())?;
-    validate_optional_flag(flags.until.as_deref())?;
-    validate_optional_flag(flags.tail.as_deref())
+    validate_time_flag("--since", flags.since.as_deref())?;
+    validate_time_flag("--until", flags.until.as_deref())?;
+    validate_tail_flag(flags.tail.as_deref())
 }
 
-/// Validates that an optional flag `value` (when `Some`) is a valid single token.
-fn validate_optional_flag(value: Option<&str>) -> Result<(), PodError> {
+/// Validates that an optional `--tail` value (when `Some`) is a non-negative integer or `"all"`.
+fn validate_tail_flag(value: Option<&str>) -> Result<(), PodError> {
     let Some(raw_value) = value else {
         return Ok(());
     };
-    if !is_valid_token(raw_value) {
+    if !string::is_valid_log_tail(raw_value) {
         return Err(PodError::from(CliError::with_argument(
             CliErrorKind::InvalidFlagValue,
-            raw_value,
+            "--tail",
+        )));
+    }
+    Ok(())
+}
+
+/// Validates that an optional `--since` or `--until` value (when `Some`) is safe timestamp/duration text.
+fn validate_time_flag(flag_name: &str, value: Option<&str>) -> Result<(), PodError> {
+    let Some(raw_value) = value else {
+        return Ok(());
+    };
+    if !string::is_valid_log_time(raw_value) {
+        return Err(PodError::from(CliError::with_argument(
+            CliErrorKind::InvalidFlagValue,
+            flag_name,
         )));
     }
     Ok(())
@@ -191,8 +205,9 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
-    use crate::core::context::{Context, DefaultAction, Flags, LogsAction, Mode, ModeAction};
+    use crate::core::context::{Context, Flags, LogsAction};
     use crate::error::{CliErrorKind, PodError, RecipeErrorKind};
+    use crate::io::exec::command::ExecOutcome;
     use crate::io::system::fs;
     use super::{execute_logs_with, handle};
 
@@ -366,28 +381,19 @@ container {
         }
 
         context.parameters = vec![String::from("recipe_011_simple_container")];
-        for bad_flag in ["-f", "", "10\n20", "two words"] {
-            assert_invalid_flag_rejected(
-                &context,
-                Flags {
-                    since: Some(String::from(bad_flag)),
-                    ..Flags::new()
-                },
-            );
-            assert_invalid_flag_rejected(
-                &context,
-                Flags {
-                    until: Some(String::from(bad_flag)),
-                    ..Flags::new()
-                },
-            );
-            assert_invalid_flag_rejected(
-                &context,
-                Flags {
-                    tail: Some(String::from(bad_flag)),
-                    ..Flags::new()
-                },
-            );
+        for bad_time in ["-f", " -f", "", "   ", "10\n20"] {
+            let mut since_flags = Flags::new();
+            since_flags.since = Some(String::from(bad_time));
+            assert_invalid_flag_rejected(&context, since_flags);
+
+            let mut until_flags = Flags::new();
+            until_flags.until = Some(String::from(bad_time));
+            assert_invalid_flag_rejected(&context, until_flags);
+        }
+        for bad_tail in ["-f", "", "10\n20", "two words", "abc"] {
+            let mut tail_flags = Flags::new();
+            tail_flags.tail = Some(String::from(bad_tail));
+            assert_invalid_flag_rejected(&context, tail_flags);
         }
 
         let _ = std::fs::remove_dir_all(&directory);
@@ -396,6 +402,12 @@ container {
     #[test]
     fn execute_logs_with_simulates_show_follow_options_and_container_filters() {
         let (directory, mut context) = build_test_context("simulate");
+
+        let mut option_flags = Flags::new();
+        option_flags.since = Some(String::from("2026-01-01 12:00:00"));
+        option_flags.tail = Some(String::from("all"));
+        option_flags.until = Some(String::from("2026-01-01 13:00:00"));
+        option_flags.set_timestamps(true);
 
         let cases = [
             (
@@ -412,15 +424,9 @@ container {
             ),
             (
                 false,
-                Flags {
-                    since: Some(String::from("1h")),
-                    tail: Some(String::from("10")),
-                    timestamps: true,
-                    until: Some(String::from("2h")),
-                    ..Flags::new()
-                },
+                option_flags,
                 "recipe_011_simple_container",
-                "Execute log command: \npodman pod logs -n --color --since 1h --until 2h --tail 10 --timestamps simple_container\n",
+                "Execute log command: \npodman pod logs -n --color --since '2026-01-01 12:00:00' --until '2026-01-01 13:00:00' --tail all --timestamps simple_container\n",
             ),
             (
                 false,
@@ -459,7 +465,10 @@ container {
             context.parameters = vec![String::from(target)];
             let mut stdout = Vec::new();
             let mut stderr = Vec::new();
-            execute_logs_with(&context, follow, &mut stdout, &mut stderr).unwrap();
+            assert_eq!(
+                execute_logs_with(&context, follow, &mut stdout, &mut stderr).unwrap(),
+                ExecOutcome::Succeeded
+            );
             assert_eq!(String::from_utf8(stdout).unwrap(), expected_output);
             assert!(stderr.is_empty());
         }
@@ -468,30 +477,24 @@ container {
     }
 
     #[test]
-    fn handle_routes_logs_actions_and_rejects_mismatched_action() {
+    fn handle_routes_logs_actions() {
         let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
 
-        let mut help_context = Context::new();
-        help_context.mode = Mode::Logs;
-        help_context.action = ModeAction::Logs(LogsAction::Help);
-        assert!(handle(&help_context).is_ok());
+        let help_context = Context::new();
+        assert_eq!(
+            handle(&help_context, LogsAction::Help).unwrap(),
+            ExecOutcome::Succeeded
+        );
 
         for action in [LogsAction::Follow, LogsAction::Show] {
             let mut context = Context::new();
             context.config = root_config.clone();
-            context.mode = Mode::Logs;
-            context.action = ModeAction::Logs(action);
             context.parameters = vec![String::from("recipe/db")];
-            assert!(handle(&context).is_ok());
-        }
-
-        let mut invalid_context = Context::new();
-        invalid_context.mode = Mode::Logs;
-        invalid_context.action = ModeAction::Default(DefaultAction::Help);
-        let error = handle(&invalid_context).unwrap_err();
-        match error {
-            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::UnknownAction),
-            other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
+            assert_eq!(
+                handle(&context, action).unwrap(),
+                ExecOutcome::Succeeded,
+                "expected logs::{action} to succeed"
+            );
         }
     }
 }

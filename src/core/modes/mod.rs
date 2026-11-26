@@ -30,57 +30,52 @@ pub use crate::core::context::{
     Mode, ModeAction, RecipeAction,
 };
 use crate::error::PodError;
+use crate::io::exec::command::ExecOutcome;
 
-const MODE_COUNT: usize = 8;
-static MODE_DISPATCH_TABLE: [ModeHandler; MODE_COUNT] = [
-    command::handle,
-    config::handle,
-    connect::handle,
-    default::handle,
-    image::handle,
-    init::handle,
-    logs::handle,
-    recipe::handle,
-];
-
-/// Function pointer signature for a top-level CLI mode handler.
-type ModeHandler = fn(&Context) -> Result<(), PodError>;
-
-/// Dispatches execution to the active mode handler in O(1) time via `MODE_DISPATCH_TABLE`.
+/// Dispatches execution to the active mode handler in O(1) time based on `context.action()`.
 ///
 /// # Workflow
 ///
-/// 1. Look up the mode handler function in `MODE_DISPATCH_TABLE` using
-///    `context.mode().as_index()`.
-/// 2. Invoke the selected mode's `handle(context)` entry point (`command::handle`,
+/// 1. Match `context.action()` directly across all eight [`ModeAction`] variants in enum
+///    declaration order.
+/// 2. Invoke the selected mode's `handle(context, action)` entry point (`command::handle`,
 ///    `config::handle`, `connect::handle`, `default::handle`, `image::handle`,
-///    `init::handle`, `logs::handle`, or `recipe::handle`).
+///    `init::handle`, `logs::handle`, or `recipe::handle`) with its typed sub-action enum.
 ///
 /// # Errors
 ///
 /// Returns [`PodError`] if the selected mode or action handler fails.
-pub fn dispatch_mode(context: &Context) -> Result<(), PodError> {
-    let handler = MODE_DISPATCH_TABLE[context.mode().as_index()];
-    handler(context)
+pub fn dispatch_mode(context: &Context) -> Result<ExecOutcome, PodError> {
+    match context.action() {
+        ModeAction::Command(action) => command::handle(context, action),
+        ModeAction::Config(action) => config::handle(context, action),
+        ModeAction::Connect(action) => connect::handle(context, action),
+        ModeAction::Default(action) => default::handle(context, action),
+        ModeAction::Image(action) => image::handle(context, action),
+        ModeAction::Init(action) => init::handle(context, action),
+        ModeAction::Logs(action) => logs::handle(context, action),
+        ModeAction::Recipe(action) => recipe::handle(context, action),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use crate::core::cli::parse_args;
+    use crate::core::cli;
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::context::{
         CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, ImageAction,
-        InitAction, LogsAction, Mode, ModeAction, RecipeAction,
+        InitAction, LogsAction, ModeAction, RecipeAction,
     };
-    use crate::error::{CliErrorKind, PodError};
+    use crate::io::exec::command::ExecOutcome;
     use super::dispatch_mode;
 
     #[test]
     fn dispatch_mode_handles_all_modes_and_actions() {
         let invocations: &[&[&str]] = &[
             &["help"],
+            &["version"],
             &["create", "recipe"],
             &["down", "recipe"],
             &["reload", "recipe"],
@@ -98,6 +93,7 @@ mod tests {
             &["cmd", "recipe", "1"],
             &["config", "help"],
             &["config", "edit"],
+            &["config", "inspect"],
             &["config", "show"],
             &["connect", "help"],
             &["connect", "shell", "recipe/db"],
@@ -111,88 +107,66 @@ mod tests {
             &["logs", "show", "recipe"],
             &["recipe", "help"],
             &["recipe", "edit", "recipe"],
+            &["recipe", "inspect", "recipe"],
             &["recipe", "list"],
             &["recipe", "show", "recipe"],
         ];
 
         for arguments in invocations {
             let mut context = Context::new();
-            parse_args(&mut context, *arguments).unwrap();
+            cli::parse_args(&mut context, *arguments).unwrap();
             context.load_config_if_required().unwrap();
-            assert!(
-                dispatch_mode(&context).is_ok(),
+            assert_eq!(
+                dispatch_mode(&context).unwrap(),
+                ExecOutcome::Succeeded,
                 "expected dispatch_mode to succeed for {arguments:?}"
             );
         }
     }
 
     #[test]
-    fn mode_handlers_reject_mismatched_mode_actions() {
-        let mismatched_pairs = [
-            (Mode::Command, ModeAction::Default(DefaultAction::Help)),
-            (Mode::Config, ModeAction::Default(DefaultAction::Help)),
-            (Mode::Connect, ModeAction::Default(DefaultAction::Help)),
-            (Mode::Default, ModeAction::Command(CommandAction::Help)),
-            (Mode::Image, ModeAction::Config(ConfigAction::Help)),
-            (Mode::Init, ModeAction::Connect(ConnectAction::Help)),
-            (Mode::Logs, ModeAction::Image(ImageAction::Help)),
-            (Mode::Recipe, ModeAction::Init(InitAction::Help)),
-        ];
-
-        for (mode, action) in mismatched_pairs {
-            let mut context = Context::new();
-            context.mode = mode;
-            context.action = action;
-
-            let error = dispatch_mode(&context).unwrap_err();
-            match error {
-                PodError::Cli(cli_error) => {
-                    assert_eq!(cli_error.kind, CliErrorKind::UnknownAction);
-                }
-                other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
-            }
-        }
-
-        // Verify all action enum variants map cleanly through their respective modes.
+    fn dispatch_mode_routes_all_typed_mode_actions() {
         let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
-        let valid_pairs = [
-            (Mode::Command, ModeAction::Command(CommandAction::Exec)),
-            (Mode::Command, ModeAction::Command(CommandAction::Help)),
-            (Mode::Command, ModeAction::Command(CommandAction::List)),
-            (Mode::Config, ModeAction::Config(ConfigAction::Edit)),
-            (Mode::Config, ModeAction::Config(ConfigAction::Help)),
-            (Mode::Config, ModeAction::Config(ConfigAction::Show)),
-            (Mode::Connect, ModeAction::Connect(ConnectAction::Help)),
-            (Mode::Connect, ModeAction::Connect(ConnectAction::Shell)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Create)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Down)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Help)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Reload)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Remove)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Restart)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Start)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Status)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Stop)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Up)),
-            (Mode::Default, ModeAction::Default(DefaultAction::Update)),
-            (Mode::Image, ModeAction::Image(ImageAction::Help)),
-            (Mode::Image, ModeAction::Image(ImageAction::Prune)),
-            (Mode::Image, ModeAction::Image(ImageAction::Update)),
-            (Mode::Init, ModeAction::Init(InitAction::Create)),
-            (Mode::Init, ModeAction::Init(InitAction::Help)),
-            (Mode::Logs, ModeAction::Logs(LogsAction::Follow)),
-            (Mode::Logs, ModeAction::Logs(LogsAction::Help)),
-            (Mode::Logs, ModeAction::Logs(LogsAction::Show)),
-            (Mode::Recipe, ModeAction::Recipe(RecipeAction::Edit)),
-            (Mode::Recipe, ModeAction::Recipe(RecipeAction::Help)),
-            (Mode::Recipe, ModeAction::Recipe(RecipeAction::List)),
-            (Mode::Recipe, ModeAction::Recipe(RecipeAction::Show)),
+        let valid_actions = [
+            ModeAction::Command(CommandAction::Exec),
+            ModeAction::Command(CommandAction::Help),
+            ModeAction::Command(CommandAction::List),
+            ModeAction::Config(ConfigAction::Edit),
+            ModeAction::Config(ConfigAction::Help),
+            ModeAction::Config(ConfigAction::Inspect),
+            ModeAction::Config(ConfigAction::Show),
+            ModeAction::Connect(ConnectAction::Help),
+            ModeAction::Connect(ConnectAction::Shell),
+            ModeAction::Default(DefaultAction::Create),
+            ModeAction::Default(DefaultAction::Down),
+            ModeAction::Default(DefaultAction::Help),
+            ModeAction::Default(DefaultAction::Reload),
+            ModeAction::Default(DefaultAction::Remove),
+            ModeAction::Default(DefaultAction::Restart),
+            ModeAction::Default(DefaultAction::Start),
+            ModeAction::Default(DefaultAction::Status),
+            ModeAction::Default(DefaultAction::Stop),
+            ModeAction::Default(DefaultAction::Up),
+            ModeAction::Default(DefaultAction::Update),
+            ModeAction::Default(DefaultAction::Version),
+            ModeAction::Image(ImageAction::Help),
+            ModeAction::Image(ImageAction::Prune),
+            ModeAction::Image(ImageAction::Update),
+            ModeAction::Init(InitAction::Create),
+            ModeAction::Init(InitAction::Help),
+            ModeAction::Logs(LogsAction::Follow),
+            ModeAction::Logs(LogsAction::Help),
+            ModeAction::Logs(LogsAction::Show),
+            ModeAction::Recipe(RecipeAction::Edit),
+            ModeAction::Recipe(RecipeAction::Help),
+            ModeAction::Recipe(RecipeAction::Inspect),
+            ModeAction::Recipe(RecipeAction::List),
+            ModeAction::Recipe(RecipeAction::Show),
         ];
 
-        for (mode, action) in valid_pairs {
+        for action in valid_actions {
             let mut context = Context::new();
             context.config = root_config.clone();
-            context.mode = mode;
             context.action = action;
             context.parameters = if action == ModeAction::Command(CommandAction::Exec) {
                 vec![String::from("recipe"), String::from("migrate")]
@@ -201,7 +175,11 @@ mod tests {
             } else {
                 vec![String::from("recipe")]
             };
-            assert!(dispatch_mode(&context).is_ok());
+            assert_eq!(
+                dispatch_mode(&context).unwrap(),
+                ExecOutcome::Succeeded,
+                "expected dispatch_mode to succeed for {action:?}"
+            );
         }
     }
 }

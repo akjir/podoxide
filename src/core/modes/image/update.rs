@@ -21,6 +21,7 @@ use crate::core::context::Context;
 use crate::core::modes::default::update::execute_update_with;
 use crate::core::update::SummaryKind;
 use crate::error::PodError;
+use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman;
 
 /// Pulls the latest container images from configured registries for all containers in target
@@ -42,18 +43,17 @@ use crate::io::exec::podman;
 ///
 /// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
 /// cannot be read or validated, or `podman pull` fails to spawn.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     let mut pull_image = podman::pull_image;
-    let _ = execute_update_with(
+    execute_update_with(
         context,
         SummaryKind::ImagePull,
         &mut pull_image,
         &mut stdout,
         &mut stderr,
-    )?;
-    Ok(())
+    )
 }
 
 #[cfg(test)]
@@ -61,7 +61,7 @@ mod tests {
     use std::path::Path;
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
-    use crate::core::context::{Context, ImageAction, Mode, ModeAction};
+    use crate::core::context::{Context, ImageAction, ModeAction};
     use crate::core::log;
     use crate::core::modes::default::update::execute_update_with;
     use crate::core::update::SummaryKind;
@@ -74,7 +74,6 @@ mod tests {
     fn handle_pulls_recipe_and_group_targets_and_rejects_invalid_targets() {
         let mut context = Context::new();
         context.config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
-        context.mode = Mode::Image;
         context.action = ModeAction::Image(ImageAction::Update);
 
         let missing_error = handle(&context).unwrap_err();

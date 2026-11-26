@@ -57,7 +57,7 @@ use super::{collect_container_specs, expand_pod_targets, resolve_container_targe
 ///
 /// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
 /// cannot be read or validated, or a `podman` pull/reload command fails to spawn.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     let mut cache = PullCache::new();
@@ -83,14 +83,13 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
         query_container_image: &mut query_container,
         query_image: &mut query_image,
     };
-    let _ = execute_update_with_inspectors(
+    execute_update_with_inspectors(
         context,
         SummaryKind::LifecycleUpdate,
         &mut runners,
         &mut stdout,
         &mut stderr,
-    )?;
-    Ok(())
+    )
 }
 
 /// Resolves targets from `context`, runs pod or container updates/pulls via `pull_image` with shared pull deduplication, and renders the grouped `Update Summary:` to `stdout`.
@@ -549,7 +548,7 @@ recipes {
             .unwrap_err();
             assert!(matches!(
                 error,
-                PodError::Cli(cli_error) if cli_error.kind == CliErrorKind::InvalidTarget
+                PodError::Cli(cli_error) if cli_error.kind == CliErrorKind::MixedTargets
             ));
             assert!(err_stdout.is_empty());
         }

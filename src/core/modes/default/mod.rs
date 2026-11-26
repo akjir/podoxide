@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::core::config::Config;
 use crate::core::container::Container;
-use crate::core::context::{Context, DefaultAction, ModeAction};
+use crate::core::context::{Context, DefaultAction};
 use crate::core::log;
 use crate::core::pod::Pod;
 use crate::core::recipe::Recipe;
@@ -54,16 +54,14 @@ pub fn execute_lifecycle_action(
     context: &Context,
     pod_action: fn(&Recipe, bool) -> Result<ExecOutcome, PodError>,
     container_action: fn(&Container, &Pod, bool) -> Result<ExecOutcome, PodError>,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     let Some(first) = context.parameters.first() else {
         return Err(PodError::from(CliError::new(CliErrorKind::MissingTarget)));
     };
     if first.contains('/') {
-        let _ = execute_container_targets(context, container_action)?;
-        return Ok(());
+        return execute_container_targets(context, container_action);
     }
-    let _ = execute_pod_targets(context, pod_action)?;
-    Ok(())
+    execute_pod_targets(context, pod_action)
 }
 
 /// Dispatches default mode execution to the resolved lifecycle, status, help, or version action.
@@ -71,33 +69,37 @@ pub fn execute_lifecycle_action(
 /// # Workflow
 ///
 /// 1. Log that `default` mode is active when debug logging is enabled.
-/// 2. Route [`ModeAction::Default`] in enum declaration order (`Create`, `Down`, `Help`,
+/// 2. Route [`DefaultAction`] in enum declaration order (`Create`, `Down`, `Help`,
 ///    `Reload`, `Remove`, `Restart`, `Start`, `Status`, `Stop`, `Up`, `Update`, `Version`)
 ///    to the corresponding action module.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if `context.action` does not belong to `default` mode or if the
-/// selected action handler fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+/// Returns [`PodError`] if the selected action handler fails.
+pub fn handle(context: &Context, action: DefaultAction) -> Result<ExecOutcome, PodError> {
     log::debug("Default mode is used.");
-    match context.action() {
-        ModeAction::Default(DefaultAction::Create) => create::handle(context),
-        ModeAction::Default(DefaultAction::Down) => down::handle(context),
-        ModeAction::Default(DefaultAction::Help) => help::handle(context),
-        ModeAction::Default(DefaultAction::Reload) => reload::handle(context),
-        ModeAction::Default(DefaultAction::Remove) => remove::handle(context),
-        ModeAction::Default(DefaultAction::Restart) => restart::handle(context),
-        ModeAction::Default(DefaultAction::Start) => start::handle(context),
-        ModeAction::Default(DefaultAction::Status) => status::handle(context),
-        ModeAction::Default(DefaultAction::Stop) => stop::handle(context),
-        ModeAction::Default(DefaultAction::Up) => up::handle(context),
-        ModeAction::Default(DefaultAction::Update) => update::handle(context),
-        ModeAction::Default(DefaultAction::Version) => version::handle(context),
-        _ => Err(PodError::from(CliError::with_argument(
-            CliErrorKind::UnknownAction,
-            context.action().to_string(),
-        ))),
+    match action {
+        DefaultAction::Create => create::handle(context),
+        DefaultAction::Down => down::handle(context),
+        DefaultAction::Help => {
+            help::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
+        DefaultAction::Reload => reload::handle(context),
+        DefaultAction::Remove => remove::handle(context),
+        DefaultAction::Restart => restart::handle(context),
+        DefaultAction::Start => start::handle(context),
+        DefaultAction::Status => {
+            status::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
+        DefaultAction::Stop => stop::handle(context),
+        DefaultAction::Up => up::handle(context),
+        DefaultAction::Update => update::handle(context),
+        DefaultAction::Version => {
+            version::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
     }
 }
 
@@ -106,6 +108,12 @@ pub(crate) fn collect_container_specs(context: &Context) -> Result<Vec<(&str, &s
     let capacity = bounded_capacity(context.parameters.len(), MAX_COLLECTION_PREALLOC);
     let mut specs = Vec::with_capacity(capacity);
     for parameter in &context.parameters {
+        if !parameter.contains('/') {
+            return Err(PodError::from(CliError::with_argument(
+                CliErrorKind::MixedTargets,
+                parameter,
+            )));
+        }
         let (recipe_name, container_spec) = parse_container_target(parameter)?;
         if !context.config.has_recipe(recipe_name) {
             return Err(PodError::from(ConfigError::without_line(
@@ -123,7 +131,7 @@ pub(crate) fn expand_pod_targets(context: &Context) -> Result<Vec<String>, PodEr
     for parameter in &context.parameters {
         if parameter.contains('/') {
             return Err(PodError::from(CliError::with_argument(
-                CliErrorKind::InvalidTarget,
+                CliErrorKind::MixedTargets,
                 parameter,
             )));
         }
@@ -231,9 +239,10 @@ mod tests {
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::container;
-    use crate::core::context::{CommandAction, Context, DefaultAction, Mode, ModeAction};
+    use crate::core::context::{Context, DefaultAction};
     use crate::core::pod;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
+    use crate::io::exec::command::ExecOutcome;
     use crate::io::system::fs;
     use super::{collect_container_specs, execute_lifecycle_action, handle, resolve_container_targets};
 
@@ -373,21 +382,21 @@ recipes {
             other => panic!("expected PodError::Recipe(ContainerNotFound), got {other:?}"),
         }
 
-        // Mixing pod/group targets and container targets in either order fails with CliErrorKind::InvalidTarget.
+        // Mixing pod/group targets and container targets in either order fails with CliErrorKind::MixedTargets.
         context.parameters = vec![String::from("recipe"), String::from("recipe/1")];
         let mixed_pod_first =
             execute_lifecycle_action(&context, pod::up, container::up).unwrap_err();
         match mixed_pod_first {
-            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::InvalidTarget),
-            other => panic!("expected PodError::Cli(InvalidTarget), got {other:?}"),
+            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::MixedTargets),
+            other => panic!("expected PodError::Cli(MixedTargets), got {other:?}"),
         }
 
         context.parameters = vec![String::from("recipe/1"), String::from("recipe")];
         let mixed_container_first =
             execute_lifecycle_action(&context, pod::up, container::up).unwrap_err();
         match mixed_container_first {
-            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::InvalidTarget),
-            other => panic!("expected PodError::Cli(InvalidTarget), got {other:?}"),
+            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::MixedTargets),
+            other => panic!("expected PodError::Cli(MixedTargets), got {other:?}"),
         }
 
         // Malformed <recipe>/<container> segments fail with CliErrorKind::InvalidTarget.
@@ -434,7 +443,7 @@ recipes {
     }
 
     #[test]
-    fn handle_routes_default_actions_and_rejects_mismatched_action() {
+    fn handle_routes_default_actions() {
         let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
         let actions = [
             DefaultAction::Create,
@@ -454,21 +463,14 @@ recipes {
         for action in actions {
             let mut context = Context::new();
             context.config = root_config.clone();
-            context.mode = Mode::Default;
-            context.action = ModeAction::Default(action);
             if action.requires_targets() {
                 context.parameters = vec![String::from("recipe")];
             }
-            assert!(handle(&context).is_ok());
-        }
-
-        let mut invalid_context = Context::new();
-        invalid_context.mode = Mode::Default;
-        invalid_context.action = ModeAction::Command(CommandAction::Help);
-        let error = handle(&invalid_context).unwrap_err();
-        match error {
-            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::UnknownAction),
-            other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
+            assert_eq!(
+                handle(&context, action).unwrap(),
+                ExecOutcome::Succeeded,
+                "expected default::{action} to succeed"
+            );
         }
     }
 }

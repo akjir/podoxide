@@ -17,6 +17,7 @@
 
 use crate::core::context::Context;
 use crate::error::PodError;
+use crate::io::exec::command::ExecOutcome;
 use super::execute_logs;
 
 /// Fetches and displays static logs (`podman pod logs`) for a recipe's pod or a specific
@@ -38,7 +39,7 @@ use super::execute_logs;
 ///
 /// Returns [`PodError`] if loading or validating `<recipe>.pod` fails, the container
 /// specification cannot be resolved, or `podman pod logs` fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     execute_logs(context, false)
 }
 

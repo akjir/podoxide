@@ -21,11 +21,12 @@ pub mod list;
 
 use std::io::Write;
 
-use crate::core::context::{CommandAction, Context, ModeAction};
+use crate::core::context::{CommandAction, Context};
 use crate::core::log;
 use crate::core::pod::PodCommand;
 use crate::core::recipe::Recipe;
-use crate::error::{CliError, CliErrorKind, ConfigError, ConfigErrorKind, PodError};
+use crate::error::{ConfigError, ConfigErrorKind, PodError};
+use crate::io::exec::command::ExecOutcome;
 use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
 use crate::utilities::string::is_valid_identifier;
 
@@ -34,23 +35,24 @@ use crate::utilities::string::is_valid_identifier;
 /// # Workflow
 ///
 /// 1. Log that `command` mode is active when debug logging is enabled.
-/// 2. Route [`ModeAction::Command`] in enum declaration order (`Exec`, `Help`, `List`)
+/// 2. Route [`CommandAction`] in enum declaration order (`Exec`, `Help`, `List`)
 ///    to the corresponding action module ([`exec::handle`], [`help::handle`], [`list::handle`]).
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if `context.action` does not belong to `command` mode or if the
-/// selected action handler fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+/// Returns [`PodError`] if the selected action handler fails.
+pub fn handle(context: &Context, action: CommandAction) -> Result<ExecOutcome, PodError> {
     log::debug("Command mode is used.");
-    match context.action() {
-        ModeAction::Command(CommandAction::Exec) => exec::handle(context),
-        ModeAction::Command(CommandAction::Help) => help::handle(context),
-        ModeAction::Command(CommandAction::List) => list::handle(context),
-        _ => Err(PodError::from(CliError::with_argument(
-            CliErrorKind::UnknownAction,
-            context.action().to_string(),
-        ))),
+    match action {
+        CommandAction::Exec => exec::handle(context),
+        CommandAction::Help => {
+            help::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
+        CommandAction::List => {
+            list::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
     }
 }
 
@@ -111,10 +113,11 @@ mod tests {
     use std::path::Path;
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
-    use crate::core::context::{CommandAction, Context, DefaultAction, Mode, ModeAction};
+    use crate::core::context::{CommandAction, Context};
     use crate::core::pod::PodCommand;
     use crate::core::recipe::Recipe;
-    use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
+    use crate::error::{ConfigErrorKind, PodError};
+    use crate::io::exec::command::ExecOutcome;
     use super::{get_valid_commands, handle, is_valid_command_entry, load_target_recipe};
 
     #[test]
@@ -175,36 +178,30 @@ mod tests {
     }
 
     #[test]
-    fn handle_routes_command_actions_and_rejects_mismatched_action() {
+    fn handle_routes_command_actions() {
         let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
 
-        let mut help_context = Context::new();
-        help_context.mode = Mode::Command;
-        help_context.action = ModeAction::Command(CommandAction::Help);
-        assert!(handle(&help_context).is_ok());
+        let help_context = Context::new();
+        assert_eq!(
+            handle(&help_context, CommandAction::Help).unwrap(),
+            ExecOutcome::Succeeded
+        );
 
         let mut list_context = Context::new();
         list_context.config = root_config.clone();
-        list_context.mode = Mode::Command;
-        list_context.action = ModeAction::Command(CommandAction::List);
         list_context.parameters = vec![String::from("recipe")];
-        assert!(handle(&list_context).is_ok());
+        assert_eq!(
+            handle(&list_context, CommandAction::List).unwrap(),
+            ExecOutcome::Succeeded
+        );
 
         let mut exec_context = Context::new();
         exec_context.config = root_config;
-        exec_context.mode = Mode::Command;
-        exec_context.action = ModeAction::Command(CommandAction::Exec);
         exec_context.parameters = vec![String::from("recipe"), String::from("migrate")];
-        assert!(handle(&exec_context).is_ok());
-
-        let mut invalid_context = Context::new();
-        invalid_context.mode = Mode::Command;
-        invalid_context.action = ModeAction::Default(DefaultAction::Help);
-        let error = handle(&invalid_context).unwrap_err();
-        match error {
-            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::UnknownAction),
-            other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
-        }
+        assert_eq!(
+            handle(&exec_context, CommandAction::Exec).unwrap(),
+            ExecOutcome::Succeeded
+        );
     }
 
     #[test]

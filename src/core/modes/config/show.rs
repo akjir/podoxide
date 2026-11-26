@@ -99,6 +99,17 @@ mod tests {
             other => panic!("expected PodError::Config(NotFound), got {other:?}"),
         }
 
+        let broken_path = temp_dir.join("broken.conf");
+        fs::write_file(&broken_path, "general {{{ broken\nsecond line\n").unwrap();
+        let mut broken_config = Config::new();
+        broken_config.path = broken_path;
+        let mut broken_stdout = Vec::new();
+        show_with(&broken_config, &mut broken_stdout).unwrap();
+        assert_eq!(
+            String::from_utf8(broken_stdout).unwrap(),
+            "  1: general {{{ broken\n  2: second line\n"
+        );
+
         let _ = std_fs::remove_dir_all(&temp_dir);
     }
 }

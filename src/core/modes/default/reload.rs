@@ -19,6 +19,7 @@ use crate::core::container;
 use crate::core::context::Context;
 use crate::core::pod;
 use crate::error::PodError;
+use crate::io::exec::command::ExecOutcome;
 use super::execute_lifecycle_action;
 
 /// Tears down and rebuilds target pods and containers from their `.pod` recipes (`down` + `up`),
@@ -37,6 +38,6 @@ use super::execute_lifecycle_action;
 ///
 /// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
 /// cannot be read or validated, or a `podman` teardown/creation command fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     execute_lifecycle_action(context, pod::reload, container::reload)
 }

@@ -76,6 +76,7 @@ pub enum CliErrorKind {
     LimitExceeded,
     MissingFlagValue,
     MissingTarget,
+    MixedTargets,
     TargetNotFound,
     TooManyArguments,
     UnexpectedFlag,
@@ -93,6 +94,9 @@ impl Display for CliErrorKind {
             Self::LimitExceeded => "command-line argument limit exceeded",
             Self::MissingFlagValue => "missing value for command-line flag",
             Self::MissingTarget => "missing required target argument",
+            Self::MixedTargets => {
+                "cannot mix recipe/@group targets with '<recipe>/<container>' targets"
+            }
             Self::TargetNotFound => "target does not exist",
             Self::TooManyArguments => "too many positional arguments",
             Self::UnexpectedFlag => "flag is not valid for the selected mode",
@@ -118,6 +122,10 @@ mod tests {
             (CliErrorKind::LimitExceeded, "limit exceeded"),
             (CliErrorKind::MissingFlagValue, "missing value"),
             (CliErrorKind::MissingTarget, "missing required target"),
+            (
+                CliErrorKind::MixedTargets,
+                "cannot mix recipe/@group targets",
+            ),
             (CliErrorKind::TargetNotFound, "target does not exist"),
             (CliErrorKind::TooManyArguments, "too many positional"),
             (

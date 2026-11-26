@@ -20,34 +20,31 @@ pub mod help;
 pub mod inspect;
 pub mod show;
 
-use crate::core::context::{ConfigAction, Context, ModeAction};
+use crate::core::context::{ConfigAction, Context};
 use crate::core::log;
-use crate::error::{CliError, CliErrorKind, PodError};
+use crate::error::PodError;
+use crate::io::exec::command::ExecOutcome;
 
 /// Dispatches `config` mode execution to the resolved sub-action (`edit`, `help`, `inspect`, or `show`).
 ///
 /// # Workflow
 ///
 /// 1. Log that `config` mode is active when debug logging is enabled.
-/// 2. Route [`ModeAction::Config`] in enum declaration order (`Edit`, `Help`, `Inspect`, `Show`)
+/// 2. Route [`ConfigAction`] in enum declaration order (`Edit`, `Help`, `Inspect`, `Show`)
 ///    to the corresponding action module ([`edit::handle`], [`help::handle`], [`inspect::handle`], [`show::handle`]).
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if `context.action` does not belong to `config` mode or if the
-/// selected action handler fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+/// Returns [`PodError`] if the selected action handler fails.
+pub fn handle(context: &Context, action: ConfigAction) -> Result<ExecOutcome, PodError> {
     log::debug("Config mode is used.");
-    match context.action() {
-        ModeAction::Config(ConfigAction::Edit) => edit::handle(context),
-        ModeAction::Config(ConfigAction::Help) => help::handle(context),
-        ModeAction::Config(ConfigAction::Inspect) => inspect::handle(context),
-        ModeAction::Config(ConfigAction::Show) => show::handle(context),
-        _ => Err(PodError::from(CliError::with_argument(
-            CliErrorKind::UnknownAction,
-            context.action().to_string(),
-        ))),
+    match action {
+        ConfigAction::Edit => edit::handle(context)?,
+        ConfigAction::Help => help::handle(context)?,
+        ConfigAction::Inspect => inspect::handle(context)?,
+        ConfigAction::Show => show::handle(context)?,
     }
+    Ok(ExecOutcome::Succeeded)
 }
 
 #[cfg(test)]
@@ -55,12 +52,12 @@ mod tests {
     use std::path::Path;
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
-    use crate::core::context::{ConfigAction, Context, DefaultAction, Mode, ModeAction};
-    use crate::error::{CliErrorKind, PodError};
+    use crate::core::context::{ConfigAction, Context};
+    use crate::io::exec::command::ExecOutcome;
     use super::handle;
 
     #[test]
-    fn handle_routes_config_actions_and_rejects_mismatched_action() {
+    fn handle_routes_config_actions() {
         let root_config = Config::load(Path::new(DEFAULT_CONFIG_PATH)).unwrap();
 
         for action in [
@@ -71,18 +68,11 @@ mod tests {
         ] {
             let mut context = Context::new();
             context.config = root_config.clone();
-            context.mode = Mode::Config;
-            context.action = ModeAction::Config(action);
-            assert!(handle(&context).is_ok());
-        }
-
-        let mut invalid_context = Context::new();
-        invalid_context.mode = Mode::Config;
-        invalid_context.action = ModeAction::Default(DefaultAction::Help);
-        let error = handle(&invalid_context).unwrap_err();
-        match error {
-            PodError::Cli(cli_error) => assert_eq!(cli_error.kind, CliErrorKind::UnknownAction),
-            other => panic!("expected PodError::Cli(UnknownAction), got {other:?}"),
+            assert_eq!(
+                handle(&context, action).unwrap(),
+                ExecOutcome::Succeeded,
+                "expected config::{action} to succeed"
+            );
         }
     }
 }

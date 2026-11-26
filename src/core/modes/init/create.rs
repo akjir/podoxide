@@ -62,7 +62,7 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
     create_files(
         recipe_path,
         config_path,
-        context.flags.simulate,
+        context.flags.simulate(),
         &mut io::stderr().lock(),
     )
 }

@@ -46,11 +46,15 @@ podoxide/
     │   ├── recipe.rs
     │   └── span.rs
     ├── core/
-    │   ├── cli.rs
     │   ├── constants.rs
-    │   ├── context.rs
     │   ├── log.rs
     │   ├── mod.rs
+    │   ├── cli/
+    │   │   ├── flags.rs
+    │   │   ├── flags_tests.rs
+    │   │   ├── mod.rs
+    │   │   ├── positionals.rs
+    │   │   └── tests.rs
     │   ├── config/
     │   │   ├── mod.rs
     │   │   ├── parser.rs
@@ -68,6 +72,11 @@ podoxide/
     │   │   ├── validation_tests.rs
     │   │   ├── volume.rs
     │   │   └── volume_tests.rs
+    │   ├── context/
+    │   │   ├── actions.rs
+    │   │   ├── flags.rs
+    │   │   ├── mod.rs
+    │   │   └── tests.rs
     │   ├── pod/
     │   │   ├── lifecycle.rs
     │   │   ├── lifecycle_tests.rs
@@ -206,9 +215,13 @@ The `src/core/` directory contains application state, domain models, argument pa
 | File                                | Function |
 | :---------------------------------- | :------- |
 | `src/core/mod.rs`                   | Declares and re-exports the core domain modules and the `modes` submodule. |
-| `src/core/cli.rs`                   | Parses CLI arguments (`OsStr` / `OsString`), extracts global and mode-specific flags (`--config`, `--debug`, `--simulate`), and selects modes. |
+| `src/core/cli/mod.rs`               | Declares `MAX_CLI_ARGS` and exposes `parse_args` to populate `Context` from raw `OsString` CLI arguments. |
+| `src/core/cli/flags.rs`             | Implements single-pass CLI flag scanning, `--tail`/`--since`/`--until`/`--config` value validation, and action-aware flag validation. |
+| `src/core/cli/positionals.rs`       | Resolves modes, sub-actions, and target parameters, rejecting mixed pod/group and `<recipe>/<container>` targets (`CliErrorKind::MixedTargets`). |
 | `src/core/constants.rs`             | Defines global application metadata and the compile-time build version constant (`APP_NAME`, `APP_VERSION`). |
-| `src/core/context.rs`               | Defines the runtime `Context` structure, mode and action enumerations, parsed flags, and positional parameters. |
+| `src/core/context/mod.rs`           | Defines the runtime `Context` structure (deriving `Mode` from `ModeAction`), config loading, and `requires_config`, `requires_podman`, and `requires_elevation_confirmation` predicates. |
+| `src/core/context/actions.rs`       | Defines `Mode`, `ModeAction`, and all eight typed mode sub-action enumerations with `Display`, `FromStr`, and `ModeAction::mode`. |
+| `src/core/context/flags.rs`         | Defines bitmask-backed `Flags` (`P-MASK-SAFE`) with getters and setters for all seven boolean CLI flags plus value flag storage. |
 | `src/core/log.rs`                   | Provides structured output, numbered-line printing (`write_numbered_lines`), and diagnostic logging (`debug`, `info`, `pod_error`, `write_*`) with debug state control. |
 | `src/core/config/mod.rs`            | Defines `Config`, `PodsConfig`, `RecipesConfig`, defaults, and `MAX_GROUP_EXPANSION_DEPTH`, re-exporting path and editor helpers. |
 | `src/core/config/parser.rs`         | Parses and validates `pods.conf` PSL AST blocks and directives (`general`, `pods`, `recipes`, `groups`). |
@@ -237,7 +250,7 @@ The `src/core/modes/` directory contains the mode router and one subdirectory pe
 
 | File                    | Function |
 | :---------------------- | :------- |
-| `src/core/modes/mod.rs` | Re-exports the mode enumerations and dispatches execution to the active mode handler in O(1) time. |
+| `src/core/modes/mod.rs` | Re-exports the mode enumerations and dispatches typed `ModeAction` variants to mode handlers in O(1) time, returning `ExecOutcome`. |
 
 ### Command Mode (`src/core/modes/command/`)
 
@@ -393,13 +406,13 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 | `src/utilities/collection.rs` | Provides slice and vector helpers such as option token splitting and validation (`append_option_tokens`, `is_valid_option_value`) and bounded pre-allocation utilities (`bounded_capacity`). |
 | `src/utilities/format.rs`     | Formats shell-escaped command strings (`format_command`), 1-based list indices (`format_index_prefix`), quoted conjunctions (`format_quoted_conjunction`), recipe inspection hints (`format_recipe_error_hint`), and byte counts (`format_bytes`), parses human-readable sizes (`parse_size_to_bytes`), aligns status columns (`format_line`), and formats CLI version headers (`format_version_header`). |
 | `src/utilities/path.rs`       | Provides pure lexical path normalization (`normalize_lexical_path`, `pop_relative_or_absolute`), full path construction (`build_full_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), directory, editor, volume option, and target path validation (`has_regular_target_name`, `is_valid_directory`, `is_valid_directory_path`, `is_valid_editor_value`, `is_valid_target_path`, `is_valid_volume_options`), path token sanitization (`sanitize_path_token`), extension matching (`matches_extension`), and parent traversal checks (`has_parent_dir`) with zero `crate::core` imports. |
-| `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character detection and sanitization (`contains_control_or_bidi`, `contains_control_or_whitespace`, `is_bidi_control`, `sanitize_char`, `sanitize_text`), empty value literal detection (`is_empty_value_literal`), shell quoting (`escape_shell`, `is_safe_shell_byte`), identifier, target, token, text, and pod/container name validation and normalization (`is_identifier_continue`, `is_identifier_start`, `is_valid_container_suffix`, `is_valid_group_target`, `is_valid_identifier`, `is_valid_pod_or_container_name`, `is_valid_recipe_identifier`, `is_valid_target_segment`, `is_valid_text`, `is_valid_token`, `normalize_name`), and strict ASCII integer parsing (`parse_ascii_u32`). |
+| `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character detection and sanitization (`contains_control_or_bidi`, `contains_control_or_whitespace`, `is_bidi_control`, `sanitize_char`, `sanitize_text`), empty value literal detection (`is_empty_value_literal`), shell quoting (`escape_shell`, `is_safe_shell_byte`), identifier, target, token, text, log flag, and pod/container name validation and normalization (`is_identifier_continue`, `is_identifier_start`, `is_valid_container_suffix`, `is_valid_group_target`, `is_valid_identifier`, `is_valid_log_tail`, `is_valid_log_time`, `is_valid_pod_or_container_name`, `is_valid_recipe_identifier`, `is_valid_target_segment`, `is_valid_text`, `is_valid_token`, `is_valid_unmanaged_container_name`, `normalize_name`), and strict ASCII integer parsing (`parse_ascii_u32`). |
 
 ## Execution Flow
 
-1. **Entry (`src/main.rs`):** Invokes the library runner and maps the result to `std::process::ExitCode`.
-2. **Environment Verification (`src/io/system/env.rs`, `src/io/exec/podman.rs`):** Verifies Linux OS, checks Podman `5.8.0+`, and prompts for confirmation when running as `root`.
-3. **CLI Parsing (`src/core/cli.rs`):** Scans CLI arguments into `Context` (`src/core/context.rs`), extracting global flags (`--config`, `--debug`, `--simulate`), mode selection, action, and targets.
-4. **Configuration Loading (`src/io/psl/`, `src/core/config/`):** Loads and parses `pods.conf` unless bypassed by standalone actions (`init`, `version`, `help`, or parameterless mode calls).
-5. **Mode Dispatch (`src/core/modes/mod.rs`):** Routes `Context` to the selected mode handler (`default`, `command`, `config`, `connect`, `image`, `init`, `logs`, or `recipe`).
+1. **Entry (`src/main.rs`):** Invokes the CLI pipeline and maps `Result<ExecOutcome, PodError>` to `std::process::ExitCode` without duplicating error output on `ExecOutcome::Failed`.
+2. **CLI Parsing (`src/core/cli/`):** Scans CLI arguments into `Context` (`src/core/context/`), extracting global and action-specific flags, derived mode action, and validated targets.
+3. **Environment Verification (`src/io/system/env.rs`, `src/io/exec/podman/`):** Verifies Linux OS, checks Podman `5.8.0+` when `context.requires_podman()`, and prompts for confirmation when running as `root` and `context.requires_elevation_confirmation()`.
+4. **Configuration Loading (`src/io/psl/`, `src/core/config/`):** Loads and parses `pods.conf` unless bypassed by standalone actions (`init`, `version`, `help`, `config show`, or parameterless mode calls).
+5. **Mode Dispatch (`src/core/modes/mod.rs`):** Routes `Context` and its typed sub-action enum to the selected mode handler (`default`, `command`, `config`, `connect`, `image`, `init`, `logs`, or `recipe`) and propagates `ExecOutcome`.
 6. **Recipe Resolution & Execution (`src/core/recipe/`, `src/core/pod/`, `src/core/container/`, `src/io/exec/`):** Expands `@group` targets, parses and validates `.pod` recipes via `src/io/psl/`, and executes or simulates the resulting `podman` commands.

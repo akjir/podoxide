@@ -19,6 +19,7 @@ use crate::core::container;
 use crate::core::context::Context;
 use crate::core::pod;
 use crate::error::PodError;
+use crate::io::exec::command::ExecOutcome;
 use super::execute_lifecycle_action;
 
 /// Stops target containers in reverse bottom-to-top order (`N..1`) and removes the containers
@@ -38,7 +39,7 @@ use super::execute_lifecycle_action;
 ///
 /// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
 /// cannot be read or validated, or a `podman` stop/remove command fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     execute_lifecycle_action(context, pod::down, |item, _pod, simulate| {
         container::down(item, simulate)
     })
