@@ -137,7 +137,7 @@ impl PslErrorKind {
                 "start block and directive names with an ASCII letter or underscore without quotes."
             }
             Self::LimitExceeded => {
-                "reduce file size, block nesting depth, block count, or arguments per statement."
+                "reduce file size, block nesting depth, block count, statements per block, or arguments per statement."
             }
             Self::MissingDirectiveArgument => {
                 "supply a value for the directive or add ' {' to open a block."
@@ -298,6 +298,13 @@ mod tests {
         let trailing_diagnostic = trailing_token.diagnostic.as_ref().unwrap();
         assert_eq!(trailing_diagnostic.col_number, 12);
         assert_eq!(trailing_diagnostic.annotation_carets, "           ^^^^^^^^");
+
+        assert!(
+            PslErrorKind::LimitExceeded
+                .help_text()
+                .contains("statements per block"),
+            "LimitExceeded help must mention statements per block"
+        );
 
         let first_bad_brace = PslError::new(PslErrorKind::InvalidBlockHeader, 1)
             .with_diagnostic("pod app{ other {\n", "./test.pod");

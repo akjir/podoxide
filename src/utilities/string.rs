@@ -30,12 +30,14 @@ pub fn clamp_utf8_prefix(input: &str, max_bytes: usize) -> &str {
     &input[..boundary]
 }
 
-/// Evaluates whether `value` contains any control or Unicode bidirectional formatting character.
+/// Evaluates whether `value` contains any control, line-separator, or Unicode bidirectional formatting character.
 #[must_use]
 pub fn contains_control_or_bidi(value: &str) -> bool {
-    value
-        .chars()
-        .any(|character| character.is_control() || is_bidi_control(character))
+    value.chars().any(|character| {
+        character.is_control()
+            || matches!(character, '\u{2028}' | '\u{2029}')
+            || is_bidi_control(character)
+    })
 }
 
 /// Evaluates whether `value` contains any whitespace, control, or bidirectional formatting character.
@@ -220,12 +222,14 @@ pub fn parse_ascii_u32(segment: &str) -> Option<u32> {
     segment.parse::<u32>().ok()
 }
 
-/// Replaces control characters and bidirectional formatting characters with an ASCII space.
+/// Replaces control characters, Unicode line/paragraph separators, and bidirectional formatting characters with an ASCII space.
 #[inline]
 #[must_use]
 pub const fn sanitize_char(character: char) -> char {
-    if matches!(character, '\u{0000}'..='\u{001F}' | '\u{007F}'..='\u{009F}')
-        || is_bidi_control(character)
+    if matches!(
+        character,
+        '\u{0000}'..='\u{001F}' | '\u{007F}'..='\u{009F}' | '\u{2028}' | '\u{2029}'
+    ) || is_bidi_control(character)
     {
         return ' ';
     }
@@ -311,6 +315,8 @@ mod tests {
         assert!(!contains_control_or_bidi("example app"));
         assert!(contains_control_or_bidi("example\napp"));
         assert!(contains_control_or_bidi("example\u{202E}app"));
+        assert!(contains_control_or_bidi("example\u{2028}app"));
+        assert!(contains_control_or_bidi("example\u{2029}app"));
 
         assert!(!contains_control_or_whitespace("example-app_1"));
         assert!(contains_control_or_whitespace("example app"));
@@ -328,7 +334,10 @@ mod tests {
         assert_eq!(sanitize_char('\n'), ' ');
         assert_eq!(sanitize_char('\x1b'), ' ');
         assert_eq!(sanitize_char('\u{202E}'), ' ');
+        assert_eq!(sanitize_char('\u{2028}'), ' ');
+        assert_eq!(sanitize_char('\u{2029}'), ' ');
         assert_eq!(sanitize_text("ok\nbad\u{202E}end", 6), "ok bad");
+        assert_eq!(sanitize_text("ok\u{2028}bad\u{2029}x", 32), "ok bad x");
 
         assert!(is_empty_value_literal(""));
         assert!(is_empty_value_literal("\"\""));

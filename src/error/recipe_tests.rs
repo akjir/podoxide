@@ -140,6 +140,11 @@ fn recipe_error_kind_display_and_diagnostics() {
         assert!(rendered.contains("--> ./recipe.pod:1:19"));
         assert!(rendered.contains("                  ^^^^^^^^^^^^^^^^^^"));
         assert!(rendered.contains("= help: "));
+        assert!(
+            !kind.help_text().contains(';'),
+            "PSL help text for {kind:?} must not suggest invalid ';' terminators: {}",
+            kind.help_text()
+        );
     }
 
     let tokenless = RecipeError {

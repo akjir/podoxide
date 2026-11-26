@@ -15,6 +15,7 @@
 
 //! Command-line formatting, byte size formatting, human-readable size parsing, and table column alignment helpers.
 
+use std::borrow::Cow;
 use std::iter;
 
 use crate::utilities::collection::{self, MAX_COLLECTION_PREALLOC};
@@ -65,7 +66,7 @@ pub fn format_bytes(bytes: u64) -> String {
 /// Formats `program` and `arguments` into a single shell-escaped command string.
 #[must_use]
 pub fn format_command<S: AsRef<str>>(program: &str, arguments: &[S]) -> String {
-    let escaped_program = string::escape_shell(program);
+    let escaped_program = escape_shell_program(program);
     let capacity = arguments
         .len()
         .saturating_mul(ESTIMATED_ARG_BYTES)
@@ -188,6 +189,16 @@ pub fn parse_size_to_bytes(size_str: &str) -> u64 {
     scaled as u64
 }
 
+/// Shell-escapes `program` in command word position, quoting `=` so POSIX shells do not parse it as an environment assignment.
+#[must_use]
+fn escape_shell_program(program: &str) -> Cow<'_, str> {
+    let escaped = string::escape_shell(program);
+    if matches!(escaped, Cow::Borrowed(_)) && program.contains('=') {
+        return Cow::Owned(format!("'{program}'"));
+    }
+    escaped
+}
+
 /// Resolves the exact byte multiplier for a decimal (`B`, `kB`, `MB`, `GB`, `TB`, `PB`) or IEC (`KiB`..`PiB`) unit suffix.
 #[must_use]
 fn unit_multiplier(unit: &str) -> Option<f64> {
@@ -301,6 +312,10 @@ mod tests {
             "podman run --name app 'O'\\''Hara' 'Hancock 2'"
         );
         assert_eq!(format_command("", &["--version"]), "'' --version");
+        assert_eq!(
+            format_command("FOO=bar", &["--env=BAZ", "./pods.conf"]),
+            "'FOO=bar' --env=BAZ ./pods.conf"
+        );
         assert_eq!(format_index_prefix(1, 5), "1)");
         assert_eq!(format_index_prefix(1, 10), " 1)");
         assert_eq!(format_index_prefix(10, 10), "10)");

@@ -77,6 +77,10 @@ fn build_full_path_and_directory_validation_and_sanitization() {
     assert!(!is_valid_directory_path("../pods"));
     assert!(!is_valid_directory_path("/var:pods"));
     assert!(!is_valid_directory_path("/var/pods\n"));
+    assert!(!is_valid_directory_path("data /"));
+    assert!(!is_valid_directory_path("data/   /"));
+    assert!(!is_valid_directory_path("/pods/app /"));
+    assert!(!is_valid_directory_path("/tmp/ok\u{2028}bad"));
 
     assert!(is_valid_editor_value("vim"));
     assert!(is_valid_editor_value("/usr/bin/nvim"));
@@ -188,6 +192,11 @@ fn parent_dir_extension_and_lexical_normalization() {
     assert!(!is_valid_target_path(Path::new("...conf")));
     assert!(!is_valid_target_path(Path::new("../pods.conf")));
     assert!(!is_valid_target_path(Path::new("/tmp/../pods.conf")));
+    assert!(!is_valid_target_path(Path::new("./   .conf")));
+    assert!(!is_valid_target_path(Path::new("/tmp/   .conf")));
+    assert!(!is_valid_target_path(Path::new("./ -flag.conf")));
+    assert!(!is_valid_target_path(Path::new("./ +flag.conf")));
+    assert!(!is_valid_target_path(Path::new("./ok\u{2028}bad.pod")));
     let non_utf8_path = PathBuf::from(OsString::from_vec(vec![b'.', b'/', 0xFF, b'.', b'c']));
     assert!(!is_valid_target_path(&non_utf8_path));
 

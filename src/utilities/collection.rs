@@ -52,7 +52,7 @@ pub fn is_valid_option_value(value: &str) -> bool {
     }
     if starts_with_quote(trimmed) {
         if let Some(unquoted) = unquote_single_wrapped(trimmed) {
-            return string::is_valid_text(&unquoted);
+            return is_valid_unquoted_option_token(&unquoted);
         }
         return has_valid_shell_quoting(trimmed);
     }
@@ -178,11 +178,13 @@ fn is_valid_flag_token(flag: &str) -> bool {
 /// Evaluates whether the trailing value portion of a whitespace-separated `--flag <rest>` option is a valid single value.
 #[must_use]
 fn is_valid_option_rest(rest: &str) -> bool {
-    if rest.starts_with('=') {
+    if rest.starts_with('=') || matches!(rest, "-" | "--") {
         return false;
     }
     if starts_with_quote(rest) {
-        return unquote_single_wrapped(rest).is_some_and(|inner| string::is_valid_text(&inner));
+        return unquote_single_wrapped(rest).is_some_and(|inner| {
+            string::is_valid_text(&inner) && !matches!(inner.trim(), "-" | "--")
+        });
     }
     if let Some((_, assigned)) = split_assigned_token(rest) {
         if starts_with_quote(assigned) {
@@ -191,6 +193,26 @@ fn is_valid_option_rest(rest: &str) -> bool {
         return !assigned.contains(char::is_whitespace) && has_valid_shell_quoting(assigned);
     }
     !rest.contains(char::is_whitespace) && has_valid_shell_quoting(rest)
+}
+
+/// Evaluates whether the unquoted payload of a single-wrapped option token rejects bare delimiters and malformed flag assignments.
+#[must_use]
+fn is_valid_unquoted_option_token(token: &str) -> bool {
+    if !string::is_valid_text(token) {
+        return false;
+    }
+    let inner = token.trim();
+    if matches!(inner, "-" | "--")
+        || inner.starts_with('=')
+        || inner.starts_with("-=")
+        || inner.starts_with("--=")
+    {
+        return false;
+    }
+    if let Some((key, assigned)) = split_assigned_token(inner) {
+        return !key.starts_with('-') || string::is_valid_text(assigned);
+    }
+    true
 }
 
 /// Scans a single- or double-quoted segment starting at `start` in `input` and returns the byte offset after the closing quote.

@@ -73,8 +73,10 @@ pub fn is_valid_directory(path: &Path) -> bool {
 /// Evaluates whether `value` is a safe directory path without `..` traversal, colons, or control characters.
 #[must_use]
 pub fn is_valid_directory_path(value: &str) -> bool {
+    let trimmed_slashes = value.trim_end_matches('/');
     if value.is_empty()
         || value != value.trim()
+        || trimmed_slashes != trimmed_slashes.trim_end()
         || value.starts_with('-')
         || value.contains(':')
         || string::contains_control_or_bidi(value)
@@ -216,10 +218,10 @@ pub fn sanitize_path_token(path: &Path) -> String {
     string::sanitize_text(&lossy, MAX_ERROR_TOKEN_BYTES)
 }
 
-/// Evaluates whether `stem` is non-empty and contains at least one non-dot byte.
+/// Evaluates whether `stem` is non-empty after trimming and contains at least one non-dot byte.
 #[must_use]
 pub(crate) fn has_valid_stem(stem: &str) -> bool {
-    !stem.is_empty() && !stem.bytes().all(|byte| byte == b'.')
+    !stem.trim().is_empty() && !stem.bytes().all(|byte| byte == b'.')
 }
 
 /// Validates structural invariants of a raw target path string and returns its terminal file name.
@@ -234,7 +236,8 @@ pub(crate) fn validate_raw_target_file_name(raw_value: &str) -> Option<&str> {
         return None;
     }
     let file_name = raw_value.rsplit('/').next().unwrap_or(raw_value);
-    (!file_name.starts_with(['-', '+'])).then_some(file_name)
+    (!file_name.is_empty() && file_name == file_name.trim() && !file_name.starts_with(['-', '+']))
+        .then_some(file_name)
 }
 
 /// Applies a single `component` to `normalized` during lexical path normalization.

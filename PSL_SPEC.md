@@ -30,7 +30,8 @@ Horizontal whitespace separates tokens within a single line and is otherwise ins
 - **Allowed horizontal whitespace characters:**
   - ASCII Space (`U+0020`, `' '`)
   - ASCII Horizontal Tab (`U+0009`, `'\t'`)
-- Other Unicode whitespace characters and Unicode control characters (`character.is_control()`) outside of quoted strings MUST be rejected with `UnexpectedToken`.
+- Other Unicode whitespace characters and Unicode control characters (`character.is_control()`) outside of quoted strings and comments MUST be rejected with `UnexpectedToken`.
+- Inside `#` comments, control characters other than ASCII horizontal tab (`'\t'`) and Unicode line/paragraph separators (`U+2028`, `U+2029`) MUST be rejected with `UnexpectedToken`.
 
 ### 2.3 Newlines (Line Terminators)
 PSL is a line-oriented language. Directives and block headers are terminated by a newline.
@@ -42,7 +43,7 @@ PSL is a line-oriented language. Directives and block headers are terminated by 
 
 ### 2.4 Comments
 - A comment starts with the hash character (`#`, `U+0023`) outside of a quoted string.
-- All characters from `#` up to (but not including) the next newline (`LF`, `CRLF`) or End-Of-File (`EOF`) are ignored by the parser.
+- All valid non-control UTF-8 characters (plus ASCII horizontal tab `'\t'`) from `#` up to (but not including) the next newline (`LF`, `CRLF`) or End-Of-File (`EOF`) are ignored by the parser. Control characters (except `'\t'`) and Unicode line/paragraph separators (`U+2028`, `U+2029`) inside comments MUST be rejected with `UnexpectedToken`.
 - A `#` character inside a bare word (e.g., `foo#bar`) is NOT part of the bare word; it immediately terminates the token and starts an inline comment (`foo` followed by comment `#bar`).
 - Multi-line block comments are not supported.
 
@@ -170,7 +171,7 @@ single-char     = ? any UTF-8 char except '\'', '\r', '\n' ? ;
 
 (* Whitespace & Comments *)
 empty-line      = ws* [ comment ] ( newline | eof ) ;
-comment         = "#" { ? any UTF-8 char except '\r', '\n' ? } ;
+comment         = "#" { ? any UTF-8 char except control chars (other than '\t'), U+2028, U+2029 ? } ;
 ws              = " " | "\t" ;
 newline         = "\n" | "\r\n" ;
 ```
@@ -195,7 +196,7 @@ The PSL parser MUST return a strongly typed error enum (including the 1-based li
 - **Missing Argument or Brace (`MissingDirectiveArgument`):** A single identifier appears on a line without arguments and without an opening `{` (e.g., `general` at root level or `editor` inside a block).
 - **Quoted Identifier (`InvalidIdentifier`):** A block or directive name is quoted (e.g., `"general" {` or `"editor" vim`) or starts with an invalid character (e.g., `123block {` or `-flag val`).
 - **Missing Whitespace Before Brace (`InvalidBlockHeader`):** The opening `{` is attached directly to the identifier or argument (bare word, single-quoted, or double-quoted) without whitespace (e.g., `general{`, `pod app{`, `pod "app"{`, or `pod 'app'{`).
-- **Trailing Tokens or Invalid Characters (`UnexpectedToken`):** Non-comment tokens appear on the same line after `{` (except `}`) or after `}`, or a standalone `\r`, non-ASCII whitespace, or control character (`character.is_control()`) appears outside quoted strings.
+- **Trailing Tokens or Invalid Characters (`UnexpectedToken`):** Non-comment tokens appear on the same line after `{` (except `}`) or after `}`, a standalone `\r`, non-ASCII whitespace, or control character (`character.is_control()`) appears outside quoted strings and comments, or a control character (other than `'\t'`) or Unicode line/paragraph separator (`U+2028`, `U+2029`) appears inside a comment.
 - **Unclosed Block (`UnclosedBlock`):** `EOF` is reached while nesting depth $> 0$ (reports the innermost unclosed block's opening line and `{` column).
 - **Unmatched Closing Brace (`UnexpectedClosingBrace`):** `}` is encountered at nesting depth `0`.
 - **Unterminated Quote (`UnterminatedString`):** A `"` or `'` string reaches `\r`, `\n`, or `EOF` before its matching closing quote.

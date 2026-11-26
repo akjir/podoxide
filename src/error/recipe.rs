@@ -276,14 +276,14 @@ impl RecipeErrorKind {
                 "add 'image <repository>:<tag>' inside this 'container' block."
             }
             Self::MissingContainersBlock => {
-                "add at least one 'container <name> { image ... }' block to the recipe."
+                "add at least one 'container' block with an 'image' directive to the recipe."
             }
             Self::MissingPodBlock => {
-                "add a 'pod <id> { name ...; registry ... }' block to the recipe."
+                "add a 'pod <id>' block with required 'name' and 'registry' directives to the recipe."
             }
             Self::MissingPodName => "add 'name \"<Display Name>\"' inside the 'pod' block.",
             Self::MissingPodPath => {
-                "set 'path /pods/<name>' in the recipe's 'pod' block or configure 'pods { path ... }' in 'pods.conf'."
+                "set 'path /pods/<name>' in the recipe's 'pod' block or configure 'path' inside 'pods' in 'pods.conf'."
             }
             Self::MissingPodRegistry => {
                 "add 'registry <hostname>' (for example: 'registry docker.io') inside the 'pod' block."

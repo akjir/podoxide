@@ -360,16 +360,18 @@ impl<'a> Scanner<'a> {
         Err(self.unterminated(line, quote_offset))
     }
 
-    /// Advances the cursor from `#` to the end of the line, rejecting standalone `\r` bytes.
+    /// Advances the cursor from `#` to the end of the line, rejecting control characters (except `\t`) and Unicode line separators.
     pub(super) fn skip_comment(&mut self) -> Result<(), PslError> {
-        while let Some(byte) = self.peek_byte() {
-            if byte == b'\n' || (byte == b'\r' && self.is_crlf()) {
+        while let Some(character) = self.peek_char() {
+            if character == '\n' || (character == '\r' && self.is_crlf()) {
                 break;
             }
-            if byte == b'\r' {
+            if (character.is_control() && character != '\t')
+                || matches!(character, '\u{2028}' | '\u{2029}')
+            {
                 return Err(self.error_here(PslErrorKind::UnexpectedToken, self.line));
             }
-            self.cursor += 1;
+            self.cursor += character.len_utf8();
         }
         Ok(())
     }
