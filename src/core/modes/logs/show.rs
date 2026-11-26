@@ -18,7 +18,7 @@
 use crate::core::context::Context;
 use crate::error::PodError;
 use crate::io::exec::command::ExecOutcome;
-use super::execute_logs;
+use super::runner;
 
 /// Fetches and displays static logs (`podman pod logs`) for a recipe's pod or a specific
 /// container and exits immediately.
@@ -27,20 +27,22 @@ use super::execute_logs;
 ///
 /// 1. Extract `<target>` (`context.parameters[0]`) and split into `<recipe>` and optional
 ///    `<container>` specification.
-/// 2. Read and validate only the single targeted recipe file (`<recipes.path>/<recipe>.pod`).
-///    Do not read any other `.pod` files in the directory.
-/// 3. If a `<container>` specification is present, resolve it against the recipe's container
+/// 2. Validate `--since`, `--until`, and `--tail` flag values before accessing the filesystem.
+/// 3. Verify that `<recipe>` is registered in `context.config.recipes.groups`, then read and
+///    validate only `<recipes.path>/<recipe>.pod`.
+/// 4. If a `<container>` specification is present, resolve it against the recipe's container
 ///    definitions (by 1-based index, relative `*name`/`name`, or full name).
-/// 4. Build and execute (or simulate) `podman pod logs -n --color` (without `-f`) with
+/// 5. Build and execute (or simulate) `podman pod logs -n --color` (without `-f`) with
 ///    optional flags (`--since`, `--until`, `--tail`, `--timestamps`), optional
 ///    `-c <container_name>`, and `<pod_id>`.
 ///
 /// # Errors
 ///
-/// Returns [`PodError`] if loading or validating `<recipe>.pod` fails, the container
-/// specification cannot be resolved, or `podman pod logs` fails.
+/// Returns [`PodError`] if target or flag validation fails, the recipe is not registered, loading
+/// or validating `<recipe>.pod` fails, the container specification cannot be resolved, or
+/// `podman pod logs` fails.
 pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
-    execute_logs(context, false)
+    runner::execute_logs(context, false)
 }
 
 #[cfg(test)]

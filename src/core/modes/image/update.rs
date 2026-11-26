@@ -18,7 +18,7 @@
 use std::io;
 
 use crate::core::context::Context;
-use crate::core::modes::default::update::execute_update_with;
+use crate::core::modes::update_runner;
 use crate::core::update::SummaryKind;
 use crate::error::PodError;
 use crate::io::exec::command::ExecOutcome;
@@ -47,7 +47,7 @@ pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     let mut pull_image = podman::pull_image;
-    execute_update_with(
+    update_runner::execute_update_with(
         context,
         SummaryKind::ImagePull,
         &mut pull_image,
@@ -63,7 +63,7 @@ mod tests {
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::context::{Context, ImageAction, ModeAction};
     use crate::core::log;
-    use crate::core::modes::default::update::execute_update_with;
+    use crate::core::modes::update_runner;
     use crate::core::update::SummaryKind;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
     use crate::io::exec::command::ExecOutcome;
@@ -115,7 +115,7 @@ mod tests {
         };
 
         let mut pod_out = Vec::new();
-        let pod_outcome = execute_update_with(
+        let pod_outcome = update_runner::execute_update_with(
             &context,
             SummaryKind::ImagePull,
             &mut mock_pull,
@@ -143,7 +143,7 @@ mod tests {
         assert!(handle(&context).is_ok());
 
         let mut cnt_out = Vec::new();
-        let cnt_outcome = execute_update_with(
+        let cnt_outcome = update_runner::execute_update_with(
             &context,
             SummaryKind::ImagePull,
             &mut mock_pull,

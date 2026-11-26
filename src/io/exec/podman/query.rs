@@ -49,6 +49,12 @@ pub fn check_version() -> bool {
     is_supported_version(&output)
 }
 
+/// Executes `podman container exists <container_name>` and returns `true` when the container exists in local storage.
+#[must_use]
+pub fn container_exists(container_name: &str) -> bool {
+    container_exists_with(container_name, &mut super::run_podman_capture)
+}
+
 /// Executes `podman container inspect -f '{{.State.Status}}' <container_name>` and returns `true` when the container is running.
 #[must_use]
 pub fn container_running(container_name: &str) -> bool {
@@ -102,6 +108,18 @@ where
     let ps_output = capture(&["ps", "-a", "--no-trunc", "--format", "{{.ImageID}}"])
         .ok_or_else(|| PodError::from(io::Error::other("Failed to query in-use podman images.")))?;
     Ok(parse_in_use_output(&ps_output))
+}
+
+/// Evaluates whether `container_name` exists via `capture`, supporting unmanaged container names.
+#[must_use]
+fn container_exists_with<F>(container_name: &str, capture: &mut F) -> bool
+where
+    F: FnMut(&[&str]) -> Option<String>,
+{
+    if !string::is_valid_unmanaged_container_name(container_name) {
+        return false;
+    }
+    capture(&["container", "exists", container_name]).is_some()
 }
 
 /// Evaluates whether `container_name` is running via `capture`, supporting unmanaged container names.

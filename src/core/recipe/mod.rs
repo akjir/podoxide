@@ -92,7 +92,16 @@ impl Recipe {
     ///
     /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
     pub fn resolve_container(&self, container_spec: &str) -> Result<&Container, RecipeError> {
-        resolve::resolve_container_entry(self, container_spec).map(|(container, _)| container)
+        resolve::resolve_container_entry(self, container_spec).map(|(_, container, _)| container)
+    }
+
+    /// Resolves a container reference (`1..=N`, `*suffix`, or name) to its 0-based index in `self.containers`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
+    pub fn resolve_container_index(&self, container_spec: &str) -> Result<usize, RecipeError> {
+        resolve::resolve_container_entry(self, container_spec).map(|(index, _, _)| index)
     }
 
     /// Resolves a container reference (`1..=N`, `*suffix`, or name) against this recipe's containers.
@@ -101,7 +110,7 @@ impl Recipe {
     ///
     /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
     pub fn resolve_container_name(&self, container_spec: &str) -> Result<String, RecipeError> {
-        resolve::resolve_container_entry(self, container_spec).map(|(_, name)| name.into_owned())
+        resolve::resolve_container_entry(self, container_spec).map(|(_, _, name)| name.into_owned())
     }
 }
 

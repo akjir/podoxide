@@ -28,8 +28,9 @@ pub use self::lifecycle::{
     remove_pod, start_container, stop_container, stop_pod,
 };
 pub use self::query::{
-    FIELD_DELIMITER, RECORD_DELIMITER, check_version, container_running, pod_exists,
-    query_container_image_id, query_image_id, query_images, query_in_use_images, query_ps_status,
+    FIELD_DELIMITER, RECORD_DELIMITER, check_version, container_exists, container_running,
+    pod_exists, query_container_image_id, query_image_id, query_images, query_in_use_images,
+    query_ps_status,
 };
 pub use self::runtime::{
     ExecContainer, PodLogs, PullOutcome, SHELL_FALLBACK_COMMAND, exec_container, logs_pod,

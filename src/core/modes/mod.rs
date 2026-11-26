@@ -23,6 +23,8 @@ pub mod image;
 pub mod init;
 pub mod logs;
 pub mod recipe;
+pub(crate) mod targets;
+pub(crate) mod update_runner;
 
 use crate::core::context::Context;
 pub use crate::core::context::{
@@ -179,6 +181,115 @@ mod tests {
                 dispatch_mode(&context).unwrap(),
                 ExecOutcome::Succeeded,
                 "expected dispatch_mode to succeed for {action:?}"
+            );
+        }
+    }
+
+    struct HelpScreenSpec {
+        alias: Option<&'static str>,
+        mode_title: Option<&'static str>,
+        name: &'static str,
+        render: fn(&mut Vec<u8>),
+    }
+
+    #[test]
+    fn all_eight_help_screens_follow_consistent_layout() {
+        let screens = [
+            HelpScreenSpec {
+                alias: None,
+                mode_title: None,
+                name: "default",
+                render: super::default::help::write_help,
+            },
+            HelpScreenSpec {
+                alias: Some("cmd"),
+                mode_title: Some("Command Mode"),
+                name: "command",
+                render: super::command::help::write_help,
+            },
+            HelpScreenSpec {
+                alias: Some("cfg"),
+                mode_title: Some("Config Mode"),
+                name: "config",
+                render: super::config::help::write_help,
+            },
+            HelpScreenSpec {
+                alias: Some("con"),
+                mode_title: Some("Connect Mode"),
+                name: "connect",
+                render: super::connect::help::write_help,
+            },
+            HelpScreenSpec {
+                alias: Some("img"),
+                mode_title: Some("Image Mode"),
+                name: "image",
+                render: super::image::help::write_help,
+            },
+            HelpScreenSpec {
+                alias: None,
+                mode_title: Some("Init Mode"),
+                name: "init",
+                render: super::init::help::write_help,
+            },
+            HelpScreenSpec {
+                alias: Some("log"),
+                mode_title: Some("Logs Mode"),
+                name: "logs",
+                render: super::logs::help::write_help,
+            },
+            HelpScreenSpec {
+                alias: Some("rec"),
+                mode_title: Some("Recipe Mode"),
+                name: "recipe",
+                render: super::recipe::help::write_help,
+            },
+        ];
+
+        for screen in screens {
+            let mut buffer = Vec::new();
+            (screen.render)(&mut buffer);
+            let output = String::from_utf8(buffer).unwrap();
+            let name = screen.name;
+
+            if let Some(title) = screen.mode_title {
+                assert!(
+                    output.contains(&format!(" - {title}\n")),
+                    "{name} help missing mode title {title:?}"
+                );
+            } else {
+                assert!(
+                    !output.lines().next().unwrap_or_default().contains(" - "),
+                    "default help header must not contain mode suffix"
+                );
+            }
+            if let Some(short) = screen.alias {
+                assert!(
+                    output.contains(&format!("Alias: {short}\n")),
+                    "{name} help missing Alias: {short}"
+                );
+            } else {
+                assert!(
+                    !output.contains("Alias:"),
+                    "{name} help must not declare Alias:"
+                );
+            }
+            assert!(
+                output.contains("Usage: pods "),
+                "{name} help missing Usage: line"
+            );
+            assert!(
+                output.contains("  help               display this help and exit\n"),
+                "{name} help missing standardized help wording"
+            );
+            let actions_pos = output.find("ACTIONS:\n").expect("ACTIONS section");
+            let options_pos = output.find("OPTIONS:\n").expect("OPTIONS section");
+            assert!(
+                actions_pos < options_pos,
+                "{name} help must place ACTIONS: before OPTIONS:"
+            );
+            assert!(
+                !output.lines().any(|line| line.ends_with(' ')),
+                "{name} help must not contain trailing spaces"
             );
         }
     }

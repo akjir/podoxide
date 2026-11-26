@@ -28,8 +28,8 @@ use crate::utilities::format;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header, `pods init` usage synopsis, options (`--debug`, `--simulate`),
-///    and actions (`create`, `help`) via [`log::write_print`].
+/// 2. Output the mode version header, description, `pods init` usage synopsis, actions
+///    (`create`, `help`), and options (`--debug`, `--simulate`) via [`log::write_print`].
 ///
 /// # Errors
 ///
@@ -40,27 +40,41 @@ pub fn handle(_context: &Context) -> Result<(), PodError> {
 }
 
 /// Writes the `pods init` help text to `writer`.
-fn write_help<W: Write>(writer: &mut W) {
+pub(crate) fn write_help<W: Write>(writer: &mut W) {
     log::write_print(
         writer,
-        &format::format_version_header(APP_NAME, APP_VERSION, None),
+        &format::format_version_header(APP_NAME, APP_VERSION, Some("Init Mode")),
     );
     log::write_print(writer, "");
+    log::write_print(
+        writer,
+        "Initialize the current workspace with default configuration and recipe templates.",
+    );
     log::write_print(writer, "Usage: pods init [OPTIONS] [ACTION]");
     log::write_print(writer, "");
-    log::write_print(writer, "OPTIONS:");
-    log::write_print(writer, "  --debug            enable debug output");
-    log::write_print(
-        writer,
-        "  --simulate         preview generated commands without executing them",
-    );
+    write_actions_section(writer);
     log::write_print(writer, "");
+    write_options_section(writer);
+}
+
+/// Writes the `ACTIONS:` section for `pods init` to `writer`.
+fn write_actions_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "ACTIONS:");
     log::write_print(
         writer,
         "  create             initialize default configuration and recipe (default)",
     );
     log::write_print(writer, "  help               display this help and exit");
+}
+
+/// Writes the `OPTIONS:` section for `pods init` to `writer`.
+fn write_options_section<W: Write>(writer: &mut W) {
+    log::write_print(writer, "OPTIONS:");
+    log::write_print(writer, "  --debug            enable debug output");
+    log::write_print(
+        writer,
+        "  --simulate         preview template creation without writing files",
+    );
 }
 
 #[cfg(test)]
@@ -78,22 +92,26 @@ mod tests {
 
         assert!(output.contains(&format!(
             "{}\n",
-            format::format_version_header(APP_NAME, APP_VERSION, None)
+            format::format_version_header(APP_NAME, APP_VERSION, Some("Init Mode"))
         )));
+        assert!(output.contains(
+            "Initialize the current workspace with default configuration and recipe templates.\n"
+        ));
+        assert!(!output.contains("Alias:"));
         assert!(output.contains("Usage: pods init [OPTIONS] [ACTION]\n"));
-        assert!(output.contains("OPTIONS:\n"));
-        assert!(!output.contains("--config"));
-        assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(
-            output.contains(
-                "  --simulate         preview generated commands without executing them\n"
-            )
-        );
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains(
             "  create             initialize default configuration and recipe (default)\n"
         ));
         assert!(output.contains("  help               display this help and exit\n"));
+        assert!(output.find("ACTIONS:").unwrap() < output.find("OPTIONS:").unwrap());
+        assert!(output.contains("OPTIONS:\n"));
+        assert!(!output.contains("--config"));
+        assert!(output.contains("  --debug            enable debug output\n"));
+        assert!(
+            output
+                .contains("  --simulate         preview template creation without writing files\n")
+        );
 
         let context = Context::new();
         assert!(handle(&context).is_ok());

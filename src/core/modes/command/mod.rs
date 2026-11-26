@@ -18,6 +18,7 @@
 pub mod exec;
 pub mod help;
 pub mod list;
+mod tokenizer;
 
 use std::io::Write;
 
@@ -27,8 +28,8 @@ use crate::core::pod::PodCommand;
 use crate::core::recipe::Recipe;
 use crate::error::{ConfigError, ConfigErrorKind, PodError};
 use crate::io::exec::command::ExecOutcome;
-use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
-use crate::utilities::string::is_valid_identifier;
+use crate::utilities::collection::{self, MAX_COLLECTION_PREALLOC};
+use crate::utilities::string;
 
 /// Dispatches `command` mode execution to the resolved sub-action (`exec`, `help`, or `list`).
 ///
@@ -69,7 +70,7 @@ pub(super) fn get_valid_commands<'a, E: Write>(
     if recipe.pod.commands.is_empty() {
         return Vec::new();
     }
-    let capacity = bounded_capacity(recipe.pod.commands.len(), MAX_COLLECTION_PREALLOC);
+    let capacity = collection::bounded_capacity(recipe.pod.commands.len(), MAX_COLLECTION_PREALLOC);
     let mut valid_commands = Vec::with_capacity(capacity);
     for (name, command) in &recipe.pod.commands {
         if !is_valid_command_entry(name, command) {
@@ -83,13 +84,15 @@ pub(super) fn get_valid_commands<'a, E: Write>(
     valid_commands
 }
 
-/// Evaluates whether `(key, command)` represents a populated, well-formed command entry.
+/// Evaluates whether `(key, command)` represents a populated, well-formed command entry matching [`Recipe::inspect`].
 #[must_use]
 pub(super) fn is_valid_command_entry(key: &str, command: &PodCommand) -> bool {
-    is_valid_identifier(key)
+    string::is_valid_identifier(key)
         && key == command.name
-        && !command.container.is_empty()
-        && !command.execute.is_empty()
+        && string::is_valid_text(&command.container)
+        && string::is_valid_text(&command.execute)
+        && (command.description.is_empty() || string::is_valid_text(&command.description))
+        && command.user.as_deref().is_none_or(string::is_valid_token)
 }
 
 /// Verifies that `target` is registered in `context.config` and loads and validates `<target>.pod`.

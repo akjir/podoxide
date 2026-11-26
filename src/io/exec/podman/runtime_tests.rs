@@ -166,9 +166,9 @@ fn exec_logs_and_pull_validate_inputs_and_support_uppercase_unmanaged_names() {
         ExecOutcome::Succeeded
     );
     assert!(
-        String::from_utf8(stdout)
-            .unwrap()
-            .contains("podman exec -it MyApp_1 sh -c")
+        String::from_utf8(stdout).unwrap().contains(
+            "podman exec -it MyApp_1 sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'"
+        )
     );
     assert!(stderr.is_empty());
 

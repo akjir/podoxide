@@ -28,9 +28,10 @@ use crate::utilities::format;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header, global usage synopsis (`pods [MODE] [OPTIONS] ACTION [TARGETS]`),
-///    available modes and 3-letter aliases, global options, default mode lifecycle and status
-///    actions, and target syntax via [`log::write_print`].
+/// 2. Output the version header, one-line summary, global usage synopsis
+///    (`pods [MODE] [OPTIONS] ACTION [TARGETS]`), available modes and 3-letter aliases,
+///    default mode lifecycle and status actions, options, and target syntax via
+///    [`log::write_print`].
 ///
 /// # Errors
 ///
@@ -38,6 +39,36 @@ use crate::utilities::format;
 pub fn handle(_context: &Context) -> Result<(), PodError> {
     write_help(&mut io::stdout().lock());
     Ok(())
+}
+
+/// Writes the global default mode help text to `writer`.
+pub(crate) fn write_help<W: Write>(writer: &mut W) {
+    log::write_print(
+        writer,
+        &format::format_version_header(APP_NAME, APP_VERSION, None),
+    );
+    log::write_print(writer, "");
+    log::write_print(
+        writer,
+        "Manage Podman pods and containers with declarative PSL recipes.",
+    );
+    log::write_print(writer, "Usage: pods [MODE] [OPTIONS] ACTION [TARGETS]");
+    log::write_print(writer, "");
+    write_modes_section(writer);
+    log::write_print(writer, "");
+    log::write_print(writer, "Valid in default mode only:");
+    log::write_print(writer, "");
+    write_actions_section(writer);
+    log::write_print(writer, "");
+    write_options_section(writer);
+    log::write_print(writer, "");
+    log::write_print(writer, "TARGETS:");
+    log::write_print(
+        writer,
+        "  *                  names of recipes, @groups, or <recipe>/<container> targets",
+    );
+    log::write_print(writer, "");
+    log::write_print(writer, "For more: pods [MODE] help");
 }
 
 /// Writes the default mode `ACTIONS:` section to `writer`.
@@ -64,38 +95,12 @@ fn write_actions_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "  up                 create and start a new pod");
     log::write_print(
         writer,
-        "  update             update all defined images of the pod",
+        "  update             pull latest images and reload pods or containers when updated",
     );
     log::write_print(
         writer,
         "  version            display version information and exit",
     );
-}
-
-/// Writes the global default mode help text to `writer`.
-fn write_help<W: Write>(writer: &mut W) {
-    log::write_print(
-        writer,
-        &format::format_version_header(APP_NAME, APP_VERSION, None),
-    );
-    log::write_print(writer, "");
-    log::write_print(writer, "Usage: pods [MODE] [OPTIONS] ACTION [TARGETS]");
-    log::write_print(writer, "");
-    write_modes_section(writer);
-    log::write_print(writer, "");
-    write_options_section(writer);
-    log::write_print(writer, "");
-    log::write_print(writer, "Valid in default mode only:");
-    log::write_print(writer, "");
-    write_actions_section(writer);
-    log::write_print(writer, "");
-    log::write_print(writer, "TARGETS:");
-    log::write_print(
-        writer,
-        "  *                  names of recipes, @groups, or <recipe>/<container> targets",
-    );
-    log::write_print(writer, "");
-    log::write_print(writer, "For more: pods [MODE] help");
 }
 
 /// Writes the `MODES:` section with 3-letter aliases to `writer`.
@@ -116,7 +121,7 @@ fn write_modes_section<W: Write>(writer: &mut W) {
     );
     log::write_print(
         writer,
-        "  image (img)        manage orphaned and dangling container images",
+        "  image (img)        pull recipe images and prune unused container images",
     );
     log::write_print(
         writer,
@@ -134,20 +139,20 @@ fn write_options_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "OPTIONS:");
     log::write_print(
         writer,
+        "  --all              include all unmanaged podman containers (status only)",
+    );
+    log::write_print(
+        writer,
         "  --config=NAME      use config with given name or path",
     );
     log::write_print(writer, "  --debug            enable debug output");
     log::write_print(
         writer,
-        "  --simulate         preview generated commands without executing them",
-    );
-    log::write_print(
-        writer,
-        "  --all              include all unmanaged podman containers (status only)",
-    );
-    log::write_print(
-        writer,
         "  --full             display extended container information (status only)",
+    );
+    log::write_print(
+        writer,
+        "  --simulate         preview generated commands without executing them",
     );
 }
 
@@ -168,6 +173,9 @@ mod tests {
             "{}\n",
             format::format_version_header(APP_NAME, APP_VERSION, None)
         )));
+        assert!(
+            output.contains("Manage Podman pods and containers with declarative PSL recipes.\n")
+        );
         assert!(output.contains("Usage: pods [MODE] [OPTIONS] ACTION [TARGETS]\n"));
         assert!(output.contains("MODES:\n"));
         assert!(output.contains("  *                  default mode\n"));
@@ -176,9 +184,9 @@ mod tests {
         assert!(output.contains(
             "  connect (con)      connect to a running container with an interactive shell\n"
         ));
-        assert!(
-            output.contains("  image (img)        manage orphaned and dangling container images\n")
-        );
+        assert!(output.contains(
+            "  image (img)        pull recipe images and prune unused container images\n"
+        ));
         assert!(
             output.contains("  init               initialize default configuration and recipe\n")
         );
@@ -186,20 +194,6 @@ mod tests {
             output.contains("  logs (log)         show or follow logs for a pod or container\n")
         );
         assert!(output.contains("  recipe (rec)       inspect and edit recipes\n"));
-        assert!(output.contains("OPTIONS:\n"));
-        assert!(output.contains("  --config=NAME      use config with given name or path\n"));
-        assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(
-            output.contains(
-                "  --simulate         preview generated commands without executing them\n"
-            )
-        );
-        assert!(output.contains(
-            "  --all              include all unmanaged podman containers (status only)\n"
-        ));
-        assert!(output.contains(
-            "  --full             display extended container information (status only)\n"
-        ));
         assert!(output.contains("Valid in default mode only:\n"));
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains("  create             create a new pod without starting it\n"));
@@ -212,8 +206,25 @@ mod tests {
         assert!(output.contains("  status             display status of pods and containers\n"));
         assert!(output.contains("  stop               stop a running pod\n"));
         assert!(output.contains("  up                 create and start a new pod\n"));
-        assert!(output.contains("  update             update all defined images of the pod\n"));
+        assert!(output.contains(
+            "  update             pull latest images and reload pods or containers when updated\n"
+        ));
         assert!(output.contains("  version            display version information and exit\n"));
+        assert!(output.find("ACTIONS:").unwrap() < output.find("OPTIONS:").unwrap());
+        assert!(output.contains("OPTIONS:\n"));
+        assert!(output.contains(
+            "  --all              include all unmanaged podman containers (status only)\n"
+        ));
+        assert!(output.contains("  --config=NAME      use config with given name or path\n"));
+        assert!(output.contains("  --debug            enable debug output\n"));
+        assert!(output.contains(
+            "  --full             display extended container information (status only)\n"
+        ));
+        assert!(
+            output.contains(
+                "  --simulate         preview generated commands without executing them\n"
+            )
+        );
         assert!(output.contains("TARGETS:\n"));
         assert!(output.contains(
             "  *                  names of recipes, @groups, or <recipe>/<container> targets\n"

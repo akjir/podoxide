@@ -157,16 +157,18 @@ mod tests {
             &["--debug", "--config=custom", "image", "prune"],
             b"no\n",
         );
-        assert!(false_ok);
-        assert_eq!(
-            false_stderr,
-            "DEBUG: Debug mode is enabled.\nDEBUG: Config './custom.conf' is used.\nDEBUG: Image mode is used.\n"
-        );
-        assert!(
-            false_stdout == "No images found to prune.\n"
-                || (false_stdout.starts_with("Are you sure you want to prune ")
-                    && false_stdout.ends_with("? Type 'yes' to proceed: Aborted.\n"))
-        );
+        let expected_debug_prefix = "DEBUG: Debug mode is enabled.\nDEBUG: Config './custom.conf' is used.\nDEBUG: Image mode is used.\n";
+        if false_ok {
+            assert_eq!(false_stderr, expected_debug_prefix);
+            assert_eq!(false_stdout, "No images found to prune.\n");
+        } else {
+            assert!(false_stdout.is_empty());
+            assert!(false_stderr.starts_with(expected_debug_prefix));
+            assert!(false_stderr.contains("Are you sure you want to prune "));
+            assert!(
+                false_stderr.ends_with("? Type 'yes' to proceed: ERROR: Aborting execution.\n")
+            );
+        }
 
         fs::write(
             &custom_conf,
@@ -194,7 +196,7 @@ mod tests {
             (&["version"], "Podoxide v"),
             (&["cmd"], "Command Mode"),
             (&["cmd", "help"], "Command Mode"),
-            (&["cfg", "help"], "Usage: pods config [OPTIONS] ACTION"),
+            (&["cfg", "help"], "Usage: pods config [OPTIONS] [ACTION]"),
             (&["con"], "Connect Mode"),
             (&["con", "help"], "Connect Mode"),
             (&["img"], "Image Mode"),
@@ -202,7 +204,10 @@ mod tests {
             (&["init", "help"], "Usage: pods init [OPTIONS] [ACTION]"),
             (&["log"], "Logs Mode"),
             (&["log", "help"], "Logs Mode"),
-            (&["rec", "help"], "Usage: pods recipe [OPTIONS] ACTION NAME"),
+            (
+                &["rec", "help"],
+                "Usage: pods recipe [OPTIONS] [ACTION] [NAME]",
+            ),
         ];
 
         for (arguments, expected_stdout) in bypass_cases {
@@ -277,23 +282,29 @@ mod tests {
 
         let (prune_ok, prune_stdout, prune_stderr) =
             run_cli_in_dir(working_dir, &["image", "prune"], b"no\n");
-        assert!(prune_ok);
-        assert!(prune_stderr.is_empty());
-        assert!(
-            prune_stdout == "No images found to prune.\n"
-                || (prune_stdout.starts_with("Are you sure you want to prune ")
-                    && prune_stdout.ends_with("? Type 'yes' to proceed: Aborted.\n"))
-        );
+        if prune_ok {
+            assert!(prune_stderr.is_empty());
+            assert_eq!(prune_stdout, "No images found to prune.\n");
+        } else {
+            assert!(prune_stdout.is_empty());
+            assert!(prune_stderr.starts_with("Are you sure you want to prune "));
+            assert!(
+                prune_stderr.ends_with("? Type 'yes' to proceed: ERROR: Aborting execution.\n")
+            );
+        }
 
         let (prune_all_ok, prune_all_stdout, prune_all_stderr) =
             run_cli_in_dir(working_dir, &["image", "prune", "--all"], b"no\n");
-        assert!(prune_all_ok);
-        assert!(prune_all_stderr.is_empty());
-        assert!(
-            prune_all_stdout == "No images found to prune.\n"
-                || (prune_all_stdout.starts_with("Are you sure you want to prune ")
-                    && prune_all_stdout.ends_with("? Type 'yes' to proceed: Aborted.\n"))
-        );
+        if prune_all_ok {
+            assert!(prune_all_stderr.is_empty());
+            assert_eq!(prune_all_stdout, "No images found to prune.\n");
+        } else {
+            assert!(prune_all_stdout.is_empty());
+            assert!(prune_all_stderr.starts_with("Are you sure you want to prune "));
+            assert!(
+                prune_all_stderr.ends_with("? Type 'yes' to proceed: ERROR: Aborting execution.\n")
+            );
+        }
 
         let (cfg_ok, cfg_stdout, cfg_stderr) =
             run_cli_in_dir(working_dir, &["cfg", "inspect"], b"");
@@ -354,7 +365,7 @@ mod tests {
             ),
             (
                 &["--simulate", "con", "recipe/db"],
-                "podman exec -it example-stack-db sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'\n",
+                "podman exec -it example-stack-db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
             ),
             (
                 &["--simulate", "log", "show", "recipe"],
@@ -449,7 +460,7 @@ mod tests {
             (&["cfg", "edit"], "vim ./pods.conf\n"),
             (
                 &["con", "recipe/db"],
-                "podman exec -it example-stack-db sh -c 'command -v bash >/dev/null 2>&1 && exec bash || exec sh'\n",
+                "podman exec -it example-stack-db sh -c 'if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh'\n",
             ),
             (&["img", "prune"], "Prune images: \npodman image prune -f\n"),
             (

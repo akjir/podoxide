@@ -19,9 +19,9 @@ use crate::error::PodError;
 use super::{
     FIELD_DELIMITER, IMAGES_FORMAT, MAX_INSPECT_RECORDS, MAX_VERSION_LINES,
     MAX_VERSION_OUTPUT_BYTES, PS_FORMAT, RECORD_DELIMITER, collect_in_use_images_with,
-    container_running_with, is_running_container_status, is_supported_version,
-    parse_image_id_output, parse_in_use_output, pod_exists_with, query_container_image_id_with,
-    query_image_id_with, query_images_with, query_ps_status_with,
+    container_exists_with, container_running_with, is_running_container_status,
+    is_supported_version, parse_image_id_output, parse_in_use_output, pod_exists_with,
+    query_container_image_id_with, query_image_id_with, query_images_with, query_ps_status_with,
 };
 
 #[test]
@@ -59,8 +59,17 @@ fn container_running_and_pod_exists_validate_names_with_mock_capture() {
             !container_running_with(invalid, &mut |_| panic!("must reject invalid name")),
             "expected container_running_with to reject {invalid:?}"
         );
+        assert!(
+            !container_exists_with(invalid, &mut |_| panic!("must reject invalid name")),
+            "expected container_exists_with to reject {invalid:?}"
+        );
     }
     assert!(!container_running_with("missing", &mut |_| None));
+    assert!(container_exists_with("MyApp_1", &mut |args| {
+        assert_eq!(args, &["container", "exists", "MyApp_1"]);
+        Some(String::new())
+    }));
+    assert!(!container_exists_with("MyApp_1", &mut |_| None));
 
     for invalid_pod in ["", "--help", "bad name", "Upper_Case", "bad..pod"] {
         assert!(

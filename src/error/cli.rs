@@ -69,6 +69,7 @@ impl Error for CliError {}
 /// Specific failure category encountered while parsing CLI arguments.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CliErrorKind {
+    ContainerNotRunning,
     EmptyFlagValue,
     InvalidFlagValue,
     InvalidTarget,
@@ -87,6 +88,7 @@ pub enum CliErrorKind {
 impl Display for CliErrorKind {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         let message = match self {
+            Self::ContainerNotRunning => "container is not running",
             Self::EmptyFlagValue => "empty value for command-line flag",
             Self::InvalidFlagValue => "invalid value for command-line flag",
             Self::InvalidTarget => "invalid target specification",
@@ -115,6 +117,10 @@ mod tests {
     #[test]
     fn cli_error_kind_display_messages() {
         let variants = [
+            (
+                CliErrorKind::ContainerNotRunning,
+                "container is not running",
+            ),
             (CliErrorKind::EmptyFlagValue, "empty value"),
             (CliErrorKind::InvalidFlagValue, "invalid value"),
             (CliErrorKind::InvalidTarget, "invalid target"),

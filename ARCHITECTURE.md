@@ -101,21 +101,30 @@ podoxide/
     │   │   └── writer.rs
     │   └── modes/
     │       ├── mod.rs
+    │       ├── targets.rs
+    │       ├── targets_tests.rs
+    │       ├── update_runner.rs
+    │       ├── update_runner_tests.rs
     │       ├── command/
     │       │   ├── exec.rs
+    │       │   ├── exec_tests.rs
     │       │   ├── help.rs
     │       │   ├── list.rs
-    │       │   └── mod.rs
+    │       │   ├── mod.rs
+    │       │   └── tokenizer.rs
     │       ├── config/
     │       │   ├── edit.rs
     │       │   ├── help.rs
     │       │   ├── inspect.rs
+    │       │   ├── inspect_tests.rs
     │       │   ├── mod.rs
+    │       │   ├── render.rs
     │       │   └── show.rs
     │       ├── connect/
     │       │   ├── help.rs
     │       │   ├── mod.rs
-    │       │   └── shell.rs
+    │       │   ├── shell.rs
+    │       │   └── shell_tests.rs
     │       ├── default/
     │       │   ├── create.rs
     │       │   ├── down.rs
@@ -125,7 +134,10 @@ podoxide/
     │       │   ├── remove.rs
     │       │   ├── restart.rs
     │       │   ├── start.rs
-    │       │   ├── status.rs
+    │       │   ├── status/
+    │       │   │   ├── mod.rs
+    │       │   │   ├── table.rs
+    │       │   │   └── tests.rs
     │       │   ├── stop.rs
     │       │   ├── up.rs
     │       │   ├── update.rs
@@ -133,7 +145,9 @@ podoxide/
     │       ├── image/
     │       │   ├── help.rs
     │       │   ├── mod.rs
+    │       │   ├── preview.rs
     │       │   ├── prune.rs
+    │       │   ├── prune_tests.rs
     │       │   └── update.rs
     │       ├── init/
     │       │   ├── create.rs
@@ -143,6 +157,8 @@ podoxide/
     │       │   ├── follow.rs
     │       │   ├── help.rs
     │       │   ├── mod.rs
+    │       │   ├── runner.rs
+    │       │   ├── runner_tests.rs
     │       │   └── show.rs
     │       └── recipe/
     │           ├── edit.rs
@@ -246,22 +262,25 @@ The `src/core/` directory contains application state, domain models, argument pa
 
 ## CLI Modes (`src/core/modes/`)
 
-The `src/core/modes/` directory contains the mode router and one subdirectory per CLI mode. Each mode directory isolates its dispatcher in `mod.rs` and places each CLI action in a dedicated file.
+The `src/core/modes/` directory contains the mode router, shared target/update orchestration modules, and one subdirectory per CLI mode. Each mode directory isolates its dispatcher in `mod.rs` and places each CLI action in dedicated files.
 
-| File                    | Function |
-| :---------------------- | :------- |
-| `src/core/modes/mod.rs` | Re-exports the mode enumerations and dispatches typed `ModeAction` variants to mode handlers in O(1) time, returning `ExecOutcome`. |
+| File                              | Function |
+| :-------------------------------- | :------- |
+| `src/core/modes/mod.rs`           | Re-exports the mode enumerations and dispatches typed `ModeAction` variants to mode handlers in O(1) time, returning `ExecOutcome`. |
+| `src/core/modes/targets.rs`       | Provides shared `<recipe>/<container>` spec parsing, index-based container target resolution, upfront pod recipe pre-validation and lifecycle dispatch, `RecipeInspection` / `RecipeStatus`, and validated unreferenced `.pod` discovery. |
+| `src/core/modes/update_runner.rs` | Provides shared pod and container image-update orchestration with pull deduplication and grouped `Update Summary:` reporting for `pods update` and `pods image update`. |
 
 ### Command Mode (`src/core/modes/command/`)
 
 Executes or lists predefined maintenance commands declared inside a recipe's `pod` block.
 
-| File                             | Function |
-| :------------------------------- | :------- |
-| `src/core/modes/command/mod.rs`  | Parses `command` mode parameters, validates command definitions, and dispatches to `exec`, `list`, or `help`. |
-| `src/core/modes/command/exec.rs` | Resolves the target container and executes the selected recipe command via `podman exec -it`. |
-| `src/core/modes/command/help.rs` | Formats and outputs the CLI help text for `pods command`. |
-| `src/core/modes/command/list.rs` | Collects, sorts, and displays all valid commands and descriptions defined in a target recipe. |
+| File                                  | Function |
+| :------------------------------------ | :------- |
+| `src/core/modes/command/mod.rs`       | Parses `command` mode parameters, validates command definitions in alignment with `Recipe::inspect`, and dispatches to `exec`, `list`, or `help`. |
+| `src/core/modes/command/exec.rs`      | Resolves the target container and executes the selected recipe command via `podman exec -it`. |
+| `src/core/modes/command/help.rs`      | Formats and outputs the CLI help text for `pods command`. |
+| `src/core/modes/command/list.rs`      | Collects, sorts, and displays all valid commands and descriptions defined in a target recipe. |
+| `src/core/modes/command/tokenizer.rs` | Splits `command.execute` strings into bounded quote-aware argv tokens. |
 
 ### Config Mode (`src/core/modes/config/`)
 
@@ -272,7 +291,8 @@ Inspects, validates, displays, and edits the active `pods.conf` configuration fi
 | `src/core/modes/config/mod.rs`     | Parses `config` mode parameters and dispatches to `inspect` (default), `show`, `edit`, or `help`. |
 | `src/core/modes/config/edit.rs`    | Opens the active configuration file in the configured editor process. |
 | `src/core/modes/config/help.rs`    | Formats and outputs the CLI help text for `pods config`. |
-| `src/core/modes/config/inspect.rs` | Displays configuration settings, directory status, group hierarchy trees with recipe validation status (`[OK]`, `[ERROR]`, `[NOT FOUND]`), and missing, invalid, or unreferenced recipes. |
+| `src/core/modes/config/inspect.rs` | Traverses configured recipe groups, detects missing and cyclic subgroups (`[MISSING GROUP]`, `[CYCLIC GROUP]`), and evaluates recipe status with bounded output tracking. |
+| `src/core/modes/config/render.rs`  | Renders settings, validated directory statuses, aligned group trees (with truncation notice when bounded), unreferenced recipes, and the validation summary. |
 | `src/core/modes/config/show.rs`    | Reads the active configuration file and outputs its contents with 1-based line numbers. |
 
 ### Connect Mode (`src/core/modes/connect/`)
@@ -283,38 +303,40 @@ Opens an interactive shell session inside a running container.
 | :-------------------------------- | :------- |
 | `src/core/modes/connect/mod.rs`   | Parses `connect` mode parameters, rejects group targets, and dispatches to `shell` (default) or `help`. |
 | `src/core/modes/connect/help.rs`  | Formats and outputs the CLI help text for `pods connect`. |
-| `src/core/modes/connect/shell.rs` | Resolves the target container (by recipe, `<recipe>/<container>`, or absolute name) and spawns an interactive shell. |
+| `src/core/modes/connect/shell.rs` | Resolves registered recipes or direct unmanaged container names, distinguishes stopped from nonexistent containers, and spawns an interactive shell. |
 
 ### Default Mode (`src/core/modes/default/`)
 
 Executes primary pod lifecycle operations and displays container runtime status when no explicit mode is given.
 
-| File                                | Function |
-| :---------------------------------- | :------- |
-| `src/core/modes/default/mod.rs`     | Validates the requested default action, expands `@group` and `<recipe>` targets or resolves `<recipe>/<container>` targets, and dispatches to the action handler. |
-| `src/core/modes/default/create.rs`  | Loads and validates target recipes, then creates pods and containers (or targeted containers) without starting them. |
-| `src/core/modes/default/down.rs`    | Stops target containers in reverse startup order and removes the containers and parent pod (or targeted containers) (`stop` + `remove`). |
-| `src/core/modes/default/help.rs`    | Formats and outputs the global CLI help text for `pods`. |
-| `src/core/modes/default/reload.rs`  | Tears down and rebuilds target pods and containers (or targeted containers) from their `.pod` recipes (`down` + `up`). |
-| `src/core/modes/default/remove.rs`  | Removes target containers in reverse startup order and removes the parent pod (or targeted containers) without stopping them first. |
-| `src/core/modes/default/restart.rs` | Stops and starts existing target pods and containers (or targeted containers) without removing or recreating them (`stop` + `start`). |
-| `src/core/modes/default/start.rs`   | Starts existing stopped target pods and their containers (or targeted containers) in top-to-bottom declaration order. |
-| `src/core/modes/default/status.rs`  | Queries `podman ps -a`, cross-references managed recipes or targeted containers, synthesizes `Not Found` and `Recipe Error` rows, and formats the runtime status table (including `TARGET NAME` in `--full` mode). |
-| `src/core/modes/default/stop.rs`    | Stops running target containers in reverse bottom-to-top order and stops the parent pod (or targeted containers) without removing them. |
-| `src/core/modes/default/up.rs`      | Loads and validates target recipes, then creates and starts pods and containers (or targeted containers) in top-to-bottom order (`create` + `start`). |
-| `src/core/modes/default/update.rs`  | Pulls the latest container images for target recipes (or targeted containers), reloads them when an image was updated and no pull failed, prints the grouped `Update Summary:`, and exposes shared update orchestration for `image update`. |
-| `src/core/modes/default/version.rs` | Formats and outputs the application version string for `pods version`. |
+| File                                      | Function |
+| :---------------------------------------- | :------- |
+| `src/core/modes/default/mod.rs`           | Routes typed `DefaultAction` variants to the corresponding action handler. |
+| `src/core/modes/default/create.rs`        | Loads and validates target recipes, then creates pods and containers (or targeted containers) without starting them. |
+| `src/core/modes/default/down.rs`          | Stops target containers in reverse startup order and removes the containers and parent pod (or targeted containers) (`stop` + `remove`). |
+| `src/core/modes/default/help.rs`          | Formats and outputs the global CLI help text for `pods`. |
+| `src/core/modes/default/reload.rs`        | Tears down and rebuilds target pods and containers (or targeted containers) from their `.pod` recipes (`down` + `up`). |
+| `src/core/modes/default/remove.rs`        | Removes target containers in reverse startup order and removes the parent pod (or targeted containers) without stopping them first. |
+| `src/core/modes/default/restart.rs`       | Stops and starts existing target pods and containers (or targeted containers) without removing or recreating them (`stop` + `start`). |
+| `src/core/modes/default/start.rs`         | Starts existing stopped target pods and their containers (or targeted containers) in top-to-bottom declaration order. |
+| `src/core/modes/default/status/mod.rs`    | Queries `podman ps -a`, cross-references managed recipes or targeted containers across all host records, and distinguishes missing `.pod` files (`Not Found`) from invalid recipes (`Recipe Error`). |
+| `src/core/modes/default/status/table.rs`  | Parses control-delimited `podman ps` rows, computes column widths, and renders aligned status tables without trailing spaces. |
+| `src/core/modes/default/stop.rs`          | Stops running target containers in reverse bottom-to-top order and stops the parent pod (or targeted containers) without removing them. |
+| `src/core/modes/default/up.rs`            | Loads and validates target recipes, then creates and starts pods and containers (or targeted containers) in top-to-bottom order (`create` + `start`). |
+| `src/core/modes/default/update.rs`        | Wires live Podman pull and image-ID inspectors into `update_runner` to pull images and conditionally reload updated pods or containers. |
+| `src/core/modes/default/version.rs`       | Formats and outputs the application version string for `pods version`. |
 
 ### Image Mode (`src/core/modes/image/`)
 
 Pulls recipe container images and prunes dangling or unused Podman container images.
 
-| File                             | Function |
-| :------------------------------- | :------- |
-| `src/core/modes/image/mod.rs`    | Parses `image` mode parameters, expands `@group` targets for `update`, and dispatches to `update`, `prune`, or `help`. |
-| `src/core/modes/image/help.rs`   | Formats and outputs the CLI help text for `pods image`. |
-| `src/core/modes/image/prune.rs`  | Previews reclaimable image space (`--preview`) or prunes dangling and unused images (`--all`, `--force`). |
-| `src/core/modes/image/update.rs` | Pulls the latest container images from configured registries for target recipes or targeted containers without reloading pods and prints the grouped `Update Summary:`. |
+| File                              | Function |
+| :-------------------------------- | :------- |
+| `src/core/modes/image/mod.rs`     | Parses `image` mode parameters and dispatches to `update`, `prune`, or `help`. |
+| `src/core/modes/image/help.rs`    | Formats and outputs the CLI help text for `pods image`. |
+| `src/core/modes/image/preview.rs` | Computes dynamic column widths and renders aligned `--preview` lists and reclaimable space totals. |
+| `src/core/modes/image/prune.rs`   | Deduplicates multi-tagged prunable images by `long_id`, confirms interactive pruning on `stderr` (`AbortedExecution` on decline/EOF), and executes `podman image prune`. |
+| `src/core/modes/image/update.rs`  | Delegates to `update_runner` to pull the latest container images without reloading pods and print the grouped `Update Summary:`. |
 
 ### Init Mode (`src/core/modes/init/`)
 
@@ -332,9 +354,10 @@ Fetches or streams Podman logs for a recipe's pod or a specific container.
 
 | File                            | Function |
 | :------------------------------ | :------- |
-| `src/core/modes/logs/mod.rs`    | Parses `logs` mode parameters, validates single-recipe targeting, and dispatches to `show`, `follow`, or `help`. |
+| `src/core/modes/logs/mod.rs`    | Routes typed `LogsAction` variants to `show`, `follow`, or `help`. |
 | `src/core/modes/logs/follow.rs` | Streams live logs (`podman pod logs -f`) with optional `--tail`, `--since`, `--until`, and `--timestamps` flags. |
 | `src/core/modes/logs/help.rs`   | Formats and outputs the CLI help text for `pods logs`. |
+| `src/core/modes/logs/runner.rs` | Validates target syntax and log flags before filesystem access, enforces recipe registration, resolves containers, and executes `podman pod logs`. |
 | `src/core/modes/logs/show.rs`   | Fetches and displays static logs (`podman pod logs`) for a pod or container and exits. |
 
 ### Recipe Mode (`src/core/modes/recipe/`)
@@ -369,7 +392,7 @@ Executes external commands directly via `std::process::Command` without shell in
 | `src/io/exec/spinner.rs`          | Provides terminal-aware Braille spinner execution with bounded `stderr` capture and non-TTY single-line fallback. |
 | `src/io/exec/podman/mod.rs`       | Re-exports the central Podman CLI API and provides shared validation and process invocation helpers. |
 | `src/io/exec/podman/lifecycle.rs` | Builds and executes Podman lifecycle operations (`CreateContainer`, `CreatePod`, create, start, stop, remove, and image prune). |
-| `src/io/exec/podman/query.rs`     | Executes Podman inspection queries (`check_version` 5.8.0+, `container_running`, `pod_exists`, `query_container_image_id`, `query_image_id`, `query_images`, `query_in_use_images`, `query_ps_status`, and control-character record delimiters). |
+| `src/io/exec/podman/query.rs`     | Executes Podman inspection queries (`check_version` 5.8.0+, `container_exists`, `container_running`, `pod_exists`, `query_container_image_id`, `query_image_id`, `query_images`, `query_in_use_images`, `query_ps_status`, and control-character record delimiters). |
 | `src/io/exec/podman/runtime.rs`   | Builds and executes TTY-aware `podman exec`, color/SIGINT-aware `podman pod logs`, and spinner-backed `podman pull` (`ExecContainer`, `PodLogs`, `PullOutcome`, `SHELL_FALLBACK_COMMAND`). |
 
 ### PodScript Language (`src/io/psl/`)

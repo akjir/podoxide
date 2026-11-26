@@ -22,14 +22,11 @@ use std::path::Path;
 use crate::core::config::Config;
 use crate::core::context::Context;
 use crate::core::log;
-use crate::core::recipe::{RECIPE_EXTENSION, Recipe};
+use crate::core::modes::targets::{self, RecipeInspection, RecipeStatus};
+use crate::core::recipe::Recipe;
 use crate::error::PodError;
-use crate::io::system::fs;
-use crate::utilities::collection::{MAX_COLLECTION_PREALLOC, bounded_capacity};
-use crate::utilities::format::{
-    DEFAULT_TARGET_COLUMN, format_index_prefix, format_line, format_recipe_error_hint,
-};
-use crate::utilities::path::is_valid_directory;
+use crate::utilities::collection::{self, MAX_COLLECTION_PREALLOC};
+use crate::utilities::format::{self, DEFAULT_TARGET_COLUMN};
 
 /// Formatted recipe list line paired with its right-aligned status label.
 struct RecipeListEntry {
@@ -70,7 +67,7 @@ fn build_configured_entries<'a>(
     configured_recipes: &BTreeSet<&'a str>,
     total_count: usize,
 ) -> (Vec<RecipeListEntry>, Vec<&'a str>, usize) {
-    let capacity = bounded_capacity(configured_recipes.len(), MAX_COLLECTION_PREALLOC);
+    let capacity = collection::bounded_capacity(configured_recipes.len(), MAX_COLLECTION_PREALLOC);
     let mut entries = Vec::with_capacity(capacity);
     let mut invalid_recipes = Vec::with_capacity(capacity);
     let mut max_length = 0;
@@ -97,36 +94,33 @@ fn build_single_configured_entry(
     index: usize,
     total_count: usize,
 ) -> (RecipeListEntry, bool) {
-    let prefix = format_index_prefix(index, total_count);
-    if !Recipe::file_exists(&config.recipes.path, target) {
-        let line = format!("  {prefix} {target}");
-        return (
+    let prefix = format::format_index_prefix(index, total_count);
+    match targets::inspect_recipe(config, target) {
+        RecipeInspection::Ok(recipe) => {
+            let label = format_recipe_label(target, &recipe);
+            (
+                RecipeListEntry {
+                    line: format!("  {prefix} {label}"),
+                    status: RecipeStatus::Ok.badge(),
+                },
+                false,
+            )
+        }
+        RecipeInspection::NotFound => (
             RecipeListEntry {
-                line,
-                status: "[NOT FOUND]",
+                line: format!("  {prefix} {target}"),
+                status: RecipeStatus::NotFound.badge(),
             },
             false,
-        );
-    }
-    if let Ok(recipe) = Recipe::inspect(config, target) {
-        let label = format_recipe_label(target, &recipe);
-        let line = format!("  {prefix} {label}");
-        return (
+        ),
+        RecipeInspection::Error => (
             RecipeListEntry {
-                line,
-                status: "[OK]",
+                line: format!("  {prefix} {target}"),
+                status: RecipeStatus::Error.badge(),
             },
-            false,
-        );
+            true,
+        ),
     }
-    let line = format!("  {prefix} {target}");
-    (
-        RecipeListEntry {
-            line,
-            status: "[ERROR]",
-        },
-        true,
-    )
 }
 
 /// Builds the formatted lines and maximum visible line length for unreferenced `.pod` files.
@@ -136,12 +130,12 @@ fn build_unreferenced_entries(
     start_index: usize,
     total_count: usize,
 ) -> (Vec<RecipeListEntry>, usize) {
-    let capacity = bounded_capacity(unreferenced.len(), MAX_COLLECTION_PREALLOC);
+    let capacity = collection::bounded_capacity(unreferenced.len(), MAX_COLLECTION_PREALLOC);
     let mut entries = Vec::with_capacity(capacity);
     let mut max_length = 0;
     for (offset, file) in unreferenced.iter().enumerate() {
         let index = start_index + offset + 1;
-        let prefix = format_index_prefix(index, total_count);
+        let prefix = format::format_index_prefix(index, total_count);
         let line = format!("  {prefix} {file}");
         let visible_length = line.chars().count();
         if visible_length > max_length {
@@ -161,18 +155,14 @@ fn collect_unreferenced_files(
     configured_recipes: &BTreeSet<&str>,
     show_all: bool,
 ) -> Result<Vec<String>, PodError> {
-    if !show_all || !is_valid_directory(recipes_path) || !fs::directory_exists(recipes_path) {
+    if !show_all {
         return Ok(Vec::new());
     }
-    let files = fs::list_directory(recipes_path, Some(RECIPE_EXTENSION))?;
-    let capacity = bounded_capacity(files.len(), MAX_COLLECTION_PREALLOC);
-    let mut unreferenced = Vec::with_capacity(capacity);
-    for file in files {
-        let stem = file.strip_suffix(RECIPE_EXTENSION).unwrap_or(file.as_str());
-        if !configured_recipes.contains(stem) {
-            unreferenced.push(file);
-        }
-    }
+    let Some((_, unreferenced)) =
+        targets::list_unreferenced_recipes(recipes_path, configured_recipes)?
+    else {
+        return Ok(Vec::new());
+    };
     Ok(unreferenced)
 }
 
@@ -218,7 +208,7 @@ fn list_with<W: Write>(context: &Context, stdout: &mut W) -> Result<(), PodError
     }
     if !invalid_recipes.is_empty() {
         log::write_print(stdout, "");
-        log::write_print(stdout, &format_recipe_error_hint(&invalid_recipes));
+        log::write_print(stdout, &format::format_recipe_error_hint(&invalid_recipes));
     }
     Ok(())
 }
@@ -229,7 +219,7 @@ fn write_entries<W: Write>(entries: &[RecipeListEntry], max_length: usize, stdou
     for entry in entries {
         log::write_print(
             stdout,
-            &format_line(&entry.line, entry.status, target_column),
+            &format::format_line(&entry.line, entry.status, target_column),
         );
     }
 }

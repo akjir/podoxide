@@ -28,9 +28,9 @@ use crate::utilities::format;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header, `pods image` usage synopsis, actions (`update`, `prune`,
-///    `help`), options (`--all`, `--config`, `--debug`, `--force`, `--preview`, `--simulate`),
-///    and `<recipe>` / `@<group>` target syntax via [`log::write_print`].
+/// 2. Output the mode version header, description, alias, `pods image` usage synopsis,
+///    actions (`help`, `prune`, `update`), options (`--all`, `--config`, `--debug`, `--force`,
+///    `--preview`, `--simulate`), and target syntax via [`log::write_print`].
 ///
 /// # Errors
 ///
@@ -40,29 +40,19 @@ pub fn handle(_context: &Context) -> Result<(), PodError> {
     Ok(())
 }
 
-/// Writes the `ACTIONS:` section for `pods image` to `writer`.
-fn write_actions_section<W: Write>(writer: &mut W) {
-    log::write_print(writer, "ACTIONS:");
-    log::write_print(
-        writer,
-        "  update             update all defined images of the pod",
-    );
-    log::write_print(
-        writer,
-        "  prune              prune dangling or all unused images",
-    );
-    log::write_print(writer, "  help               display this help text");
-}
-
 /// Writes the `pods image` help text to `writer`.
-fn write_help<W: Write>(writer: &mut W) {
+pub(crate) fn write_help<W: Write>(writer: &mut W) {
     log::write_print(
         writer,
         &format::format_version_header(APP_NAME, APP_VERSION, Some("Image Mode")),
     );
     log::write_print(writer, "");
-    log::write_print(writer, "Manage orphaned and dangling container images.");
-    log::write_print(writer, "Usage: pods image [OPTIONS] ACTION [TARGETS]");
+    log::write_print(
+        writer,
+        "Pull recipe images and prune dangling or unused container images.",
+    );
+    log::write_print(writer, "Alias: img");
+    log::write_print(writer, "Usage: pods image [OPTIONS] [ACTION] [TARGETS]");
     log::write_print(writer, "");
     write_actions_section(writer);
     log::write_print(writer, "");
@@ -71,22 +61,39 @@ fn write_help<W: Write>(writer: &mut W) {
     write_targets_section(writer);
 }
 
+/// Writes the `ACTIONS:` section for `pods image` to `writer`.
+fn write_actions_section<W: Write>(writer: &mut W) {
+    log::write_print(writer, "ACTIONS:");
+    log::write_print(writer, "  help               display this help and exit");
+    log::write_print(
+        writer,
+        "  prune              prune dangling or all unused images",
+    );
+    log::write_print(
+        writer,
+        "  update             pull latest images for recipes, @groups, or containers without reloading",
+    );
+}
+
 /// Writes the `OPTIONS:` section for `pods image` to `writer`.
 fn write_options_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "OPTIONS:");
     log::write_print(
         writer,
-        "  --all              prune all unused images, not just dangling ones",
+        "  --all              prune all unused images, not just dangling ones (prune only)",
     );
     log::write_print(
         writer,
         "  --config=NAME      use config with given name or path",
     );
     log::write_print(writer, "  --debug            enable debug output");
-    log::write_print(writer, "  --force            skip confirmation prompt");
     log::write_print(
         writer,
-        "  --preview          preview images and space that would be deleted",
+        "  --force            skip confirmation prompt (prune only)",
+    );
+    log::write_print(
+        writer,
+        "  --preview          preview images and space that would be deleted (prune only)",
     );
     log::write_print(
         writer,
@@ -120,24 +127,28 @@ mod tests {
             "{}\n",
             format::format_version_header(APP_NAME, APP_VERSION, Some("Image Mode"))
         )));
-        assert!(output.contains("Manage orphaned and dangling container images.\n"));
-        assert!(output.contains("Usage: pods image [OPTIONS] ACTION [TARGETS]\n"));
-        assert!(output.contains("ACTIONS:\n"));
-        assert!(output.contains("  update             update all defined images of the pod\n"));
-        assert!(output.contains("  prune              prune dangling or all unused images\n"));
-        assert!(output.contains("  help               display this help text\n"));
-        assert!(output.contains("OPTIONS:\n"));
         assert!(
-            output
-                .contains("  --all              prune all unused images, not just dangling ones\n")
+            output.contains("Pull recipe images and prune dangling or unused container images.\n")
         );
+        assert!(output.contains("Alias: img\n"));
+        assert!(output.contains("Usage: pods image [OPTIONS] [ACTION] [TARGETS]\n"));
+        assert!(output.contains("ACTIONS:\n"));
+        assert!(output.contains("  help               display this help and exit\n"));
+        assert!(output.contains("  prune              prune dangling or all unused images\n"));
+        assert!(output.contains(
+            "  update             pull latest images for recipes, @groups, or containers without reloading\n"
+        ));
+        assert!(output.find("ACTIONS:").unwrap() < output.find("OPTIONS:").unwrap());
+        assert!(output.contains("OPTIONS:\n"));
+        assert!(output.contains(
+            "  --all              prune all unused images, not just dangling ones (prune only)\n"
+        ));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
-        assert!(output.contains("  --force            skip confirmation prompt\n"));
-        assert!(
-            output
-                .contains("  --preview          preview images and space that would be deleted\n")
-        );
+        assert!(output.contains("  --force            skip confirmation prompt (prune only)\n"));
+        assert!(output.contains(
+            "  --preview          preview images and space that would be deleted (prune only)\n"
+        ));
         assert!(
             output.contains(
                 "  --simulate         preview generated commands without executing them\n"

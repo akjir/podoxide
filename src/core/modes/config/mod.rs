@@ -18,6 +18,7 @@
 pub mod edit;
 pub mod help;
 pub mod inspect;
+mod render;
 pub mod show;
 
 use crate::core::context::{ConfigAction, Context};

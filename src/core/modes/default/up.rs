@@ -17,10 +17,10 @@
 
 use crate::core::container;
 use crate::core::context::Context;
+use crate::core::modes::targets;
 use crate::core::pod;
 use crate::error::PodError;
 use crate::io::exec::command::ExecOutcome;
-use super::execute_lifecycle_action;
 
 /// Creates and starts target pods and containers in deterministic top-to-bottom declaration
 /// order (`1..N`) (`create` + `start`), or creates and starts explicitly targeted containers.
@@ -40,5 +40,5 @@ use super::execute_lifecycle_action;
 /// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
 /// cannot be read or validated, or a `podman` creation/startup command fails.
 pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
-    execute_lifecycle_action(context, pod::up, container::up)
+    targets::execute_lifecycle_action(context, pod::up, container::up)
 }

@@ -28,9 +28,10 @@ use crate::utilities::format;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header, `pods connect` usage synopsis, actions (`shell`, `help`),
-///    options (`--config`, `--debug`, `--simulate`), and `<target>` resolution rules
-///    (`<recipe>`, `<recipe>/<container>`, `<absolute_name>`) via [`log::write_print`].
+/// 2. Output the mode version header, description, alias, `pods connect` usage synopsis,
+///    actions (`help`, `shell`), options (`--config`, `--debug`, `--simulate`), and `<target>`
+///    resolution rules (`<recipe>`, `<recipe>/<container>`, `<absolute_name>`) via
+///    [`log::write_print`].
 ///
 /// # Errors
 ///
@@ -40,18 +41,8 @@ pub fn handle(_context: &Context) -> Result<(), PodError> {
     Ok(())
 }
 
-/// Writes the `ACTIONS:` section for `pods connect` to `writer`.
-fn write_actions_section<W: Write>(writer: &mut W) {
-    log::write_print(writer, "ACTIONS:");
-    log::write_print(
-        writer,
-        "  shell              open an interactive shell (default)",
-    );
-    log::write_print(writer, "  help               display this help");
-}
-
 /// Writes the `pods connect` help text to `writer`.
-fn write_help<W: Write>(writer: &mut W) {
+pub(crate) fn write_help<W: Write>(writer: &mut W) {
     log::write_print(
         writer,
         &format::format_version_header(APP_NAME, APP_VERSION, Some("Connect Mode")),
@@ -61,13 +52,24 @@ fn write_help<W: Write>(writer: &mut W) {
         writer,
         "Connect to a running container with an interactive shell.",
     );
-    log::write_print(writer, "Usage: pods connect [OPTIONS] [<action>] <target>");
+    log::write_print(writer, "Alias: con");
+    log::write_print(writer, "Usage: pods connect [OPTIONS] [ACTION] TARGET");
     log::write_print(writer, "");
     write_actions_section(writer);
     log::write_print(writer, "");
     write_options_section(writer);
     log::write_print(writer, "");
     write_target_section(writer);
+}
+
+/// Writes the `ACTIONS:` section for `pods connect` to `writer`.
+fn write_actions_section<W: Write>(writer: &mut W) {
+    log::write_print(writer, "ACTIONS:");
+    log::write_print(writer, "  help               display this help and exit");
+    log::write_print(
+        writer,
+        "  shell              open an interactive shell (default when TARGET is provided)",
+    );
 }
 
 /// Writes the `OPTIONS:` section for `pods connect` to `writer`.
@@ -119,10 +121,14 @@ mod tests {
             format::format_version_header(APP_NAME, APP_VERSION, Some("Connect Mode"))
         )));
         assert!(output.contains("Connect to a running container with an interactive shell.\n"));
-        assert!(output.contains("Usage: pods connect [OPTIONS] [<action>] <target>\n"));
+        assert!(output.contains("Alias: con\n"));
+        assert!(output.contains("Usage: pods connect [OPTIONS] [ACTION] TARGET\n"));
         assert!(output.contains("ACTIONS:\n"));
-        assert!(output.contains("  shell              open an interactive shell (default)\n"));
-        assert!(output.contains("  help               display this help\n"));
+        assert!(output.contains("  help               display this help and exit\n"));
+        assert!(output.contains(
+            "  shell              open an interactive shell (default when TARGET is provided)\n"
+        ));
+        assert!(output.find("ACTIONS:").unwrap() < output.find("OPTIONS:").unwrap());
         assert!(output.contains("OPTIONS:\n"));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));

@@ -17,10 +17,10 @@
 
 use crate::core::container;
 use crate::core::context::Context;
+use crate::core::modes::targets;
 use crate::core::pod;
 use crate::error::PodError;
 use crate::io::exec::command::ExecOutcome;
-use super::execute_lifecycle_action;
 
 /// Stops and starts existing target pods and containers (`stop` + `start`) without removing
 /// or recreating them, or restarts explicitly targeted containers.
@@ -40,7 +40,7 @@ use super::execute_lifecycle_action;
 /// Returns [`PodError`] if target expansion or resolution fails, a targeted `.pod` recipe file
 /// cannot be read or validated, or a `podman` stop/start command fails.
 pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
-    execute_lifecycle_action(context, pod::restart, |item, _pod, simulate| {
+    targets::execute_lifecycle_action(context, pod::restart, |item, _pod, simulate| {
         container::restart(item, simulate)
     })
 }

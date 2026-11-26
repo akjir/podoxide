@@ -28,9 +28,9 @@ use crate::utilities::format;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header, `pods command` usage synopsis, available actions (`exec`,
-///    `list`, `help`), options (`--config`, `--debug`, `--simulate`), and `<recipe>` /
-///    `<command|index>` argument descriptions via [`log::write_print`].
+/// 2. Output the mode version header, description, alias, `pods command` usage synopsis,
+///    actions (`exec`, `help`, `list`), options (`--config`, `--debug`, `--simulate`), and
+///    `<recipe>` / `<command|index>` argument descriptions via [`log::write_print`].
 ///
 /// # Errors
 ///
@@ -40,22 +40,8 @@ pub fn handle(_context: &Context) -> Result<(), PodError> {
     Ok(())
 }
 
-/// Writes the `ACTIONS:` section for `pods command` to `writer`.
-fn write_actions_section<W: Write>(writer: &mut W) {
-    log::write_print(writer, "ACTIONS:");
-    log::write_print(
-        writer,
-        "  exec               execute a command defined in a recipe (default when COMMAND is provided)",
-    );
-    log::write_print(
-        writer,
-        "  list               list all valid commands for a recipe (default)",
-    );
-    log::write_print(writer, "  help               display this help text");
-}
-
 /// Writes the `pods command` help text to `writer`.
-fn write_help<W: Write>(writer: &mut W) {
+pub(crate) fn write_help<W: Write>(writer: &mut W) {
     log::write_print(
         writer,
         &format::format_version_header(APP_NAME, APP_VERSION, Some("Command Mode")),
@@ -63,8 +49,9 @@ fn write_help<W: Write>(writer: &mut W) {
     log::write_print(writer, "");
     log::write_print(
         writer,
-        "Execute a command defined in a recipe for a container.",
+        "Execute or list predefined commands declared in a recipe.",
     );
+    log::write_print(writer, "Alias: cmd");
     log::write_print(
         writer,
         "Usage: pods command [OPTIONS] [ACTION] RECIPE [COMMAND|INDEX]",
@@ -85,6 +72,20 @@ fn write_help<W: Write>(writer: &mut W) {
     log::write_print(
         writer,
         "  <number>           command by numeric index defined in recipe to execute",
+    );
+}
+
+/// Writes the `ACTIONS:` section for `pods command` to `writer`.
+fn write_actions_section<W: Write>(writer: &mut W) {
+    log::write_print(writer, "ACTIONS:");
+    log::write_print(
+        writer,
+        "  exec               execute a command defined in a recipe (default when COMMAND is provided)",
+    );
+    log::write_print(writer, "  help               display this help and exit");
+    log::write_print(
+        writer,
+        "  list               list all valid commands for a recipe (default when RECIPE is provided)",
     );
 }
 
@@ -119,17 +120,18 @@ mod tests {
             "{}\n",
             format::format_version_header(APP_NAME, APP_VERSION, Some("Command Mode"))
         )));
-        assert!(output.contains("Execute a command defined in a recipe for a container.\n"));
+        assert!(output.contains("Execute or list predefined commands declared in a recipe.\n"));
+        assert!(output.contains("Alias: cmd\n"));
         assert!(output.contains("Usage: pods command [OPTIONS] [ACTION] RECIPE [COMMAND|INDEX]\n"));
         assert!(output.contains("ACTIONS:\n"));
         assert!(output.contains(
             "  exec               execute a command defined in a recipe (default when COMMAND is provided)\n"
         ));
-        assert!(
-            output
-                .contains("  list               list all valid commands for a recipe (default)\n")
-        );
-        assert!(output.contains("  help               display this help text\n"));
+        assert!(output.contains("  help               display this help and exit\n"));
+        assert!(output.contains(
+            "  list               list all valid commands for a recipe (default when RECIPE is provided)\n"
+        ));
+        assert!(output.find("ACTIONS:").unwrap() < output.find("OPTIONS:").unwrap());
         assert!(output.contains("OPTIONS:\n"));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));

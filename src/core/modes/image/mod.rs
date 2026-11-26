@@ -16,6 +16,7 @@
 //! Image mode (`pods image` / `pods img`) action dispatcher.
 
 pub mod help;
+mod preview;
 pub mod prune;
 pub mod update;
 

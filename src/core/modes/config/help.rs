@@ -28,8 +28,9 @@ use crate::utilities::format;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header, `pods config` usage synopsis, options (`--config`,
-///    `--debug`, `--simulate`), and actions (`help`, `edit`, `inspect`, `show`) via [`log::write_print`].
+/// 2. Output the mode version header, description, alias, `pods config` usage synopsis,
+///    actions (`edit`, `help`, `inspect`, `show`), and options (`--config`, `--debug`,
+///    `--simulate`) via [`log::write_print`].
 ///
 /// # Errors
 ///
@@ -40,14 +41,44 @@ pub fn handle(_context: &Context) -> Result<(), PodError> {
 }
 
 /// Writes the `pods config` help text to `writer`.
-fn write_help<W: Write>(writer: &mut W) {
+pub(crate) fn write_help<W: Write>(writer: &mut W) {
     log::write_print(
         writer,
-        &format::format_version_header(APP_NAME, APP_VERSION, None),
+        &format::format_version_header(APP_NAME, APP_VERSION, Some("Config Mode")),
     );
     log::write_print(writer, "");
-    log::write_print(writer, "Usage: pods config [OPTIONS] ACTION");
+    log::write_print(
+        writer,
+        "Inspect, display, and edit the active configuration file.",
+    );
+    log::write_print(writer, "Alias: cfg");
+    log::write_print(writer, "Usage: pods config [OPTIONS] [ACTION]");
     log::write_print(writer, "");
+    write_actions_section(writer);
+    log::write_print(writer, "");
+    write_options_section(writer);
+}
+
+/// Writes the `ACTIONS:` section for `pods config` to `writer`.
+fn write_actions_section<W: Write>(writer: &mut W) {
+    log::write_print(writer, "ACTIONS:");
+    log::write_print(
+        writer,
+        "  edit               open the configuration file in the configured editor",
+    );
+    log::write_print(writer, "  help               display this help and exit");
+    log::write_print(
+        writer,
+        "  inspect            validate and display settings, directories, and groups (default)",
+    );
+    log::write_print(
+        writer,
+        "  show               display the raw configuration file with line numbers",
+    );
+}
+
+/// Writes the `OPTIONS:` section for `pods config` to `writer`.
+fn write_options_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "OPTIONS:");
     log::write_print(
         writer,
@@ -58,12 +89,6 @@ fn write_help<W: Write>(writer: &mut W) {
         writer,
         "  --simulate         preview generated commands without executing them",
     );
-    log::write_print(writer, "");
-    log::write_print(writer, "ACTIONS:");
-    log::write_print(writer, "  help               display this help and exit");
-    log::write_print(writer, "  edit               edit config");
-    log::write_print(writer, "  inspect            inspect config");
-    log::write_print(writer, "  show               show config");
 }
 
 #[cfg(test)]
@@ -81,9 +106,23 @@ mod tests {
 
         assert!(output.contains(&format!(
             "{}\n",
-            format::format_version_header(APP_NAME, APP_VERSION, None)
+            format::format_version_header(APP_NAME, APP_VERSION, Some("Config Mode"))
         )));
-        assert!(output.contains("Usage: pods config [OPTIONS] ACTION\n"));
+        assert!(output.contains("Inspect, display, and edit the active configuration file.\n"));
+        assert!(output.contains("Alias: cfg\n"));
+        assert!(output.contains("Usage: pods config [OPTIONS] [ACTION]\n"));
+        assert!(output.contains("ACTIONS:\n"));
+        assert!(output.contains(
+            "  edit               open the configuration file in the configured editor\n"
+        ));
+        assert!(output.contains("  help               display this help and exit\n"));
+        assert!(output.contains(
+            "  inspect            validate and display settings, directories, and groups (default)\n"
+        ));
+        assert!(output.contains(
+            "  show               display the raw configuration file with line numbers\n"
+        ));
+        assert!(output.find("ACTIONS:").unwrap() < output.find("OPTIONS:").unwrap());
         assert!(output.contains("OPTIONS:\n"));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
@@ -92,11 +131,6 @@ mod tests {
                 "  --simulate         preview generated commands without executing them\n"
             )
         );
-        assert!(output.contains("ACTIONS:\n"));
-        assert!(output.contains("  help               display this help and exit\n"));
-        assert!(output.contains("  edit               edit config\n"));
-        assert!(output.contains("  inspect            inspect config\n"));
-        assert!(output.contains("  show               show config\n"));
 
         let context = Context::new();
         assert!(handle(&context).is_ok());

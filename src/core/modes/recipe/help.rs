@@ -28,9 +28,9 @@ use crate::utilities::format;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header, `pods recipe` usage synopsis, options (`--all`, `--config`,
-///    `--debug`, `--simulate`), actions (`help`, `edit`, `inspect`, `list`, `show`), and `<recipe>`
-///    argument description via [`log::write_print`].
+/// 2. Output the mode version header, description, alias, `pods recipe` usage synopsis,
+///    actions (`edit`, `help`, `inspect`, `list`, `show`), options (`--all`, `--config`,
+///    `--debug`, `--simulate`), and `<recipe>` argument description via [`log::write_print`].
 ///
 /// # Errors
 ///
@@ -40,31 +40,45 @@ pub fn handle(_context: &Context) -> Result<(), PodError> {
     Ok(())
 }
 
-/// Writes the `ACTIONS:` section for `pods recipe` to `writer`.
-fn write_actions_section<W: Write>(writer: &mut W) {
-    log::write_print(writer, "ACTIONS:");
-    log::write_print(writer, "  help               display this help and exit");
-    log::write_print(writer, "  edit               edit recipe");
-    log::write_print(writer, "  inspect            inspect recipe");
-    log::write_print(writer, "  list               list all recipes");
-    log::write_print(writer, "  show               show recipe");
-}
-
 /// Writes the `pods recipe` help text to `writer`.
-fn write_help<W: Write>(writer: &mut W) {
+pub(crate) fn write_help<W: Write>(writer: &mut W) {
     log::write_print(
         writer,
-        &format::format_version_header(APP_NAME, APP_VERSION, None),
+        &format::format_version_header(APP_NAME, APP_VERSION, Some("Recipe Mode")),
     );
     log::write_print(writer, "");
-    log::write_print(writer, "Usage: pods recipe [OPTIONS] ACTION NAME");
-    log::write_print(writer, "");
-    write_options_section(writer);
+    log::write_print(writer, "List, inspect, display, and edit recipe files.");
+    log::write_print(writer, "Alias: rec");
+    log::write_print(writer, "Usage: pods recipe [OPTIONS] [ACTION] [NAME]");
     log::write_print(writer, "");
     write_actions_section(writer);
     log::write_print(writer, "");
+    write_options_section(writer);
+    log::write_print(writer, "");
     log::write_print(writer, "NAME:");
     log::write_print(writer, "  *                  name of the recipe");
+}
+
+/// Writes the `ACTIONS:` section for `pods recipe` to `writer`.
+fn write_actions_section<W: Write>(writer: &mut W) {
+    log::write_print(writer, "ACTIONS:");
+    log::write_print(
+        writer,
+        "  edit               open a recipe file in the configured editor",
+    );
+    log::write_print(writer, "  help               display this help and exit");
+    log::write_print(
+        writer,
+        "  inspect            validate a recipe file and report diagnostics",
+    );
+    log::write_print(
+        writer,
+        "  list               list configured recipes and status (default)",
+    );
+    log::write_print(
+        writer,
+        "  show               display a recipe file with line numbers (default when NAME is provided)",
+    );
 }
 
 /// Writes the `OPTIONS:` section for `pods recipe` to `writer`.
@@ -72,7 +86,7 @@ fn write_options_section<W: Write>(writer: &mut W) {
     log::write_print(writer, "OPTIONS:");
     log::write_print(
         writer,
-        "  --all              include unconfigured recipes found on disk",
+        "  --all              include unconfigured recipes found on disk (list only)",
     );
     log::write_print(
         writer,
@@ -100,13 +114,30 @@ mod tests {
 
         assert!(output.contains(&format!(
             "{}\n",
-            format::format_version_header(APP_NAME, APP_VERSION, None)
+            format::format_version_header(APP_NAME, APP_VERSION, Some("Recipe Mode"))
         )));
-        assert!(output.contains("Usage: pods recipe [OPTIONS] ACTION NAME\n"));
-        assert!(output.contains("OPTIONS:\n"));
+        assert!(output.contains("List, inspect, display, and edit recipe files.\n"));
+        assert!(output.contains("Alias: rec\n"));
+        assert!(output.contains("Usage: pods recipe [OPTIONS] [ACTION] [NAME]\n"));
+        assert!(output.contains("ACTIONS:\n"));
         assert!(
-            output.contains("  --all              include unconfigured recipes found on disk\n")
+            output.contains("  edit               open a recipe file in the configured editor\n")
         );
+        assert!(output.contains("  help               display this help and exit\n"));
+        assert!(
+            output.contains("  inspect            validate a recipe file and report diagnostics\n")
+        );
+        assert!(
+            output.contains("  list               list configured recipes and status (default)\n")
+        );
+        assert!(output.contains(
+            "  show               display a recipe file with line numbers (default when NAME is provided)\n"
+        ));
+        assert!(output.find("ACTIONS:").unwrap() < output.find("OPTIONS:").unwrap());
+        assert!(output.contains("OPTIONS:\n"));
+        assert!(output.contains(
+            "  --all              include unconfigured recipes found on disk (list only)\n"
+        ));
         assert!(output.contains("  --config=NAME      use config with given name or path\n"));
         assert!(output.contains("  --debug            enable debug output\n"));
         assert!(
@@ -114,12 +145,6 @@ mod tests {
                 "  --simulate         preview generated commands without executing them\n"
             )
         );
-        assert!(output.contains("ACTIONS:\n"));
-        assert!(output.contains("  help               display this help and exit\n"));
-        assert!(output.contains("  edit               edit recipe\n"));
-        assert!(output.contains("  inspect            inspect recipe\n"));
-        assert!(output.contains("  list               list all recipes\n"));
-        assert!(output.contains("  show               show recipe\n"));
         assert!(output.contains("NAME:\n"));
         assert!(output.contains("  *                  name of the recipe\n"));
 

@@ -34,7 +34,7 @@ const MAX_POD_LOGS_ARGS: usize = 16;
 pub const SHELL_FALLBACK_COMMAND: [&str; 3] = [
     "sh",
     "-c",
-    "command -v bash >/dev/null 2>&1 && exec bash || exec sh",
+    "if command -v bash >/dev/null 2>&1; then exec bash; fi; exec sh",
 ];
 
 /// Parameters for executing a command inside a running container via [`exec_container`] (`podman exec`).
