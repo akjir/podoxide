@@ -85,7 +85,7 @@ Argument parsing follows these rules:
 | :---------------- | :--------------------------------------------------------------------------------------- |
 | `--config=<name>` | Load an alternative configuration file by name or path (with or without `.conf`).        |
 | `--debug`         | Enable verbose debug output for argument parsing, path resolution, and target expansion. |
-| `--simulate`      | Preview generated commands and file operations without executing them on the host.       |
+| `--simulate`      | Preview generated commands and file operations without executing them on the host (read-only and live-query actions do not simulate and suppress the simulate-mode notice). |
 
 ## Configuration Reference
 
@@ -164,7 +164,7 @@ Ports must be decimal integers in `1..=65535` (or ascending `<start>-<end>` rang
 
 #### Maintenance Commands (`command <name>`)
 
-Each `command <name> { ... }` block inside `pod` defines a named maintenance command for `pods command`. Both `container` and `execute` must be non-empty; `pods recipe inspect` rejects incomplete command blocks.
+Each `command <name> { ... }` block inside `pod` defines a named maintenance command for `pods command`. Both `container` and `execute` must be non-empty; `pods recipe inspect` verifies that `container` resolves to a declared container and that `execute` tokenizes cleanly with a valid non-flag program token.
 
 | Directive     | Type     | Required | Description                                                                             |
 | :------------ | :------- | :------- | :-------------------------------------------------------------------------------------- |
@@ -180,7 +180,7 @@ Containers declared in `container [<id>] { ... }` blocks are created and started
 | Field / Directive | Type        | Required | Description                                                                                 |
 | :---------------- | :---------- | :------- | :------------------------------------------------------------------------------------------ |
 | `<id>`            | `string`    | No       | Container name in the block header; supports relative (`*db`), explicit, or omitted naming. |
-| `image`           | `string`    | Yes      | Image repository and tag (`example/db-server:latest`; rejects `://`, leading/trailing `/`, `//`, and malformed or empty repository, tag, or digest components). |
+| `image`           | `string`    | Yes      | Image repository and tag (`example/db-server:latest`; rejects `://`, leading/trailing `/`, `//`, malformed or empty repository/tag/digest components, and invalid combined `<registry>/<image>` references). |
 | `registry`        | `string`    | No       | Registry override for this container (rejects `://`, leading/trailing `/`, `//`, malformed or empty host/namespace components, and invalid port syntax); falls back to `pod.registry`. |
 | `restart`         | `string`    | No       | Restart policy passed to `--restart` (for example, `always` or `on-failure`).               |
 | `volume`          | `directive` | No       | Volume mount definition `<host_dir> <container_dir> [<options>]` (repeatable).              |
@@ -515,7 +515,7 @@ pods recipe [OPTIONS] [ACTION] [<recipe>]
 | :-------- | :---------------------------------------------------------------------------------------------------------------------------- |
 | `edit`    | Open the specified `.pod` recipe file in the external editor configured in `pods.conf`, propagating non-zero editor exit codes. |
 | `help`    | Display command-line help for `recipe` mode.                                                                                  |
-| `inspect` | Validate the specified `.pod` recipe file (including non-empty `container` and `execute` directives in `command` blocks) and display detailed syntax or semantic diagnostics on error. |
+| `inspect` | Validate the specified `.pod` recipe file (including resolved `<registry>/<image>` references, `command.container` targets, and `command.execute` syntax) and display detailed syntax or semantic diagnostics on error. |
 | `list`    | List all recipes registered in `pods.conf` with descriptions and validation status (`[OK]`, `[ERROR]`, `[NOT FOUND]`) (default). |
 | `show`    | Print the `.pod` recipe file with 1-based line numbers (default when `<recipe>` is given without action).                     |
 
@@ -571,7 +571,7 @@ pods config [OPTIONS] [ACTION]
 | :-------- | :------------------------------------------------------------------------------------------------------------------------- |
 | `edit`    | Open the active configuration file in the external editor defined by `general.editor`, propagating non-zero editor exit codes. |
 | `help`    | Display command-line help for `config` mode.                                                                               |
-| `inspect` | Display the validated configuration tree, recipe inspection status, and validation summary (default when action is omitted). |
+| `inspect` | Display the validated configuration tree, directory status (`[OK]`, `[NOT SET]` when `pods.path` is omitted, `[NOT FOUND]`), recipe inspection status, and validation summary (default when action is omitted). |
 | `show`    | Print the active `pods.conf` file with 1-based line numbers (bypasses PSL validation, so it works even on syntactically broken configuration files). |
 
 ### Options

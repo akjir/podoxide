@@ -40,6 +40,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Detect interactive terminals for `command exec` and `connect` (`-it` on TTY, `-i` when piped) and for colored `logs` output while respecting non-empty `NO_COLOR` values.
 - Group multi-tag aliases per distinct image in `image prune --preview` and display a truncation warning with a lower-bound reclaimable total when more than 1024 unused images are present.
 - Change the default recipe template pod path to a rootless-friendly relative path (`./pods/example-stack`).
+- Suppress the `Simulate mode is active.` notice on read-only and live-query actions (`status`, `config inspect`, `recipe list`, `recipe inspect`, `recipe show`, `command list`, and `image prune --preview`).
+- Display `-` and `[NOT SET]` in `config inspect` when `pods.path` is omitted in `pods.conf`, and avoid writing partial output when directory inspection fails.
 
 ### Removed
 
@@ -52,7 +54,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Respect configured simulation mode settings during `image prune`, deduplicate multi-tagged images by full image ID, and exit with a non-zero status when confirmation is declined or receives EOF.
 - Always query live container state in `status` even when simulation mode is active, and distinguish missing `.pod` files (`Not Found`) from invalid recipes (`Recipe Error`).
 - Distinguish stopped from nonexistent unmanaged containers in `connect`, prioritize registered recipes over unreferenced files on disk, and accept uppercase names for unmanaged containers.
-- Validate recipe `command` blocks during `recipe inspect` and require recipe registration consistently across `logs`, `command`, and `connect` recipe targets.
+- Validate recipe `command` blocks (including target container resolution and `execute` tokenization) and resolved `<registry>/<image>` references consistently across recipe inspection, listing, and execution.
 - Accept `all` (case-insensitive, forwarded as `-1` to Podman) for `logs --tail` and space-separated timestamps for `logs --since` and `--until`.
 - Preserve quoted arguments containing spaces when executing recipe maintenance commands and in pod and container option directives.
 - Prevent `init` dry-run simulation from writing template files to disk and document simulation support in `init` help and shell completion.
@@ -62,10 +64,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Propagate non-zero exit codes from `config edit` and `recipe edit` when the configured editor exits unsuccessfully.
 - Keep containers with identical explicit names in separate pods distinct in `status` output and trim trailing spaces from status table lines.
 - Reject mount options on anonymous volumes, descending port ranges in `publish`, and malformed empty components in `image` and `registry` values.
-- Fix Bash completion for word-break splitting on `=`, `@`, and `:`, quoted or escaped `--config` paths, directory slashes on glued `--config=` paths, quoted recipe headers and group entries, empty candidates, duplicate targets, and CLI-rejected flag or target combinations.
+- Fix Bash completion for word-break splitting on `=`, `@`, and `:`, quoted, escaped, or `~/` `--config` paths, directory slashes on glued `--config=` paths, quoted recipe headers and group entries, empty candidates, duplicate targets, CLI-rejected flag or target combinations (including omitting `help` after `logs` filter flags), and `nocasematch` or `set -e` shell settings.
 - Prevent shell variable leaks in Bash completion and drain bounded subprocess pipes cleanly to avoid broken-pipe stalls.
+- Fix configuration root-block argument diagnostics, multi-argument `command` and `option` directive spans, CLI container typo line attribution, and diagnostic help hints for invalid recipes and PSL limits.
+- Fix interactive confirmation prompt newlines on piped `stdin` or read errors, wrapped-line terminal spinner scrollback flooding, exit-code `130` warnings on `SIGINT`, simulated-vs-live pod creation state isolation, redundant stale checks after failed pulls, container reload failure summaries, status cell sanitization before trimming, and error/warning formatting consistency.
 
 ### Security
 
-- Harden editor, port publishing, registry, image, pod and container identifier, and host path validation against flag injection, path traversal, and malformed specifications.
-- Enforce non-blocking bounded file reads, symlink protection on file creation, pre-scan PSL parser resource limits, and terminal control and BiDi character sanitization across diagnostic and log output.
+- Eliminate `<Tab>` command-execution risk in Bash `--config` filename completion by replacing `compgen -f` with NUL-delimited pure-Bash globbing and literal prefix matching.
+- Harden editor, port publishing, registry, image, option (blocking quoted option smuggling), pod and container identifier, shell command quoting, and host path validation against flag injection, path traversal, and malformed specifications.
+- Enforce non-blocking bounded file reads, bounded symlink path resolution, symlink protection and partial-write cleanup on exclusive file creation, pre-scan PSL parser resource limits, JSON-encoded `podman ps` command parsing against record-delimiter spoofing, and control/BiDi/Unicode-line-separator sanitization across PSL comments, diagnostics, tables, and logs.

@@ -22,7 +22,7 @@ _pods_comp_filter_and_sort() {
         jdx=$(( idx - 1 ))
         while (( jdx >= 0 )) && [[ "${matches[jdx]}" > "$key" ]]; do
             matches[jdx + 1]="${matches[jdx]}"
-            (( jdx-- ))
+            jdx=$(( jdx - 1 ))
         done
         matches[jdx + 1]="$key"
     done
@@ -45,22 +45,63 @@ _pods_comp_complete_config_files() {
     local opt_prefix="$2"
     local -a raw_entries=()
     local -a candidates=()
-    local entry
+    local display_dir="" base_part="$prefix" search_dir="."
+    local entry full_path display_entry
 
     if [[ -z "$opt_prefix" ]] && type compopt >/dev/null 2>&1; then
         compopt -o filenames 2>/dev/null || true
     fi
 
-    readarray -t raw_entries < <(compgen -f -- "$prefix")
-    for entry in "${raw_entries[@]}"; do
-        if [[ -d "$entry" ]]; then
-            if [[ -n "$opt_prefix" && "$entry" != */ ]]; then
-                candidates+=("${opt_prefix}${entry}/")
+    if [[ "$prefix" == */* ]]; then
+        display_dir="${prefix%/*}/"
+        base_part="${prefix##*/}"
+    fi
+    if [[ -n "$display_dir" ]]; then
+        if [[ "$display_dir" == "~/"* && -n "${HOME:-}" ]]; then
+            search_dir="${HOME%/}/${display_dir#"~/"}"
+        else
+            search_dir="$display_dir"
+        fi
+    fi
+
+    if [[ -d "$search_dir" ]]; then
+        readarray -d '' -t raw_entries < <(
+            set +f
+            shopt -s nullglob
+            shopt -u failglob nocaseglob
+            _dir="${search_dir%/}"
+            if [[ "$base_part" == .* ]]; then
+                for _item in "${_dir}"/.*; do
+                    _name="${_item##*/}"
+                    if [[ "$_name" == "." || "$_name" == ".." ]]; then
+                        continue
+                    fi
+                    if [[ "$_name" == "$base_part"* ]]; then
+                        printf '%s\0' "$_name"
+                    fi
+                done
             else
-                candidates+=("${opt_prefix}${entry}")
+                for _item in "${_dir}"/*; do
+                    _name="${_item##*/}"
+                    if [[ "$_name" == "$base_part"* ]]; then
+                        printf '%s\0' "$_name"
+                    fi
+                done
             fi
-        elif [[ -f "$entry" && "$entry" == *.conf ]]; then
-            candidates+=("${opt_prefix}${entry}")
+        )
+    fi
+
+    for entry in "${raw_entries[@]}"; do
+        full_path="${search_dir%/}/${entry}"
+        display_entry="${display_dir}${entry}"
+        if [[ -d "$full_path" ]]; then
+            if [[ -n "$opt_prefix" ]]; then
+                candidates+=("${opt_prefix}${display_entry}/")
+            else
+                candidates+=("${opt_prefix}${display_entry}")
+            fi
+        elif [[ -f "$full_path" && "$entry" == *.conf ]]; then
+            candidates+=("${opt_prefix}${display_entry}")
         fi
     done
 
@@ -68,6 +109,7 @@ _pods_comp_complete_config_files() {
     if [[ -n "$opt_prefix" && ${#COMPREPLY[@]} -eq 1 && "${COMPREPLY[0]}" == */ ]] && type compopt >/dev/null 2>&1; then
         compopt -o nospace 2>/dev/null || true
     fi
+    return 0
 }
 
 _pods_comp_unquote_shell_word() {
@@ -100,7 +142,7 @@ _pods_comp_unquote_shell_word() {
                 case "$next" in
                     '"'|"\\"|'$'|'`')
                         result+="$next"
-                        (( idx++ ))
+                        idx=$(( idx + 1 ))
                         ;;
                     *)
                         result+="\\"
@@ -116,7 +158,7 @@ _pods_comp_unquote_shell_word() {
         elif [[ "$ch" == '"' ]]; then
             in_dq=1
         elif [[ "$ch" == "\\" ]] && (( idx + 1 < len )); then
-            (( idx++ ))
+            idx=$(( idx + 1 ))
             result+="${raw:idx:1}"
         else
             result+="$ch"
@@ -179,9 +221,9 @@ _pods_comp_scan_line() {
             if [[ "$ch" == "#" ]]; then
                 break
             elif [[ "$ch" == "{" ]]; then
-                (( delta++ ))
+                delta=$(( delta + 1 ))
             elif [[ "$ch" == "}" ]]; then
-                (( delta-- ))
+                delta=$(( delta - 1 ))
             fi
         fi
         result+="$ch"
@@ -216,7 +258,7 @@ _pods_comp_tokenize_psl_line() {
             if [[ "$ch" == '"' ]]; then
                 in_dq=0
             elif [[ "$ch" == "\\" ]] && (( idx + 1 < len )); then
-                (( idx++ ))
+                idx=$(( idx + 1 ))
                 next="${line:idx:1}"
                 case "$next" in
                     '"'|"\\") current+="$next" ;;
@@ -273,21 +315,37 @@ _pods_comp_is_safe_path() {
 
 _pods_comp_resolve_config_path() {
     local raw="$1"
+    local was_quoted=0
     _pods_comp_out=""
     if [[ -z "$raw" ]]; then
-        [[ -f "./pods.conf" && -r "./pods.conf" ]] && _pods_comp_out="./pods.conf"
+        if [[ -f "./pods.conf" && -r "./pods.conf" ]]; then
+            _pods_comp_out="./pods.conf"
+        fi
         return 0
+    fi
+    if [[ "$raw" == *[\'\"\\]* ]]; then
+        was_quoted=1
     fi
     _pods_comp_unquote_shell_word "$raw"
     raw="$_pods_comp_out"
     _pods_comp_out=""
+    if (( !was_quoted )) && [[ "$raw" == "~/"* && -n "${HOME:-}" ]]; then
+        raw="${HOME%/}/${raw#"~/"}"
+    fi
     if [[ -z "$raw" || "$raw" == */ ]] || ! _pods_comp_is_safe_path "$raw"; then
         return 0
     fi
     local resolved="$raw"
-    [[ "$resolved" != *.conf ]] && resolved+=".conf"
-    [[ "$resolved" != /* && "$resolved" != ./* ]] && resolved="./$resolved"
-    [[ -f "$resolved" && -r "$resolved" ]] && _pods_comp_out="$resolved"
+    if [[ "$resolved" != *.conf ]]; then
+        resolved+=".conf"
+    fi
+    if [[ "$resolved" != /* && "$resolved" != ./* ]]; then
+        resolved="./$resolved"
+    fi
+    if [[ -f "$resolved" && -r "$resolved" ]]; then
+        _pods_comp_out="$resolved"
+    fi
+    return 0
 }
 
 _pods_comp_parse_config() {
@@ -345,6 +403,7 @@ _pods_comp_parse_config() {
         (( in_groups && depth < groups_depth )) && in_groups=0
         (( in_recipes && depth < recipes_depth )) && in_recipes=0
     done < "$config_file"
+    return 0
 }
 
 _pods_comp_resolve_recipe_file() {
@@ -355,7 +414,10 @@ _pods_comp_resolve_recipe_file() {
         return 0
     fi
     local candidate="${recipes_path%/}/${recipe_name}.pod"
-    [[ -f "$candidate" && -r "$candidate" ]] && _pods_comp_out="$candidate"
+    if [[ -f "$candidate" && -r "$candidate" ]]; then
+        _pods_comp_out="$candidate"
+    fi
+    return 0
 }
 
 _pods_comp_parse_recipe_containers() {
@@ -397,7 +459,7 @@ _pods_comp_parse_recipe_containers() {
         fi
 
         if (( is_container )); then
-            (( container_index++ ))
+            container_index=$(( container_index + 1 ))
             _pods_comp_normalize_name "$header_arg"
             header_arg="$_pods_comp_out"
             if [[ -z "$header_arg" ]]; then
@@ -419,6 +481,7 @@ _pods_comp_parse_recipe_containers() {
         depth=$(( depth + _pods_comp_delta ))
         (( depth < 0 )) && depth=0
     done < "$recipe_file"
+    return 0
 }
 
 _pods_comp_parse_recipe_commands() {
@@ -456,6 +519,7 @@ _pods_comp_parse_recipe_commands() {
         (( depth < 0 )) && depth=0
         (( in_pod && depth == 0 )) && in_pod=0
     done < "$recipe_file"
+    return 0
 }
 
 _pods_comp_collect_containers_for_cur() {
@@ -524,6 +588,20 @@ _pods_comp_collect_lifecycle_targets() {
 }
 
 _pods_completions() {
+    local _pods_restore_nocasematch=0
+    if shopt -q nocasematch; then
+        _pods_restore_nocasematch=1
+        shopt -u nocasematch
+    fi
+    _pods_completions_impl "$@"
+    local _pods_rc=$?
+    if (( _pods_restore_nocasematch )); then
+        shopt -s nocasematch
+    fi
+    return "$_pods_rc"
+}
+
+_pods_completions_impl() {
     local cur prev prev2 i word
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
@@ -885,6 +963,8 @@ _pods_completions() {
                 if [[ "$cur" == */* ]]; then
                     _pods_comp_collect_containers_for_cur "$cur"
                     candidates=("${_pods_comp_containers[@]}")
+                elif (( has_log_opt )); then
+                    candidates=(follow show "${_pods_comp_recipes[@]}")
                 else
                     candidates=(follow help show "${_pods_comp_recipes[@]}")
                 fi

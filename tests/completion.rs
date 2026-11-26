@@ -377,13 +377,21 @@ fn completion_skips_equals_flag_values_when_detecting_mode_and_action() {
         (&["pods", "logs", "--tail=50", ""][..], 3),
     ] {
         let replies = run_completion(&workspace, words, cword);
-        for action in ["follow", "help", "show"] {
+        for action in ["follow", "show"] {
             assert!(
                 replies.iter().any(|item| item == action),
                 "expected logs sub-action {action} for {words:?}, got {replies:?}"
             );
         }
+        assert!(
+            !replies.iter().any(|item| item == "help"),
+            "logs with log options must omit help for {words:?}, got {replies:?}"
+        );
     }
+    assert!(
+        run_completion(&workspace, &["pods", "logs", ""], 2).contains(&String::from("help")),
+        "logs without log options must still suggest help"
+    );
 
     let after_config = run_completion(&workspace, &["pods", "--config", "=", "pods.conf", ""], 4);
     assert!(

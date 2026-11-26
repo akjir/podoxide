@@ -264,12 +264,16 @@ fn completion_handles_real_bash_colon_split_timestamps() {
 
     for &(words, cword) in cases {
         let replies = run_completion(&workspace, words, cword);
-        for expected in ["follow", "help", "show", "recipe"] {
+        for expected in ["follow", "show", "recipe"] {
             assert!(
                 replies.iter().any(|item| item == expected),
                 "expected {expected:?} for {words:?} (cword={cword}), got {replies:?}"
             );
         }
+        assert!(
+            !replies.iter().any(|item| item == "help"),
+            "logs with --since/--until must omit help for {words:?}, got {replies:?}"
+        );
     }
 
     assert!(

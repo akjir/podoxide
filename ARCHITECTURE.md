@@ -102,6 +102,7 @@ podoxide/
 │   │   │   ├── parser_tests.rs
 │   │   │   ├── resolve.rs
 │   │   │   ├── resolve_tests.rs
+│   │   │   ├── tokenizer.rs
 │   │   │   ├── validation.rs
 │   │   │   └── validation_tests.rs
 │   │   ├── update/
@@ -120,8 +121,7 @@ podoxide/
 │   │       │   ├── exec_tests.rs
 │   │       │   ├── help.rs
 │   │       │   ├── list.rs
-│   │       │   ├── mod.rs
-│   │       │   └── tokenizer.rs
+│   │       │   └── mod.rs
 │   │       ├── config/
 │   │       │   ├── edit.rs
 │   │       │   ├── help.rs
@@ -222,7 +222,8 @@ podoxide/
     ├── common/
     │   └── mod.rs
     ├── completion.rs
-    └── completion_edge.rs
+    ├── completion_edge.rs
+    └── completion_security.rs
 ```
 
 ## Root Files and Templates
@@ -262,7 +263,7 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/cli/flags.rs`             | Implements single-pass CLI flag scanning, `--tail`/`--since`/`--until`/`--config` value validation, and action-aware flag validation. |
 | `src/core/cli/positionals.rs`       | Resolves modes, sub-actions, and target parameters, rejecting mixed pod/group and `<recipe>/<container>` targets (`CliErrorKind::MixedTargets`). |
 | `src/core/constants.rs`             | Defines global application metadata and the compile-time build version constant (`APP_NAME`, `APP_VERSION`). |
-| `src/core/context/mod.rs`           | Defines the runtime `Context` structure (deriving `Mode` from `ModeAction`), config loading, and `requires_config`, `requires_podman`, and `requires_elevation_confirmation` predicates. |
+| `src/core/context/mod.rs`           | Defines the runtime `Context` structure (deriving `Mode` from `ModeAction`), config loading, and `requires_config`, `requires_podman`, `requires_elevation_confirmation`, and `supports_simulate` predicates. |
 | `src/core/context/actions.rs`       | Defines `Mode`, `ModeAction`, and all eight typed mode sub-action enumerations with `Display`, `FromStr`, and `ModeAction::mode`. |
 | `src/core/context/flags.rs`         | Defines bitmask-backed `Flags` (`P-MASK-SAFE`) with getters and setters for all seven boolean CLI flags plus value flag storage. |
 | `src/core/log.rs`                   | Provides structured output, numbered-line printing (`write_numbered_lines`), and diagnostic logging (`debug`, `info`, `pod_error`, `write_*`) with debug state control. |
@@ -275,14 +276,15 @@ The `src/core/` directory contains application state, domain models, argument pa
 | `src/core/container/update.rs`      | Resolves image references, executes cached `podman pull` (`PullCache`), detects stale container image IDs, and conditionally reloads containers. |
 | `src/core/container/validation.rs`  | Validates container names, images, registries, restart policies, options, commands, and volume preconditions, and resolves relative container names. |
 | `src/core/container/volume.rs`      | Validates and formats `VolumeMount` entries against pod base directories. |
-| `src/core/pod/mod.rs`               | Defines `Pod` (with execution-invariant `PartialEq` / `Eq`) and `PodCommand`, and manages pod creation state. |
+| `src/core/pod/mod.rs`               | Defines `Pod` (with execution-invariant `PartialEq` / `Eq`) and `PodCommand`, and manages 3-state pod creation tracking (`PodCreationState`). |
 | `src/core/pod/lifecycle.rs`         | Orchestrates pod-level lifecycle operations (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`) with upfront validation and `ExecOutcome` propagation. |
 | `src/core/pod/update.rs`            | Orchestrates pod-level image pulls (`pull_with_cache`), stale-container image ID detection, and conditional indented pod reload (`update_with_cache`). |
 | `src/core/recipe/mod.rs`            | Defines `Recipe` and `RECIPE_EXTENSION`, exposing `Recipe::inspect`, `read_file`, `file_exists`, and container target resolution. |
 | `src/core/recipe/directives.rs`     | Parses and validates individual `.pod` block headers and directives (`publish`, `volume`, `option`, `name`, `path`, `registry`, `image`) with per-block entry caps and argument-index diagnostic spans. |
 | `src/core/recipe/parser.rs`         | Loads `.pod` files, validates load paths/targets, and translates PSL AST blocks into `Recipe`. |
 | `src/core/recipe/resolve.rs`        | Resolves container specifications (`1..=N`, `*suffix`, exact or prefixed name) with zero-copy fast paths for already-resolved names. |
-| `src/core/recipe/validation.rs`     | Performs semantic validation on `Recipe`, `Pod`, `PodCommand`, `publish` specifications, options, and container names. |
+| `src/core/recipe/tokenizer.rs`      | Splits and validates `command.execute` strings into bounded quote-aware argv tokens. |
+| `src/core/recipe/validation.rs`     | Performs semantic validation on `Recipe`, `Pod`, `PodCommand`, `publish` specifications, options, resolved container images, command targets, and container names. |
 | `src/core/update/mod.rs`            | Defines update outcome models (`ContainerPullRecord`, `ContainerUpdateResult`, `PodUpdateResult`, `PullCache`, `SummaryKind`, `SummaryScope`, `UpdateAction`, `UpdateRunners`) and pull formatting helpers. |
 | `src/core/update/summary.rs`        | Aggregates pod/container update results (`UpdateSummary`, `has_failures`) and renders grouped `Update Summary:` reports. |
 | `src/core/update/writer.rs`         | Implements `IndentedWriter`, preserving indentation across both `\n` and `\r` line boundaries. |
@@ -307,7 +309,6 @@ Executes or lists predefined maintenance commands declared inside a recipe's `po
 | `src/core/modes/command/exec.rs`      | Resolves the target container and executes the selected recipe command via TTY-aware `podman exec` (`-it` on TTY, `-i` when piped). |
 | `src/core/modes/command/help.rs`      | Formats and outputs the CLI help text for `pods command`. |
 | `src/core/modes/command/list.rs`      | Collects, sorts, and displays all valid commands and descriptions defined in a target recipe. |
-| `src/core/modes/command/tokenizer.rs` | Splits `command.execute` strings into bounded quote-aware argv tokens. |
 
 ### Config Mode (`src/core/modes/config/`)
 
@@ -319,7 +320,7 @@ Inspects, validates, displays, and edits the active `pods.conf` configuration fi
 | `src/core/modes/config/edit.rs`    | Opens the active configuration file in the configured editor process. |
 | `src/core/modes/config/help.rs`    | Formats and outputs the CLI help text for `pods config`. |
 | `src/core/modes/config/inspect.rs` | Traverses configured recipe groups, detects missing and cyclic subgroups (`[MISSING GROUP]`, `[CYCLIC GROUP]`), and evaluates recipe status with bounded output tracking. |
-| `src/core/modes/config/render.rs`  | Renders settings, validated directory statuses, aligned group trees (with truncation notice when bounded), unreferenced recipes, and the validation summary. |
+| `src/core/modes/config/render.rs`  | Renders settings, validated directory statuses (`[OK]`, `[NOT SET]`, `[NOT FOUND]`), aligned group trees (with truncation notice when bounded), unreferenced recipes, and the validation summary. |
 | `src/core/modes/config/show.rs`    | Reads the active configuration file and outputs its contents with 1-based line numbers. |
 
 ### Connect Mode (`src/core/modes/connect/`)
@@ -347,7 +348,7 @@ Executes primary pod lifecycle operations and displays container runtime status 
 | `src/core/modes/default/restart.rs`       | Stops and starts existing target pods and containers (or targeted containers) without removing or recreating them (`stop` + `start`). |
 | `src/core/modes/default/start.rs`         | Starts existing stopped target pods and their containers (or targeted containers) in top-to-bottom declaration order. |
 | `src/core/modes/default/status/mod.rs`    | Queries `podman ps -a`, cross-references managed recipes or targeted containers across all host records, and distinguishes missing `.pod` files (`Not Found`) from invalid recipes (`Recipe Error`). |
-| `src/core/modes/default/status/table.rs`  | Parses control-delimited `podman ps` rows, computes column widths, and renders aligned status tables without trailing spaces. |
+| `src/core/modes/default/status/table.rs`  | Parses control-delimited `podman ps` rows (decoding JSON-quoted commands and rejecting empty IDs/names), computes column widths, sanitizes cells, and renders aligned status tables without trailing spaces. |
 | `src/core/modes/default/stop.rs`          | Stops running target containers in reverse bottom-to-top order and stops the parent pod (or targeted containers) without removing them. |
 | `src/core/modes/default/up.rs`            | Loads and validates target recipes, then creates and starts pods and containers (or targeted containers) in top-to-bottom order (`create` + `start`). |
 | `src/core/modes/default/update.rs`        | Wires live Podman pull and image-ID inspectors into `update_runner` to pull images and conditionally reload updated pods or containers. |
@@ -442,9 +443,9 @@ Provides host operating system checks and filesystem operations.
 | File                             | Function |
 | :------------------------------- | :------- |
 | `src/io/system/mod.rs`           | Declares the `env`, `fs`, and internal `path_resolve` submodules. |
-| `src/io/system/env.rs`           | Verifies Linux OS via `std::env::consts::OS`, parses `/proc/self/status` for effective `UID 0`, and reads bounded confirmation lines. |
-| `src/io/system/fs.rs`            | Performs `O_NONBLOCK` bounded file reads, `O_NOFOLLOW` writes, `O_CREAT \| O_EXCL` exclusive file creation, regular-file directory listing, and source-preserving path I/O error wrapping. |
-| `src/io/system/path_resolve.rs`  | Anchors relative paths to the working directory and resolves canonical paths with bounded symlink expansion. |
+| `src/io/system/env.rs`           | Verifies Linux OS via `std::env::consts::OS`, parses `/proc/self/status` for effective `UID 0`, and provides TTY-aware bounded confirmation prompts (`confirm_prompt`, `ConfirmationInput`). |
+| `src/io/system/fs.rs`            | Performs `O_NONBLOCK` bounded file reads, `O_NOFOLLOW` writes, `O_CREAT \| O_EXCL` exclusive file creation with cleanup on partial write failure, regular-file directory listing, and source-preserving path I/O error wrapping. |
+| `src/io/system/path_resolve.rs`  | Anchors relative paths to the working directory and resolves canonical paths with bounded symlink and resolved-byte expansion (`MAX_RESOLVED_PATH_BYTES`). |
 
 ## Utilities (`src/utilities/`)
 
@@ -470,7 +471,8 @@ The `tests/` directory verifies the compiled `pods` binary in isolated RAII temp
 | `tests/cli_runtime.rs`     | Verifies live `status` table alignment and shared-name isolation, `connect` unmanaged uppercase container states, `image prune` in-use filtering and alias grouping, `logs --tail=all` translation, offline Podman-free bypasses, non-zero editor exit propagation, and stale-container `update` reloads. |
 | `tests/cli_workflows.rs`   | Verifies installed-symlink CWD resolution, custom `--config` debug logging and broken-config display, non-zero Podman exit propagation without duplicate `ERROR:` lines, live shared-image `pods update` pull deduplication and reload, and live `pods image prune` preview/abort/confirm/failure flows. |
 | `tests/completion.rs`      | Verifies `.pods-completion.bash` in isolated Bash subshells (`set -u`): zero shell variable leaks, split and glued `--config=` `.conf` filtering, `--flag=value` scanning, action-scoped flag filtering, unknown command rejection, and dynamic group/recipe/container/command completion. |
-| `tests/completion_edge.rs` | Verifies real Bash word-splitting (`=`, `@`, `:`), quoted and escaped `--config` paths, glued `--config=<dir>` slashes, CLI-rejected target/flag suppression and duplicate filtering, quoted PSL tokens/headers, and empty-item handling in `.pods-completion.bash`. |
+| `tests/completion_edge.rs`     | Verifies real Bash word-splitting (`=`, `@`, `:`), quoted and escaped `--config` paths, glued `--config=<dir>` slashes, CLI-rejected target/flag suppression and duplicate filtering, quoted PSL tokens/headers, and empty-item handling in `.pods-completion.bash`. |
+| `tests/completion_security.rs` | Verifies `.pods-completion.bash` against `--config` command-injection payloads, special filenames (embedded newlines, brackets), `~/` expansion, `nocasematch` isolation, and `set -eu` compatibility. |
 
 ## Execution Flow
 
