@@ -276,7 +276,7 @@ mod tests {
             "Podoxide is running with elevated privileges (sudo).",
         );
         write_error(&mut buffer, "Podman 5.8.0 or higher is required.");
-        write_print(&mut buffer, "Podoxide v0.1.0");
+        write_print(&mut buffer, "Podoxide 0.1.0");
         write_numbered_lines(&mut buffer, "first line\nsecond line\n");
 
         let output = String::from_utf8(buffer).unwrap();
@@ -285,7 +285,7 @@ mod tests {
         assert!(output.contains("INFO: Simulate mode is active.\n"));
         assert!(output.contains("WARNING: Podoxide is running with elevated privileges (sudo).\n"));
         assert!(output.contains("ERROR: Podman 5.8.0 or higher is required.\n"));
-        assert!(output.contains("Podoxide v0.1.0\n"));
+        assert!(output.contains("Podoxide 0.1.0\n"));
         assert!(output.contains("  1: first line\n  2: second line\n"));
 
         let mut diagnostic_buffer = Vec::new();

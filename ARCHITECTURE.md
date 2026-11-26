@@ -24,7 +24,8 @@ Podoxide separates pure domain logic from operating system interactions across t
 podoxide/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml
+│       ├── ci.yml
+│       └── release.yml
 ├── .gitignore
 ├── .pods-completion.bash
 ├── AGENTS.md
@@ -230,7 +231,8 @@ podoxide/
 
 | File                        | Function |
 | :-------------------------- | :------- |
-| `.github/workflows/ci.yml`  | Runs formatting (`cargo fmt`), Clippy (`--all-targets -- -D warnings`), test suite, release build, and MSRV `1.88` check and test in Linux CI. |
+| `.github/workflows/ci.yml`  | Runs formatting (`cargo fmt`), Clippy (`--all-targets -- -D warnings`), locked tests, `rustdoc` (`-D warnings`), release build, and MSRV `1.88` check and test in Linux CI. |
+| `.github/workflows/release.yml` | Validates strict `X.Y.Z` release tags against `Cargo.toml`/`Cargo.lock`, runs full Rust/MSRV checks, builds static musl Linux release archives with `SHA256SUMS`, generates OIDC build provenance attestations, and publishes GitHub Releases. |
 | `.gitignore`                | Excludes build artifacts, local test workspaces (`.test/`), and editor/backup files from Git tracking. |
 | `.pods-completion.bash`     | Provides pure-Bash autocompletion for modes, actions, action-scoped flags, `.conf` files, groups, recipes, containers, and recipe commands. |
 | `Cargo.toml`                | Defines crate metadata, MSRV (`1.88`), workspace lints, library and binary targets, and release optimizations. |
@@ -242,7 +244,7 @@ podoxide/
 | `recipe.pod`                | Provides the root recipe template embedded and written by `pods init`. |
 | `rustfmt.toml`              | Configures repository `rustfmt` formatting rules (Edition 2024, 100-column width, preserving ASCII import order). |
 | `src/main.rs`           | Serves as the binary entry point (`pods`), delegates execution to `podoxide`, and returns `ExitCode`. |
-| `src/lib.rs`            | Serves as the library root, enforces `#![forbid(unsafe_code)]`, and exports `core`, `error`, `io`, and `utilities`. |
+| `src/lib.rs`            | Serves as the internal library root (`#[doc(hidden)]` modules backing `pods`), enforces `#![forbid(unsafe_code)]`, and exposes `core`, `error`, `io`, and `utilities`. |
 | `src/error/mod.rs`      | Declares and re-exports the central domain error submodules, `MAX_ERROR_TOKEN_BYTES`, `PodError`, and `SystemError`. |
 | `src/error/cli.rs`      | Defines `CliError` and `CliErrorKind` for CLI parsing and validation failures. |
 | `src/error/config.rs`   | Defines `ConfigError` and `ConfigErrorKind` for `pods.conf` semantic validation failures. |

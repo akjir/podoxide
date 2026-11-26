@@ -28,7 +28,7 @@ use crate::utilities::format;
 /// # Workflow
 ///
 /// 1. Do not read `pods.conf` or any `.pod` recipe files.
-/// 2. Output the version header (`Podoxide v<version>+<count>.<hash>[.dev]`) via
+/// 2. Output the version header (`Podoxide <version>+<count>.<hash>[.dev]`) via
 ///    [`log::write_print`].
 ///
 /// # Errors

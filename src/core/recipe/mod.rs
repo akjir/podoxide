@@ -75,12 +75,12 @@ impl Recipe {
         Ok(recipe)
     }
 
-    /// Reads the raw `.pod` file at `path`, mapping a missing file to [`RecipeErrorKind::NotFound`].
+    /// Reads the raw `.pod` file at `path`, mapping a missing file to [`RecipeErrorKind::NotFound`](crate::error::RecipeErrorKind::NotFound).
     ///
     /// # Errors
     ///
-    /// Returns [`PodError`] with [`RecipeErrorKind::InvalidPath`] if `path` is not a valid `.pod`
-    /// path, [`RecipeErrorKind::NotFound`] if `path` does not exist, or [`PodError::Io`] if reading
+    /// Returns [`PodError`] with [`RecipeErrorKind::InvalidPath`](crate::error::RecipeErrorKind::InvalidPath) if `path` is not a valid `.pod`
+    /// path, [`RecipeErrorKind::NotFound`](crate::error::RecipeErrorKind::NotFound) if `path` does not exist, or [`PodError::Io`] if reading
     /// the file fails.
     pub fn read_file(path: &Path) -> Result<String, PodError> {
         parser::validate_load_path(path)?;
@@ -91,7 +91,7 @@ impl Recipe {
     ///
     /// # Errors
     ///
-    /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
+    /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`](crate::error::RecipeErrorKind::ContainerNotFound) when no container matches.
     pub fn resolve_container(&self, container_spec: &str) -> Result<&Container, RecipeError> {
         resolve::resolve_container_entry(self, container_spec).map(|(_, container, _)| container)
     }
@@ -100,7 +100,7 @@ impl Recipe {
     ///
     /// # Errors
     ///
-    /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
+    /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`](crate::error::RecipeErrorKind::ContainerNotFound) when no container matches.
     pub fn resolve_container_index(&self, container_spec: &str) -> Result<usize, RecipeError> {
         resolve::resolve_container_entry(self, container_spec).map(|(index, _, _)| index)
     }
@@ -109,7 +109,7 @@ impl Recipe {
     ///
     /// # Errors
     ///
-    /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`] when no container matches.
+    /// Returns [`RecipeError`] with [`RecipeErrorKind::ContainerNotFound`](crate::error::RecipeErrorKind::ContainerNotFound) when no container matches.
     pub fn resolve_container_name(&self, container_spec: &str) -> Result<String, RecipeError> {
         resolve::resolve_container_entry(self, container_spec).map(|(_, _, name)| name.into_owned())
     }

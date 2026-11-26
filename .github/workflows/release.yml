@@ -1,0 +1,207 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  msrv:
+    name: MSRV 1.88 Check and Test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust 1.88 toolchain
+        uses: dtolnay/rust-toolchain@1.88
+
+      - name: Check all targets on MSRV
+        run: cargo check --all-targets --locked
+
+      - name: Run test suite on MSRV
+        run: cargo test --locked
+
+  release:
+    name: Build and publish release
+    needs: msrv
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag and version metadata
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          import tomllib
+          from pathlib import Path
+
+          tag = os.environ.get("RELEASE_TAG", "")
+          if not re.fullmatch(r"\d+\.\d+\.\d+", tag):
+              sys.exit(f'Release tag "{tag}" must match strict SemVer (X.Y.Z) without a leading "v".')
+
+          required_files = [
+              "Cargo.toml",
+              "Cargo.lock",
+              "README.md",
+              "USAGE.md",
+              "PSL_SPEC.md",
+              "ARCHITECTURE.md",
+              "CHANGELOG.md",
+              "LICENSE",
+              "pods.conf",
+              "recipe.pod",
+              ".pods-completion.bash",
+          ]
+          for name in required_files:
+              path = Path(name)
+              if not path.is_file() or path.stat().st_size == 0:
+                  sys.exit(f"Required release file is missing or empty: {name}")
+
+          cargo_toml = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
+          pkg_version = cargo_toml.get("package", {}).get("version")
+          if pkg_version != tag:
+              sys.exit(f"Cargo.toml version ({pkg_version}) does not match tag ({tag}).")
+          if cargo_toml.get("dependencies") or cargo_toml.get("dev-dependencies"):
+              sys.exit("Cargo.toml must keep [dependencies] and [dev-dependencies] empty.")
+
+          cargo_lock = tomllib.loads(Path("Cargo.lock").read_text(encoding="utf-8"))
+          packages = cargo_lock.get("package", [])
+          if len(packages) != 1 or packages[0].get("name") != "podoxide" or packages[0].get("version") != tag:
+              sys.exit(f"Cargo.lock package metadata does not match podoxide {tag}.")
+
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          if re.search(r"^## \[Unreleased\]", changelog, re.MULTILINE):
+              sys.exit("CHANGELOG.md must not contain an [Unreleased] section on a release tag.")
+          if not re.search(rf"^## \[{re.escape(tag)}\]", changelog, re.MULTILINE):
+              sys.exit(f"CHANGELOG.md is missing a section heading for [{tag}].")
+
+          print(f"Validated release metadata for podoxide {tag}.")
+          PY
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
+
+      - name: Check formatting
+        run: cargo fmt -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run test suite
+        run: cargo test --locked
+
+      - name: Check rustdoc
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --locked
+
+      - name: Build static Linux release binary
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Verify binary and package release assets
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          BIN="target/x86_64-unknown-linux-musl/release/pods"
+          test -x "$BIN"
+
+          if readelf -l "$BIN" | grep -q 'INTERP'; then
+            echo "Expected statically linked binary without PT_INTERP." >&2
+            exit 1
+          fi
+
+          COMMIT_COUNT="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short HEAD)"
+          EXPECTED_VERSION="Podoxide ${RELEASE_TAG}+${COMMIT_COUNT}.${SHORT_HASH}"
+          ACTUAL_VERSION="$("$BIN" version)"
+          if [ "$ACTUAL_VERSION" != "$EXPECTED_VERSION" ]; then
+            echo "Version mismatch: expected '$EXPECTED_VERSION', got '$ACTUAL_VERSION'." >&2
+            exit 1
+          fi
+
+          PACKAGE_DIR="podoxide-${RELEASE_TAG}-linux-x86_64"
+          ARCHIVE_NAME="${PACKAGE_DIR}.tar.gz"
+          STAGE_DIR="${RUNNER_TEMP}/${PACKAGE_DIR}"
+          rm -rf "$STAGE_DIR" release-assets
+          mkdir -p "$STAGE_DIR" release-assets
+
+          install -m 755 "$BIN" "${STAGE_DIR}/pods"
+          install -m 644 .pods-completion.bash "${STAGE_DIR}/.pods-completion.bash"
+          install -m 644 LICENSE README.md USAGE.md PSL_SPEC.md "${STAGE_DIR}/"
+
+          tar -C "$RUNNER_TEMP" -czf "release-assets/${ARCHIVE_NAME}" "$PACKAGE_DIR"
+          (cd release-assets && sha256sum "$ARCHIVE_NAME" > SHA256SUMS && sha256sum -c SHA256SUMS)
+          test -s "release-assets/${ARCHIVE_NAME}"
+          test -s "release-assets/SHA256SUMS"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            release-assets/podoxide-${{ github.ref_name }}-linux-x86_64.tar.gz
+            release-assets/SHA256SUMS
+
+      - name: Extract changelog notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          tag = os.environ.get("RELEASE_TAG", "")
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          heading = re.search(rf"^## \[{re.escape(tag)}\][^\n]*\n", changelog, re.MULTILINE)
+          if heading is None:
+              raise SystemExit(0)
+
+          rest = changelog[heading.end():]
+          next_heading = re.search(r"^## \[", rest, re.MULTILINE)
+          section = (rest if next_heading is None else rest[:next_heading.start()]).strip()
+          if section:
+              notes_path = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "release-notes.md"
+              notes_path.write_text(f"{section}\n", encoding="utf-8")
+          PY
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          ARCHIVE="release-assets/podoxide-${RELEASE_TAG}-linux-x86_64.tar.gz"
+          CHECKSUMS="release-assets/SHA256SUMS"
+          NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
+          if [ -s "$NOTES_FILE" ]; then
+            gh release create "$RELEASE_TAG" "$ARCHIVE" "$CHECKSUMS" \
+              --title "$RELEASE_TAG" \
+              --notes-file "$NOTES_FILE"
+          else
+            gh release create "$RELEASE_TAG" "$ARCHIVE" "$CHECKSUMS" \
+              --title "$RELEASE_TAG" \
+              --generate-notes
+          fi

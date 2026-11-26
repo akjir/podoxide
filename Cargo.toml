@@ -10,7 +10,7 @@ homepage = "https://github.com/akjir/podoxide"
 readme = "README.md"
 keywords = ["podman", "containers", "pods", "cli", "linux"]
 categories = ["command-line-utilities", "virtualization"]
-exclude = [".agents/", ".test/", ".github/", "podoxide.code-workspace"]
+exclude = [".agents/", ".github/", ".test/", "AGENTS.md", "podoxide.code-workspace", "rustfmt.toml"]
 
 [lib]
 name = "podoxide"

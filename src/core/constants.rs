@@ -28,7 +28,11 @@ mod tests {
     #[test]
     fn global_application_constants_match_expected_format() {
         assert_eq!(APP_NAME, "Podoxide");
-        let base_version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let base_version = env!("CARGO_PKG_VERSION");
+        assert!(
+            !APP_VERSION.starts_with('v'),
+            "version must not include a leading 'v' prefix: {APP_VERSION:?}"
+        );
         if let Some(metadata) = APP_VERSION.strip_prefix(&format!("{base_version}+")) {
             let clean_metadata = metadata.strip_suffix(".dev").unwrap_or(metadata);
             let (count, hash) = clean_metadata

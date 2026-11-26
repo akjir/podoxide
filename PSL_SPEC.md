@@ -217,7 +217,7 @@ general {
 }
 
 pods {
-    path /pods
+    path ./pods
 }
 
 recipes {
@@ -240,7 +240,7 @@ recipes {
 pod example-stack {
     name        "Example Web Stack"
     description "A minimal but complete example recipe with a web app and database."
-    path        /pods/example-stack
+    path        ./pods/example-stack
     registry    docker.io
     publish     8080 80 TCP
     option      --userns=keep-id

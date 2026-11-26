@@ -68,10 +68,10 @@ impl GroupValidationState<'_> {
 ///    `Directories:` status lines (`[OK]`, `[OK, K known recipe(s) found]`,
 ///    `[OK, K known and U unreferenced recipe(s) found]`, `[NOT SET]`, or `[NOT FOUND]`).
 /// 4. Iterate through sorted `context.config.recipes.groups`, expand `@<group>` references
-///    for display, inspect `<recipe>.pod` files using [`targets::inspect_recipe`] with a local
+///    for display, inspect `<recipe>.pod` files using `targets::inspect_recipe` with a local
 ///    lookup cache, and render the aligned `Groups:` tree (`[OK]`, `[ERROR]`, `[NOT FOUND]`,
 ///    `[MISSING GROUP]`, `[CYCLIC GROUP]`), emitting a truncation notice if output reaches
-///    [`MAX_GROUP_OUTPUT_LINES`].
+///    `MAX_GROUP_OUTPUT_LINES`.
 /// 5. When unreferenced `.pod` files exist in `recipes.path`, list their recipe stems under
 ///    `Unreferenced Recipes:` with status `[UNREFERENCED]`.
 /// 6. Print the `Validation Summary:` for missing, invalid, or unreferenced recipes.

@@ -55,7 +55,7 @@ fn format_full_version_handles_git_partial_and_non_git_states() {
             Some("d5f2403"),
             WorktreeState::Clean
         ),
-        "v0.1.0+48.d5f2403"
+        "0.1.0+48.d5f2403"
     );
     assert_eq!(
         build_metadata::format_full_version(
@@ -64,23 +64,23 @@ fn format_full_version_handles_git_partial_and_non_git_states() {
             Some("d5f2403"),
             WorktreeState::Dirty
         ),
-        "v0.1.0+48.d5f2403.dev"
+        "0.1.0+48.d5f2403.dev"
     );
     assert_eq!(
         build_metadata::format_full_version("0.1.0", None, None, WorktreeState::Clean),
-        "v0.1.0"
+        "0.1.0"
     );
     assert_eq!(
         build_metadata::format_full_version("0.1.0", None, None, WorktreeState::Dirty),
-        "v0.1.0"
+        "0.1.0"
     );
     assert_eq!(
         build_metadata::format_full_version("0.1.0", Some("5"), None, WorktreeState::Clean),
-        "v0.1.0+5.unknown"
+        "0.1.0+5.unknown"
     );
     assert_eq!(
         build_metadata::format_full_version("0.1.0", None, Some("abc1234"), WorktreeState::Dirty),
-        "v0.1.0+0.abc1234.dev"
+        "0.1.0+0.abc1234.dev"
     );
 }
 
@@ -147,7 +147,7 @@ fn write_version_metadata_emits_clean_directives_outside_git() {
 
     assert_eq!(
         directives,
-        "cargo::rustc-env=PODOXIDE_FULL_VERSION=v0.1.0\ncargo::rerun-if-changed=build.rs\ncargo::rerun-if-changed=build_metadata.rs\n"
+        "cargo::rustc-env=PODOXIDE_FULL_VERSION=0.1.0\ncargo::rerun-if-changed=build.rs\ncargo::rerun-if-changed=build_metadata.rs\n"
     );
 }
 
@@ -166,22 +166,27 @@ fn write_version_metadata_handles_unborn_repo_packed_refs_dirty_and_worktree() {
     let mut unborn_output = Vec::new();
     build_metadata::write_version_metadata(&main_repo, "0.1.0", &mut unborn_output).unwrap();
     let unborn_text = String::from_utf8(unborn_output).unwrap();
-    assert!(unborn_text.contains("cargo::rustc-env=PODOXIDE_FULL_VERSION=v0.1.0\n"));
+    assert!(unborn_text.contains("cargo::rustc-env=PODOXIDE_FULL_VERSION=0.1.0\n"));
     assert!(unborn_text.contains("cargo::rerun-if-changed=build_metadata.rs\n"));
     assert!(!unborn_text.contains("packed-refs"));
     assert!(!unborn_text.contains("cargo:rustc-env"));
     assert!(!unborn_text.contains("cargo:rerun-if-changed"));
 
-    // Commit source files and verify clean repo metadata before packed-refs exists.
+    // Commit source and embedded template files and verify clean repo metadata before packed-refs exists.
     fs::write(main_repo.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    fs::write(main_repo.join("pods.conf"), "general {}\n").unwrap();
+    fs::write(main_repo.join("recipe.pod"), "pod demo {}\n").unwrap();
     fs::write(main_repo.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
-    run_git_ok(&main_repo, &["add", "Cargo.toml", "src/lib.rs"]);
+    run_git_ok(
+        &main_repo,
+        &["add", "Cargo.toml", "pods.conf", "recipe.pod", "src/lib.rs"],
+    );
     run_git_ok(&main_repo, &["commit", "-q", "-m", "initial commit"]);
 
     let mut clean_output = Vec::new();
     build_metadata::write_version_metadata(&main_repo, "0.1.0", &mut clean_output).unwrap();
     let clean_text = String::from_utf8(clean_output).unwrap();
-    assert!(clean_text.contains("cargo::rustc-env=PODOXIDE_FULL_VERSION=v0.1.0+1."));
+    assert!(clean_text.contains("cargo::rustc-env=PODOXIDE_FULL_VERSION=0.1.0+1."));
     assert!(!clean_text.contains(".dev\n"));
     assert!(clean_text.contains("cargo::rerun-if-changed=build.rs\n"));
     assert!(clean_text.contains("cargo::rerun-if-changed=build_metadata.rs\n"));
@@ -189,6 +194,8 @@ fn write_version_metadata_handles_unborn_repo_packed_refs_dirty_and_worktree() {
     assert!(clean_text.contains("cargo::rerun-if-changed=.git/index\n"));
     assert!(clean_text.contains("cargo::rerun-if-changed=.git/refs\n"));
     assert!(clean_text.contains("cargo::rerun-if-changed=Cargo.toml\n"));
+    assert!(clean_text.contains("cargo::rerun-if-changed=pods.conf\n"));
+    assert!(clean_text.contains("cargo::rerun-if-changed=recipe.pod\n"));
     assert!(clean_text.contains("cargo::rerun-if-changed=src\n"));
     assert!(!clean_text.contains("packed-refs"));
 
@@ -209,11 +216,13 @@ fn write_version_metadata_handles_unborn_repo_packed_refs_dirty_and_worktree() {
     let mut worktree_output = Vec::new();
     build_metadata::write_version_metadata(&worktree, "0.1.0", &mut worktree_output).unwrap();
     let worktree_text = String::from_utf8(worktree_output).unwrap();
-    assert!(worktree_text.contains("cargo::rustc-env=PODOXIDE_FULL_VERSION=v0.1.0+1."));
+    assert!(worktree_text.contains("cargo::rustc-env=PODOXIDE_FULL_VERSION=0.1.0+1."));
     assert!(worktree_text.contains("worktrees/worktree/HEAD\n"));
     assert!(worktree_text.contains("worktrees/worktree/index\n"));
     assert!(worktree_text.contains("packed-refs\n"));
     assert!(worktree_text.contains("cargo::rerun-if-changed=Cargo.toml\n"));
+    assert!(worktree_text.contains("cargo::rerun-if-changed=pods.conf\n"));
+    assert!(worktree_text.contains("cargo::rerun-if-changed=recipe.pod\n"));
     assert!(worktree_text.contains("cargo::rerun-if-changed=src\n"));
     for line in worktree_text.lines() {
         if let Some(path) = line.strip_prefix("cargo::rerun-if-changed=")

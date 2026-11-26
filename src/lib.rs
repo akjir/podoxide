@@ -13,11 +13,18 @@
 // You should have received a copy of the GNU General Public License along with
 // this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Core library for the Podoxide CLI tool (`pods`).
+//! Internal library backing the Podoxide CLI tool (`pods`).
+//!
+//! Podoxide is distributed as the `pods` command-line binary and does not provide a stable public
+//! Rust library API.
 
 #![forbid(unsafe_code)]
 
+#[doc(hidden)]
 pub mod core;
+#[doc(hidden)]
 pub mod error;
+#[doc(hidden)]
 pub mod io;
+#[doc(hidden)]
 pub mod utilities;

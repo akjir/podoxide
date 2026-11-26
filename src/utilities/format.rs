@@ -372,16 +372,16 @@ mod tests {
     #[test]
     fn format_version_header_formats_default_and_mode_headers() {
         assert_eq!(
-            format_version_header("Podoxide", "v0.1.0", None),
-            "Podoxide v0.1.0"
+            format_version_header("Podoxide", "0.1.0", None),
+            "Podoxide 0.1.0"
         );
         assert_eq!(
-            format_version_header("Podoxide", "v0.1.0", Some("")),
-            "Podoxide v0.1.0"
+            format_version_header("Podoxide", "0.1.0", Some("")),
+            "Podoxide 0.1.0"
         );
         assert_eq!(
-            format_version_header("Podoxide", "v0.1.0", Some("Command Mode")),
-            "Podoxide v0.1.0 - Command Mode"
+            format_version_header("Podoxide", "0.1.0", Some("Command Mode")),
+            "Podoxide 0.1.0 - Command Mode"
         );
     }
 }

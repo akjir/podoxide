@@ -70,7 +70,7 @@ struct PruneScan {
 /// 6. Unless `context.flags.force` is `true`, prompt the user on `stderr` for interactive `"yes"`
 ///    confirmation (including the distinct prunable image count and total reclaimable space)
 ///    before executing `podman image prune -f` (`-a`). Declining or EOF aborts with
-///    [`SystemError::AbortedExecution`].
+///    [`SystemError::AbortedExecution`](crate::error::SystemError::AbortedExecution).
 ///
 /// # Errors
 ///

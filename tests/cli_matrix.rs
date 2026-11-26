@@ -103,7 +103,10 @@ fn missing_config_bypasses_offline_actions_and_errors_on_operational_actions() {
     let bypass_cases: &[(&[&str], &str)] = &[
         (&[], "Usage: pods [MODE] [OPTIONS] ACTION [TARGETS]"),
         (&["help"], "Usage: pods [MODE] [OPTIONS] ACTION [TARGETS]"),
-        (&["version"], "Podoxide v"),
+        (
+            &["version"],
+            concat!("Podoxide ", env!("CARGO_PKG_VERSION")),
+        ),
         (&["cmd"], "Command Mode"),
         (&["cmd", "help"], "Command Mode"),
         (&["cfg", "help"], "Usage: pods config [OPTIONS] [ACTION]"),

@@ -89,7 +89,7 @@ pub fn query_images(all: bool) -> Option<String> {
 ///
 /// # Errors
 ///
-/// Returns [`PodError::Io`] if querying `podman ps` fails or if more than [`MAX_INSPECT_RECORDS`] distinct valid image IDs are returned so callers never fail open.
+/// Returns [`PodError::Io`] if querying `podman ps` fails or if more than `MAX_INSPECT_RECORDS` distinct valid image IDs are returned so callers never fail open.
 pub fn query_in_use_images() -> Result<BTreeSet<String>, PodError> {
     collect_in_use_images_with(&mut super::run_podman_capture)
 }

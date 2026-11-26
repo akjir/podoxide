@@ -24,7 +24,7 @@ Podoxide replaces complex orchestration wrappers and shell scripts with a single
 
 ## Installation
 
-Clone the repository and install the release binary (or install directly into `~/.cargo/bin` with `cargo install --path .`):
+Download a prebuilt static Linux archive from [GitHub Releases](https://github.com/akjir/podoxide/releases) (verified with `SHA256SUMS` and `gh attestation verify`), or build from source (or install into `~/.cargo/bin` with `cargo install --path .`):
 
 ```bash
 git clone https://github.com/akjir/podoxide.git
@@ -109,4 +109,4 @@ cargo test
 
 This software is provided "as is", without warranty of any kind, express or implied. Use in production environments is at your own risk.
 
-Licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See [LICENSE](LICENSE) for details.
+Licensed under the **GNU General Public License 3.0 or later (GPL-3.0-or-later)**. See [LICENSE](LICENSE) for details.

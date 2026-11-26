@@ -23,8 +23,8 @@ use std::process::Command;
 
 /// Git metadata paths tracked for incremental rebuilds when present on disk.
 const GIT_RERUN_TARGETS: [&str; 4] = ["HEAD", "index", "packed-refs", "refs"];
-/// Repository source paths tracked inside Git checkouts so unstaged edits refresh `.dev` metadata.
-const WORKTREE_RERUN_TARGETS: [&str; 2] = ["Cargo.toml", "src"];
+/// Repository source and embedded template paths tracked inside Git checkouts so unstaged edits refresh `.dev` metadata.
+const WORKTREE_RERUN_TARGETS: [&str; 4] = ["Cargo.toml", "pods.conf", "recipe.pod", "src"];
 
 /// Cleanliness state of the Git working tree.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,7 +44,7 @@ pub(crate) fn format_full_version(
     worktree_state: WorktreeState,
 ) -> String {
     if commit_count.is_none() && commit_hash.is_none() {
-        return format!("v{package_version}");
+        return package_version.to_owned();
     }
     let count = commit_count.unwrap_or("0");
     let hash = commit_hash.unwrap_or("unknown");
@@ -52,7 +52,7 @@ pub(crate) fn format_full_version(
         WorktreeState::Clean => "",
         WorktreeState::Dirty => ".dev",
     };
-    format!("v{package_version}+{count}.{hash}{suffix}")
+    format!("{package_version}+{count}.{hash}{suffix}")
 }
 
 /// Validates and trims raw `git rev-list --count HEAD` output into an ASCII digit string.

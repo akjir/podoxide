@@ -61,7 +61,7 @@ struct ExpectedTargets {
 ///      targeted containers and their `<recipe>/<index>` target names.
 ///    - If `context.parameters` contains `@<group>` or `<recipe>` targets, expand and
 ///      deduplicate them against `context.config.recipes.groups` and inspect each recipe via
-///      [`targets::inspect_recipe`].
+///      `targets::inspect_recipe`.
 ///    - If `context.parameters` is empty, collect and inspect all unique configured recipes from
 ///      `context.config.recipes.groups`.
 /// 2. Query `podman ps -a --format ...` to retrieve all host container records.
