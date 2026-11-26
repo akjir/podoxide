@@ -175,9 +175,10 @@ fn build_display_rows<'a>(
             .get(row.pod)
             .and_then(|pod_map| pod_map.get(row.name))
         {
-            row.target_name = expected_container.target_name.as_str();
-            found_keys.insert((row.pod, row.name));
-            display_rows.push(row);
+            if found_keys.insert((row.pod, row.name)) {
+                row.target_name = expected_container.target_name.as_str();
+                display_rows.push(row);
+            }
         } else if include_all {
             display_rows.push(row);
         }
@@ -350,7 +351,7 @@ fn query_podman_status<F>(query_status: &mut F) -> Result<String, PodError>
 where
     F: FnMut() -> Option<String>,
 {
-    query_status().ok_or_else(|| PodError::from(io::Error::other("Failed to query podman status.")))
+    query_status().ok_or_else(|| PodError::from(io::Error::other("failed to query Podman status")))
 }
 
 /// Resolves expected managed containers, missing recipes, and invalid recipes from `<recipe>/<container>` targets, `@<group>`/`<recipe>` targets, or all configured recipes.

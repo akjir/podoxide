@@ -109,7 +109,7 @@ fn ensure_distinct_targets(recipe_path: &Path, config_path: &Path) -> Result<(),
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "Target paths '{}' and '{}' must not point to the same file!",
+                "target paths '{}' and '{}' must not point to the same file",
                 recipe_path.display(),
                 config_path.display()
             ),
@@ -123,7 +123,7 @@ fn ensure_target_creatable(path: &Path, workspace_dir: &Path) -> Result<(), PodE
     if !path::is_valid_target_path(path) {
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("Invalid target path '{}'!", path.display()),
+            format!("invalid target path '{}'", path.display()),
         )));
     }
     let display_path = path::relative_display_path(path, workspace_dir);
@@ -131,7 +131,7 @@ fn ensure_target_creatable(path: &Path, workspace_dir: &Path) -> Result<(), PodE
         return Err(PodError::from(io::Error::new(
             io::ErrorKind::AlreadyExists,
             format!(
-                "Cannot create file '{}': a directory with the same name already exists!",
+                "cannot create file '{}': a directory with the same name already exists",
                 display_path.display()
             ),
         )));
@@ -282,7 +282,7 @@ mod tests {
             other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
         }
         assert!(recipe_dir_err.to_string().contains(
-            "Cannot create file 'recipe.pod': a directory with the same name already exists!"
+            "cannot create file 'recipe.pod': a directory with the same name already exists"
         ));
         assert!(!fs::file_exists(&config_path));
         assert!(stderr.is_empty());
@@ -297,7 +297,7 @@ mod tests {
             other => panic!("expected PodError::Io(AlreadyExists), got {other:?}"),
         }
         assert!(config_dir_err.to_string().contains(
-            "Cannot create file 'pods.conf': a directory with the same name already exists!"
+            "cannot create file 'pods.conf': a directory with the same name already exists"
         ));
         assert!(!fs::file_exists(&recipe_path));
         assert!(stderr.is_empty());
@@ -405,7 +405,14 @@ mod tests {
 
         // Colliding target paths must be rejected before writing
         let dot_recipe = temp_dir.join("./recipe.pod");
-        assert!(create_files(&dangling_recipe, &dangling_recipe, false, &mut stderr).is_err());
+        let same_err =
+            create_files(&dangling_recipe, &dangling_recipe, false, &mut stderr).unwrap_err();
+        assert!(
+            same_err
+                .to_string()
+                .contains("must not point to the same file")
+        );
+        assert!(!same_err.to_string().contains('!'));
         assert!(create_files(&dangling_recipe, &dot_recipe, false, &mut stderr).is_err());
         assert!(!fs::file_exists(&dangling_recipe));
         assert!(stderr.is_empty());

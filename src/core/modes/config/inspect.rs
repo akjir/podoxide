@@ -66,7 +66,7 @@ impl GroupValidationState<'_> {
 /// 3. Validate `context.config.pods.path` and `context.config.recipes.path` on disk, count
 ///    known and unreferenced `.pod` files in `recipes.path`, and print the aligned
 ///    `Directories:` status lines (`[OK]`, `[OK, K known recipe(s) found]`,
-///    `[OK, K known and U unreferenced recipe(s) found]`, or `[NOT FOUND]`).
+///    `[OK, K known and U unreferenced recipe(s) found]`, `[NOT SET]`, or `[NOT FOUND]`).
 /// 4. Iterate through sorted `context.config.recipes.groups`, expand `@<group>` references
 ///    for display, inspect `<recipe>.pod` files using [`targets::inspect_recipe`] with a local
 ///    lookup cache, and render the aligned `Groups:` tree (`[OK]`, `[ERROR]`, `[NOT FOUND]`,
@@ -215,9 +215,9 @@ fn has_output_capacity(state: &mut GroupValidationState<'_>) -> bool {
 
 /// Renders the full configuration inspection report for `config` to `stdout`.
 fn inspect_with<W: Write>(config: &Config, stdout: &mut W) -> Result<(), PodError> {
-    render::write_header_and_settings(config, stdout);
     let state = build_groups_state(config);
     let scan = targets::list_unreferenced_recipes(&config.recipes.path, &state.referenced_recipes)?;
+    render::write_header_and_settings(config, stdout);
     let (total_recipe_files, unreferenced_files) = match scan {
         Some((total, files)) => (Some(total), files),
         None => (None, Vec::new()),

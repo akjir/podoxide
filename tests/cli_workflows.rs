@@ -217,7 +217,11 @@ fn live_image_prune_handles_preview_abort_confirm_and_podman_failure() {
         assert!(!aborted.success);
         assert!(aborted.stdout.is_empty());
         assert!(aborted.stderr.contains("Are you sure you want to prune "));
-        assert!(aborted.stderr.ends_with("ERROR: Aborting execution.\n"));
+        assert!(
+            aborted
+                .stderr
+                .ends_with("? Type 'yes' to proceed: \nERROR: Aborting execution.\n")
+        );
     }
     let abort_log = fs::read_to_string(&log_file).unwrap();
     assert!(!abort_log.contains("image prune"));

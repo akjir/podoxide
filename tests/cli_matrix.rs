@@ -51,7 +51,7 @@ fn assert_debug_custom_config_outputs(workspace: &TestWorkspace) {
     let stderr = &declined_prune.stderr;
     assert!(stderr.starts_with(expected_debug_prefix));
     assert!(stderr.contains("Are you sure you want to prune "));
-    assert!(stderr.ends_with("? Type 'yes' to proceed: ERROR: Aborting execution.\n"));
+    assert!(stderr.ends_with("? Type 'yes' to proceed: \nERROR: Aborting execution.\n"));
 
     fs::write(
         &custom_conf,
@@ -284,7 +284,7 @@ fn simulate_false_and_flag_override_matrix_runs_deterministically() {
         assert!(declined.stdout.is_empty());
         let stderr = &declined.stderr;
         assert!(stderr.starts_with("Are you sure you want to prune "));
-        assert!(stderr.ends_with("? Type 'yes' to proceed: ERROR: Aborting execution.\n"));
+        assert!(stderr.ends_with("? Type 'yes' to proceed: \nERROR: Aborting execution.\n"));
     }
 
     for (arguments, expected_stdout) in [

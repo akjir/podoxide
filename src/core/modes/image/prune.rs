@@ -20,10 +20,10 @@ use std::io::{self, BufRead, Write};
 
 use crate::core::context::Context;
 use crate::core::log;
-use crate::error::{PodError, SystemError};
+use crate::error::PodError;
 use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::{self, FIELD_DELIMITER, RECORD_DELIMITER};
-use crate::io::system::env;
+use crate::io::system::env::{self, ConfirmationInput};
 use crate::utilities::collection::{self, MAX_COLLECTION_PREALLOC};
 use crate::utilities::format::{self, MAX_FORMATTED_LINE_BYTES};
 use super::preview::{self, PreviewEntry};
@@ -84,6 +84,7 @@ pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     let mut query_images = podman::query_images;
     execute_with(
         context,
+        ConfirmationInput::from_stdin(),
         &mut query_in_use,
         &mut query_images,
         &mut stdin,
@@ -119,11 +120,12 @@ fn append_preview_alias(entry: &mut PreviewEntry, record: &ImageRecord<'_>) {
 /// # Errors
 ///
 /// Returns [`PodError::Io`] if writing the prompt or reading from `reader` fails, or
-/// [`PodError::System`] with [`SystemError::AbortedExecution`] if the user declines, sends EOF,
-/// or exceeds the confirmation input byte bound.
+/// [`PodError::System`] with [`crate::error::SystemError::AbortedExecution`] if the user declines,
+/// sends EOF, or exceeds the confirmation input byte bound.
 fn confirm_prune<R: BufRead, E: Write>(
     is_all: bool,
     scan: &PruneScan,
+    input_mode: ConfirmationInput,
     reader: &mut R,
     stderr: &mut E,
 ) -> Result<(), PodError> {
@@ -145,26 +147,13 @@ fn confirm_prune<R: BufRead, E: Write>(
             scan.image_count
         )
     };
-    stderr.write_all(prompt.as_bytes())?;
-    stderr.flush()?;
-    let Some(input) = env::read_bounded_confirmation_line(reader)? else {
-        let _ = stderr.write_all(b"\n");
-        let _ = stderr.flush();
-        return Err(PodError::from(SystemError::AbortedExecution));
-    };
-    if !input.ends_with('\n') {
-        let _ = stderr.write_all(b"\n");
-        let _ = stderr.flush();
-    }
-    if input.trim_end_matches(['\r', '\n']) != "yes" {
-        return Err(PodError::from(SystemError::AbortedExecution));
-    }
-    Ok(())
+    env::confirm_prompt(&prompt, input_mode, reader, stderr)
 }
 
 /// Orchestrates `pods image prune` across simulate, `--preview`, and interactive or forced prune execution.
 fn execute_with<R, W, E, F, G>(
     context: &Context,
+    input_mode: ConfirmationInput,
     query_in_use: &mut F,
     query_images: &mut G,
     reader: &mut R,
@@ -206,7 +195,7 @@ where
         return Ok(ExecOutcome::Succeeded);
     }
     if !context.flags.force() {
-        confirm_prune(is_all, &scan, reader, stderr)?;
+        confirm_prune(is_all, &scan, input_mode, reader, stderr)?;
     }
     podman::prune_images(is_all, PRUNE_PREFIX, false, stdout, stderr)
 }
@@ -273,7 +262,7 @@ where
 {
     let in_use_images = query_in_use()?;
     let output = query_images(is_all)
-        .ok_or_else(|| PodError::from(io::Error::other("Failed to query podman images.")))?;
+        .ok_or_else(|| PodError::from(io::Error::other("failed to query Podman images")))?;
     let preview_entries = if include_entries {
         let record_count = output
             .bytes()

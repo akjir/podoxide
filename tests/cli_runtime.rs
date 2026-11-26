@@ -310,11 +310,11 @@ fn live_status_trims_trailing_spaces_and_keeps_shared_container_names_distinct()
     fs::write(workspace.dir().join("alpha.pod"), ALPHA_SHARED_RECIPE).unwrap();
     fs::write(workspace.dir().join("beta.pod"), BETA_SHARED_RECIPE).unwrap();
 
-    // Include literal backslash in COMMAND to verify mock podman does not interpret escapes,
+    // Include JSON-escaped quotes and literal backslash in COMMAND (matching `{{json .Command}}`),
     // empty PORTS on the running worker, and empty IMAGE + PORTS on the unmanaged infra row.
     let ps_records = "\
-aaaa11112222\x1fdocker.io/example/worker:latest\x1fsh -c \"printf \\\\n\"\x1f2 hours ago\x1fUp 2 hours\x1f\x1fshared-worker\x1falpha-pod\x1f0\x1e\n\
-ffff99990000\x1f\x1f/catatonit -P\x1f2 hours ago\x1fUp 2 hours\x1f\x1falpha-pod-infra\x1falpha-pod\x1f0\x1e\n";
+aaaa11112222\x1fdocker.io/example/worker:latest\x1f\"sh -c \\\"printf \\\\\\\\n\\\"\"\x1f2 hours ago\x1fUp 2 hours\x1f\x1fshared-worker\x1falpha-pod\x1f0\x1e\n\
+ffff99990000\x1f\x1f\"/catatonit -P\"\x1f2 hours ago\x1fUp 2 hours\x1f\x1falpha-pod-infra\x1falpha-pod\x1f0\x1e\n";
 
     let status = workspace.run_pods_with_env(&["status"], b"", &[("MOCK_PODMAN_PS", ps_records)]);
     assert!(status.success, "status stderr: {}", status.stderr);

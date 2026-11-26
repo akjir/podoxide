@@ -15,8 +15,10 @@
 
 //! Status record parsing, column alignment, and table rendering for `pods status`.
 
+use std::borrow::Cow;
 use std::io::Write;
 use std::iter;
+use std::str::Chars;
 
 use crate::core::log::{self, MAX_LOG_MESSAGE_BYTES};
 use crate::io::exec::podman::FIELD_DELIMITER;
@@ -46,9 +48,9 @@ const MISSING_VALUE: &str = "-";
 const RECIPE_ERROR_STATUS: &str = "Recipe Error";
 
 /// Single container row in the rendered runtime status table.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct StatusRow<'a> {
-    pub(super) command: &'a str,
+    pub(super) command: Cow<'a, str>,
     pub(super) created: &'a str,
     pub(super) id: &'a str,
     pub(super) image: &'a str,
@@ -65,7 +67,7 @@ impl<'a> StatusRow<'a> {
     #[must_use]
     pub(super) const fn missing(name: &'a str, pod: &'a str, target_name: &'a str) -> Self {
         Self {
-            command: MISSING_VALUE,
+            command: Cow::Borrowed(MISSING_VALUE),
             created: MISSING_VALUE,
             id: MISSING_VALUE,
             image: MISSING_VALUE,
@@ -88,7 +90,7 @@ impl<'a> StatusRow<'a> {
     #[must_use]
     pub(super) const fn recipe_error(name: &'a str) -> Self {
         Self {
-            command: MISSING_VALUE,
+            command: Cow::Borrowed(MISSING_VALUE),
             created: MISSING_VALUE,
             id: MISSING_VALUE,
             image: MISSING_VALUE,
@@ -103,7 +105,7 @@ impl<'a> StatusRow<'a> {
 
     /// Returns the seven default column values in display order.
     #[must_use]
-    pub(super) const fn default_cells(&self) -> [&'a str; DEFAULT_COLUMN_COUNT] {
+    pub(super) const fn default_cells(&self) -> [&str; DEFAULT_COLUMN_COUNT] {
         [
             self.id,
             self.pod,
@@ -117,7 +119,7 @@ impl<'a> StatusRow<'a> {
 
     /// Returns all ten `--full` column values in display order.
     #[must_use]
-    pub(super) const fn full_cells(&self) -> [&'a str; FULL_COLUMN_COUNT] {
+    pub(super) fn full_cells(&self) -> [&str; FULL_COLUMN_COUNT] {
         [
             self.id,
             self.pod,
@@ -127,7 +129,7 @@ impl<'a> StatusRow<'a> {
             self.restarts,
             self.created,
             self.image,
-            self.command,
+            self.command.as_ref(),
             self.ports,
         ]
     }
@@ -154,7 +156,7 @@ pub(super) fn format_table_row(cells: &[&str], widths: &[usize]) -> String {
             line.push_str(COLUMN_SEPARATOR);
         }
         if i == last_index {
-            line.push_str(string::clamp_utf8_prefix(cell, MAX_LOG_MESSAGE_BYTES));
+            push_sanitized_cell(&mut line, cell);
         } else {
             push_padded_cell(&mut line, cell, width);
         }
@@ -176,9 +178,12 @@ pub(super) fn parse_status_record(record: &str) -> Option<StatusRow<'_>> {
     let (rest, name) = rest.rsplit_once(FIELD_DELIMITER)?;
     let (rest, ports) = rest.rsplit_once(FIELD_DELIMITER)?;
     let (rest, status) = rest.rsplit_once(FIELD_DELIMITER)?;
-    let (command, created) = rest.rsplit_once(FIELD_DELIMITER)?;
+    let (raw_command, created) = rest.rsplit_once(FIELD_DELIMITER)?;
+    if id.is_empty() || name.is_empty() {
+        return None;
+    }
     Some(StatusRow {
-        command,
+        command: decode_json_string(raw_command),
         created,
         id,
         image,
@@ -257,14 +262,100 @@ fn compute_column_widths(rows: &[StatusRow<'_>], is_full: bool) -> [usize; FULL_
     widths
 }
 
-/// Appends `value` right-padded with ASCII spaces to `width` visible characters into `buffer`.
+/// Decodes a single JSON escape sequence following a leading backslash.
+#[must_use]
+fn decode_json_escape(chars: &mut Chars<'_>) -> Option<char> {
+    match chars.next()? {
+        '"' => Some('"'),
+        '\\' => Some('\\'),
+        '/' => Some('/'),
+        'b' => Some('\u{0008}'),
+        'f' => Some('\u{000C}'),
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        't' => Some('\t'),
+        'u' => decode_json_unicode(chars),
+        _ => None,
+    }
+}
+
+/// Decodes a JSON-quoted string literal (as emitted by `{{json .Command}}`), borrowing zero-copy when unescaped.
+#[must_use]
+fn decode_json_string(raw: &str) -> Cow<'_, str> {
+    let Some(inner) = raw
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+    else {
+        return Cow::Borrowed(raw);
+    };
+    if !inner.contains('\\') {
+        return Cow::Borrowed(inner);
+    }
+    let mut decoded = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            decoded.push(character);
+            continue;
+        }
+        let Some(escaped) = decode_json_escape(&mut chars) else {
+            return Cow::Borrowed(raw);
+        };
+        decoded.push(escaped);
+    }
+    Cow::Owned(decoded)
+}
+
+/// Decodes a `\uXXXX` escape (including a UTF-16 surrogate pair) into a Unicode scalar value.
+#[must_use]
+fn decode_json_unicode(chars: &mut Chars<'_>) -> Option<char> {
+    let high = read_hex_u16(chars)?;
+    if !(0xD800..=0xDFFF).contains(&high) {
+        return char::from_u32(u32::from(high));
+    }
+    if high > 0xDBFF || chars.next() != Some('\\') || chars.next() != Some('u') {
+        return None;
+    }
+    let low = read_hex_u16(chars)?;
+    if !(0xDC00..=0xDFFF).contains(&low) {
+        return None;
+    }
+    let scalar = 0x10000 + ((u32::from(high) - 0xD800) << 10) + (u32::from(low) - 0xDC00);
+    char::from_u32(scalar)
+}
+
+/// Appends sanitized `value` right-padded with ASCII spaces to `width` visible characters into `buffer`.
 fn push_padded_cell(buffer: &mut String, value: &str, width: usize) {
-    let clamped = string::clamp_utf8_prefix(value, MAX_LOG_MESSAGE_BYTES);
-    buffer.push_str(clamped);
-    let char_len = clamped.chars().count();
+    let char_len = push_sanitized_cell(buffer, value);
     let clamped_width = width.min(MAX_LOG_MESSAGE_BYTES);
     let pad = clamped_width.saturating_sub(char_len);
     if pad > 0 {
         buffer.extend(iter::repeat_n(' ', pad));
     }
+}
+
+/// Appends `value` clamped to [`MAX_LOG_MESSAGE_BYTES`] with control/BiDi characters sanitized into `buffer`, returning its visible character count.
+fn push_sanitized_cell(buffer: &mut String, value: &str) -> usize {
+    let clamped = string::clamp_utf8_prefix(value, MAX_LOG_MESSAGE_BYTES);
+    if !string::contains_control_or_bidi(clamped) {
+        buffer.push_str(clamped);
+        return clamped.chars().count();
+    }
+    let mut char_len = 0usize;
+    for character in clamped.chars() {
+        buffer.push(string::sanitize_char(character));
+        char_len += 1;
+    }
+    char_len
+}
+
+/// Reads four hexadecimal ASCII digits from `chars` into a `u16`.
+#[must_use]
+fn read_hex_u16(chars: &mut Chars<'_>) -> Option<u16> {
+    let mut value = 0u16;
+    for _ in 0..4 {
+        let digit = chars.next()?.to_digit(16)?;
+        value = (value << 4) | u16::try_from(digit).ok()?;
+    }
+    Some(value)
 }

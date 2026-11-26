@@ -20,7 +20,7 @@ use std::io::{self, Cursor, Write};
 
 use crate::core::context::Context;
 use crate::error::{PodError, SystemError};
-use crate::io::system::env::MAX_CONFIRMATION_BYTES;
+use crate::io::system::env::{ConfirmationInput, MAX_CONFIRMATION_BYTES};
 use super::{MAX_PREVIEW_RECORDS, execute_with, handle, scan_prunable_images};
 
 struct BrokenPipeWriter;
@@ -36,23 +36,38 @@ impl Write for BrokenPipeWriter {
 }
 
 fn run_preview_with_no_in_use(context: &Context, images_output: &str) -> (String, String) {
+    run_prune_with_no_in_use(context, ConfirmationInput::NonTty, Some(images_output), b"").unwrap()
+}
+
+fn run_prune_with_no_in_use(
+    context: &Context,
+    input_mode: ConfirmationInput,
+    images_output: Option<&str>,
+    raw_input: &[u8],
+) -> Result<(String, String), (PodError, String, String)> {
     let mut no_in_use = || Ok(BTreeSet::new());
-    let mut query_images = |_: bool| Some(String::from(images_output));
+    let mut query_images = |_: bool| images_output.map(String::from);
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
-    execute_with(
+    match execute_with(
         context,
+        input_mode,
         &mut no_in_use,
         &mut query_images,
-        &mut Cursor::new(Vec::new()),
+        &mut Cursor::new(raw_input.to_vec()),
         &mut stdout,
         &mut stderr,
-    )
-    .unwrap();
-    (
-        String::from_utf8(stdout).unwrap(),
-        String::from_utf8(stderr).unwrap(),
-    )
+    ) {
+        Ok(_) => Ok((
+            String::from_utf8(stdout).unwrap(),
+            String::from_utf8(stderr).unwrap(),
+        )),
+        Err(error) => Err((
+            error,
+            String::from_utf8(stdout).unwrap(),
+            String::from_utf8(stderr).unwrap(),
+        )),
+    }
 }
 
 #[test]
@@ -61,71 +76,36 @@ fn execute_with_confirm_prompt_writes_stderr_and_aborts_on_decline_or_eof() {
     sim_context.config.simulate = true;
     sim_context.flags.set_force(false);
 
-    let mut reader = Cursor::new(Vec::<u8>::new());
-    let mut stdout = Vec::new();
-    let mut stderr = Vec::new();
-    let mut no_in_use = || Ok(BTreeSet::new());
-    let mut no_images = |_: bool| None;
-    execute_with(
-        &sim_context,
-        &mut no_in_use,
-        &mut no_images,
-        &mut reader,
-        &mut stdout,
-        &mut stderr,
-    )
-    .unwrap();
-    assert_eq!(
-        String::from_utf8(stdout).unwrap(),
-        "Prune images:\npodman image prune -f\n"
-    );
-    assert!(stderr.is_empty());
+    let (stdout_text, stderr_text) =
+        run_prune_with_no_in_use(&sim_context, ConfirmationInput::NonTty, None, b"").unwrap();
+    assert_eq!(stdout_text, "Prune images:\npodman image prune -f\n");
+    assert!(stderr_text.is_empty());
 
     let mut flag_sim_context = Context::new();
     flag_sim_context.config.simulate = true;
     flag_sim_context.flags.set_simulate(true);
     flag_sim_context.flags.set_all(true);
     flag_sim_context.flags.set_force(true);
-    let mut all_stdout = Vec::new();
-    execute_with(
-        &flag_sim_context,
-        &mut no_in_use,
-        &mut no_images,
-        &mut reader,
-        &mut all_stdout,
-        &mut stderr,
-    )
-    .unwrap();
-    assert_eq!(
-        String::from_utf8(all_stdout).unwrap(),
-        "Prune images:\npodman image prune -f -a\n"
-    );
-
+    let (all_stdout, all_stderr) =
+        run_prune_with_no_in_use(&flag_sim_context, ConfirmationInput::NonTty, None, b"").unwrap();
+    assert_eq!(all_stdout, "Prune images:\npodman image prune -f -a\n");
+    assert!(all_stderr.is_empty());
     assert!(handle(&sim_context).is_ok());
 
     let mut interactive_context = Context::new();
     interactive_context.config.simulate = false;
     interactive_context.flags.set_simulate(false);
-    interactive_context.flags.set_force(false);
 
-    let mut empty_images = |_: bool| Some(String::new());
     for force in [false, true] {
         interactive_context.flags.set_force(force);
-        let mut empty_out = Vec::new();
-        let mut empty_err = Vec::new();
-        execute_with(
+        let (empty_out, empty_err) = run_prune_with_no_in_use(
             &interactive_context,
-            &mut no_in_use,
-            &mut empty_images,
-            &mut reader,
-            &mut empty_out,
-            &mut empty_err,
+            ConfirmationInput::NonTty,
+            Some(""),
+            b"",
         )
         .unwrap();
-        assert_eq!(
-            String::from_utf8(empty_out).unwrap(),
-            "No images found to prune.\n"
-        );
+        assert_eq!(empty_out, "No images found to prune.\n");
         assert!(empty_err.is_empty());
     }
     interactive_context.flags.set_force(false);
@@ -137,9 +117,10 @@ abcd1234efgh\x1flong1\x1fmy-repo\x1f1.0\x1f10.5 MB\x1f2 weeks ago\x1e\n\
 ijkl5678mnop\x1flong2\x1f<none>\x1f<none>\x1f500 kB\x1f3 weeks ago\x1e\n\
 qrst9012uvwx\x1flong3\x1funtagged-repo\x1f<none>\x1f1.5 MB\x1f5 weeks ago\x1e\n";
 
-    for (is_all, images_output, expected_prompt, raw_input, expects_newline) in [
+    for (is_all, input_mode, images_output, expected_prompt, raw_input, expects_newline) in [
         (
             false,
+            ConfirmationInput::Tty,
             single_image_line,
             "Are you sure you want to prune 1 dangling image (500 B)? Type 'yes' to proceed: ",
             &b"no\n"[..],
@@ -147,13 +128,15 @@ qrst9012uvwx\x1flong3\x1funtagged-repo\x1f<none>\x1f1.5 MB\x1f5 weeks ago\x1e\n"
         ),
         (
             false,
+            ConfirmationInput::NonTty,
             three_images_lines,
             "Are you sure you want to prune 3 dangling images (12.5 MB)? Type 'yes' to proceed: ",
             &b"no\n"[..],
-            false,
+            true,
         ),
         (
             true,
+            ConfirmationInput::Tty,
             single_image_line,
             "Are you sure you want to prune 1 unused image (500 B)? Type 'yes' to proceed: ",
             &b""[..],
@@ -161,6 +144,7 @@ qrst9012uvwx\x1flong3\x1funtagged-repo\x1f<none>\x1f1.5 MB\x1f5 weeks ago\x1e\n"
         ),
         (
             true,
+            ConfirmationInput::Tty,
             three_images_lines,
             "Are you sure you want to prune 3 unused images (12.5 MB)? Type 'yes' to proceed: ",
             &vec![b'y'; MAX_CONFIRMATION_BYTES + 1][..],
@@ -168,39 +152,43 @@ qrst9012uvwx\x1flong3\x1funtagged-repo\x1f<none>\x1f1.5 MB\x1f5 weeks ago\x1e\n"
         ),
     ] {
         interactive_context.flags.set_all(is_all);
-        let mut candidate_images = |_: bool| Some(String::from(images_output));
-        let mut input_cursor = Cursor::new(raw_input.to_vec());
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let result = execute_with(
+        let (error, out, err) = run_prune_with_no_in_use(
             &interactive_context,
-            &mut no_in_use,
-            &mut candidate_images,
-            &mut input_cursor,
-            &mut out,
-            &mut err,
-        );
-        assert!(
-            matches!(result, Err(PodError::System(SystemError::AbortedExecution))),
-            "expected AbortedExecution for declined/EOF prompt, got {result:?}"
-        );
-        assert!(
-            out.is_empty(),
-            "confirmation prompt must not write to stdout"
-        );
+            input_mode,
+            Some(images_output),
+            raw_input,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            PodError::System(SystemError::AbortedExecution)
+        ));
+        assert!(out.is_empty());
         let expected_stderr = if expects_newline {
             format!("{expected_prompt}\n")
         } else {
             String::from(expected_prompt)
         };
-        assert_eq!(String::from_utf8(err).unwrap(), expected_stderr);
+        assert_eq!(err, expected_stderr);
     }
 
+    let (utf8_error, _, utf8_err_text) = run_prune_with_no_in_use(
+        &interactive_context,
+        ConfirmationInput::Tty,
+        Some(single_image_line),
+        &[0xFF, b'\n'],
+    )
+    .unwrap_err();
+    assert!(matches!(utf8_error, PodError::Io(_)));
+    assert!(utf8_err_text.ends_with('\n'));
+
+    let mut no_in_use = || Ok(BTreeSet::new());
+    let mut single_images = |_: bool| Some(String::from(single_image_line));
     let mut broken_err = BrokenPipeWriter;
     let mut yes_cursor = Cursor::new(b"yes\n".to_vec());
-    let mut single_images = |_: bool| Some(String::from(single_image_line));
     let prompt_err = execute_with(
         &interactive_context,
+        ConfirmationInput::Tty,
         &mut no_in_use,
         &mut single_images,
         &mut yes_cursor,
@@ -298,6 +286,7 @@ fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
     let mut stderr = Vec::new();
     execute_with(
         &context,
+        ConfirmationInput::NonTty,
         &mut no_in_use,
         &mut empty_images,
         &mut reader,
@@ -320,6 +309,7 @@ fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
     let mut in_use_stdout = Vec::new();
     execute_with(
         &context,
+        ConfirmationInput::NonTty,
         &mut in_use_long1,
         &mut one_image,
         &mut reader,
@@ -334,11 +324,12 @@ fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
 
     let mut fail_in_use = || -> Result<BTreeSet<String>, PodError> {
         Err(PodError::from(io::Error::other(
-            "Failed to query in-use podman images.",
+            "failed to query in-use Podman images",
         )))
     };
     let in_use_err = execute_with(
         &context,
+        ConfirmationInput::NonTty,
         &mut fail_in_use,
         &mut one_image,
         &mut reader,
@@ -349,7 +340,7 @@ fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
     assert!(
         in_use_err
             .to_string()
-            .contains("Failed to query in-use podman images.")
+            .contains("failed to query in-use Podman images")
     );
 
     let mut fallback_images = |_: bool| {
@@ -360,6 +351,7 @@ fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
     let mut fallback_stdout = Vec::new();
     execute_with(
         &context,
+        ConfirmationInput::NonTty,
         &mut no_in_use,
         &mut fallback_images,
         &mut reader,
@@ -376,6 +368,7 @@ fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
     let mut fail_images = |_: bool| -> Option<String> { None };
     let error = execute_with(
         &context,
+        ConfirmationInput::NonTty,
         &mut no_in_use,
         &mut fail_images,
         &mut reader,
@@ -383,7 +376,7 @@ fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
         &mut stderr,
     )
     .unwrap_err();
-    assert!(error.to_string().contains("Failed to query podman images."));
+    assert!(error.to_string().contains("failed to query Podman images"));
 
     let mut exact_images_str = String::new();
     for index in 0..MAX_PREVIEW_RECORDS {
@@ -426,6 +419,7 @@ fn execute_with_preview_handles_all_flag_empty_results_bounds_and_errors() {
     let mut confirm_stderr = Vec::new();
     let confirm_res = execute_with(
         &truncated_confirm_ctx,
+        ConfirmationInput::NonTty,
         &mut no_in_use,
         &mut bound_images,
         &mut decline_cursor,
@@ -466,6 +460,7 @@ fn execute_with_preview_queries_podman_and_excludes_in_use_images() {
     let mut stderr = Vec::new();
     execute_with(
         &context,
+        ConfirmationInput::NonTty,
         &mut in_use,
         &mut query_images,
         &mut reader,

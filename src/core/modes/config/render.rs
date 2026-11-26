@@ -38,14 +38,29 @@ pub(super) fn write_directories_section<W: Write>(
 ) {
     log::write_print(stdout, "Directories:");
 
-    let pods_status =
-        if path::is_valid_directory(&config.pods.path) && fs::directory_exists(&config.pods.path) {
-            "[OK]"
-        } else {
-            "[NOT FOUND]"
-        };
-    let absolute_pods_path = fs::get_absolute_path(&config.pods.path);
-    let pods_line = format!("  {:<14}{}", "Pods:", absolute_pods_path.display());
+    let (pods_display, pods_status) = if config.pods.path.as_os_str().is_empty() {
+        (Cow::Borrowed("-"), "[NOT SET]")
+    } else if path::is_valid_directory(&config.pods.path) && fs::directory_exists(&config.pods.path)
+    {
+        (
+            Cow::Owned(
+                fs::get_absolute_path(&config.pods.path)
+                    .display()
+                    .to_string(),
+            ),
+            "[OK]",
+        )
+    } else {
+        (
+            Cow::Owned(
+                fs::get_absolute_path(&config.pods.path)
+                    .display()
+                    .to_string(),
+            ),
+            "[NOT FOUND]",
+        )
+    };
+    let pods_line = format!("  {:<14}{pods_display}", "Pods:");
 
     let recipes_status = format_recipes_directory_status(total_recipe_files, unreferenced_count);
     let absolute_recipes_path = fs::get_absolute_path(&config.recipes.path);

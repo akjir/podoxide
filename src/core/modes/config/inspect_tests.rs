@@ -16,11 +16,13 @@
 //! Unit tests for `pods config inspect` group expansion and rendering in [`super`].
 
 use std::fs as std_fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::core::config::Config;
 use crate::core::context::Context;
+use crate::error::PodError;
 use crate::io::system::fs::{self, TestTempDir};
 use super::{MAX_GROUP_OUTPUT_LINES, build_groups_state, handle, inspect_with};
 
@@ -65,6 +67,8 @@ fn inspect_with_clamps_diamond_group_dag_output_emits_truncation_notice_and_vali
     let mut stdout = Vec::new();
     inspect_with(&config, &mut stdout).unwrap();
     let output = String::from_utf8(stdout).unwrap();
+    assert!(output.contains("  Pods:         -"));
+    assert!(output.contains("[NOT SET]\n"));
     assert!(output.contains("[OK, 0 known recipes found]\n"));
     assert!(output.contains(&format!(
         "... (output truncated at {MAX_GROUP_OUTPUT_LINES} lines)\n"
@@ -231,6 +235,24 @@ fn inspect_with_handles_missing_invalid_directories_empty_editor_and_singular_wa
     assert!(bad_path_text.contains("[NOT FOUND]\n"));
     assert!(!bad_path_text.contains("[OK, "));
     assert!(!bad_path_text.contains("Unreferenced Recipes:"));
+
+    // Unreadable recipes directory must fail without emitting partial stdout (unless running as root).
+    let unreadable_dir = temp_dir.join("unreadable_recipes");
+    std_fs::create_dir_all(&unreadable_dir).unwrap();
+    std_fs::set_permissions(&unreadable_dir, std_fs::Permissions::from_mode(0o000)).unwrap();
+    let blocked = std_fs::read_dir(&unreadable_dir).is_err();
+    config.recipes.path = unreadable_dir.clone();
+    let mut error_out = Vec::new();
+    let error_result = inspect_with(&config, &mut error_out);
+    std_fs::set_permissions(&unreadable_dir, std_fs::Permissions::from_mode(0o700)).unwrap();
+    if blocked {
+        assert!(matches!(error_result, Err(PodError::Io(_))));
+        assert!(
+            error_out.is_empty(),
+            "failed config inspect must not write partial stdout, got {:?}",
+            String::from_utf8_lossy(&error_out)
+        );
+    }
 }
 
 #[test]
