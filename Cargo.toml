@@ -1,6 +1,6 @@
 [package]
 name = "podoxide"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Deterministic Linux CLI tool in pure standard Rust to manage Podman pods and containers via declarative PSL recipes"
