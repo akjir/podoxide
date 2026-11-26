@@ -22,6 +22,10 @@ Podoxide separates pure domain logic from operating system interactions across t
 
 ```text
 podoxide/
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+├── .gitignore
 ├── .pods-completion.bash
 ├── AGENTS.md
 ├── ARCHITECTURE.md
@@ -29,10 +33,12 @@ podoxide/
 ├── Cargo.toml
 ├── CHANGELOG.md
 ├── LICENSE
+├── podoxide.code-workspace
 ├── pods.conf
 ├── PSL_SPEC.md
-├── recipe.pod
 ├── README.md
+├── recipe.pod
+├── rustfmt.toml
 ├── USAGE.md
 ├── src/
 │   ├── lib.rs
@@ -48,181 +54,186 @@ podoxide/
 │   │   ├── recipe_tests.rs
 │   │   ├── span.rs
 │   │   └── span_tests.rs
-    ├── core/
-    │   ├── constants.rs
-    │   ├── log.rs
-    │   ├── mod.rs
-    │   ├── cli/
-    │   │   ├── flags.rs
-    │   │   ├── flags_tests.rs
-    │   │   ├── mod.rs
-    │   │   ├── positionals.rs
-    │   │   └── tests.rs
-    │   ├── config/
-    │   │   ├── mod.rs
-    │   │   ├── parser.rs
-    │   │   ├── parser_tests.rs
-    │   │   ├── path.rs
-    │   │   ├── path_tests.rs
-    │   │   ├── targets.rs
-    │   │   └── tests.rs
-    │   ├── container/
-    │   │   ├── lifecycle.rs
-    │   │   ├── lifecycle_tests.rs
-    │   │   ├── mod.rs
-    │   │   ├── update.rs
-    │   │   ├── validation.rs
-    │   │   ├── validation_tests.rs
-    │   │   ├── volume.rs
-    │   │   └── volume_tests.rs
-    │   ├── context/
-    │   │   ├── actions.rs
-    │   │   ├── flags.rs
-    │   │   ├── mod.rs
-    │   │   └── tests.rs
-    │   ├── pod/
-    │   │   ├── lifecycle.rs
-    │   │   ├── lifecycle_tests.rs
-    │   │   ├── mod.rs
-    │   │   ├── update.rs
-    │   │   ├── update_tests.rs
-    │   │   └── validation_tests.rs
-    │   ├── recipe/
-    │   │   ├── directives.rs
-    │   │   ├── directives_tests.rs
-    │   │   ├── mod.rs
-    │   │   ├── parser.rs
-    │   │   ├── parser_tests.rs
-    │   │   ├── resolve.rs
-    │   │   ├── resolve_tests.rs
-    │   │   ├── validation.rs
-    │   │   └── validation_tests.rs
-    │   ├── update/
-    │   │   ├── mod.rs
-    │   │   ├── summary.rs
-    │   │   ├── tests.rs
-    │   │   └── writer.rs
-    │   └── modes/
-    │       ├── mod.rs
-    │       ├── targets.rs
-    │       ├── targets_tests.rs
-    │       ├── update_runner.rs
-    │       ├── update_runner_tests.rs
-    │       ├── command/
-    │       │   ├── exec.rs
-    │       │   ├── exec_tests.rs
-    │       │   ├── help.rs
-    │       │   ├── list.rs
-    │       │   ├── mod.rs
-    │       │   └── tokenizer.rs
-    │       ├── config/
-    │       │   ├── edit.rs
-    │       │   ├── help.rs
-    │       │   ├── inspect.rs
-    │       │   ├── inspect_tests.rs
-    │       │   ├── mod.rs
-    │       │   ├── render.rs
-    │       │   └── show.rs
-    │       ├── connect/
-    │       │   ├── help.rs
-    │       │   ├── mod.rs
-    │       │   ├── shell.rs
-    │       │   └── shell_tests.rs
-    │       ├── default/
-    │       │   ├── create.rs
-    │       │   ├── down.rs
-    │       │   ├── help.rs
-    │       │   ├── mod.rs
-    │       │   ├── reload.rs
-    │       │   ├── remove.rs
-    │       │   ├── restart.rs
-    │       │   ├── start.rs
-    │       │   ├── status/
-    │       │   │   ├── mod.rs
-    │       │   │   ├── table.rs
-    │       │   │   └── tests.rs
-    │       │   ├── stop.rs
-    │       │   ├── up.rs
-    │       │   ├── update.rs
-    │       │   └── version.rs
-    │       ├── image/
-    │       │   ├── help.rs
-    │       │   ├── mod.rs
-    │       │   ├── preview.rs
-    │       │   ├── prune.rs
-    │       │   ├── prune_tests.rs
-    │       │   └── update.rs
-    │       ├── init/
-    │       │   ├── create.rs
-    │       │   ├── help.rs
-    │       │   └── mod.rs
-    │       ├── logs/
-    │       │   ├── follow.rs
-    │       │   ├── help.rs
-    │       │   ├── mod.rs
-    │       │   ├── runner.rs
-    │       │   ├── runner_tests.rs
-    │       │   └── show.rs
-    │       └── recipe/
-    │           ├── edit.rs
-    │           ├── help.rs
-    │           ├── inspect.rs
-    │           ├── list.rs
-    │           ├── mod.rs
-    │           └── show.rs
-    ├── io/
-    │   ├── mod.rs
-    │   ├── exec/
-    │   │   ├── command.rs
-    │   │   ├── command_tests.rs
-    │   │   ├── mod.rs
-    │   │   ├── spinner.rs
-    │   │   └── podman/
-    │   │       ├── lifecycle.rs
-    │   │       ├── lifecycle_tests.rs
-    │   │       ├── mod.rs
-    │   │       ├── query.rs
-    │   │       ├── query_tests.rs
-    │   │       ├── runtime.rs
-    │   │       └── runtime_tests.rs
-    │   ├── psl/
-    │   │   ├── ast.rs
-    │   │   ├── error_tests.rs
-    │   │   ├── mod.rs
-    │   │   ├── parser.rs
-    │   │   ├── scanner.rs
-    │   │   └── tests.rs
-    │   └── system/
-    │       ├── env.rs
-    │       ├── fs.rs
-    │       ├── fs_tests.rs
-    │       ├── mod.rs
-    │       └── path_resolve.rs
-    └── utilities/
-        ├── collection.rs
-        ├── collection_tests.rs
-        ├── format.rs
-        ├── mod.rs
-        ├── path.rs
-        ├── path_tests.rs
-        └── string.rs
+│   ├── core/
+│   │   ├── constants.rs
+│   │   ├── log.rs
+│   │   ├── mod.rs
+│   │   ├── cli/
+│   │   │   ├── flags.rs
+│   │   │   ├── flags_tests.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── positionals.rs
+│   │   │   └── tests.rs
+│   │   ├── config/
+│   │   │   ├── mod.rs
+│   │   │   ├── parser.rs
+│   │   │   ├── parser_tests.rs
+│   │   │   ├── path.rs
+│   │   │   ├── path_tests.rs
+│   │   │   ├── targets.rs
+│   │   │   └── tests.rs
+│   │   ├── container/
+│   │   │   ├── lifecycle.rs
+│   │   │   ├── lifecycle_tests.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── update.rs
+│   │   │   ├── validation.rs
+│   │   │   ├── validation_tests.rs
+│   │   │   ├── volume.rs
+│   │   │   └── volume_tests.rs
+│   │   ├── context/
+│   │   │   ├── actions.rs
+│   │   │   ├── flags.rs
+│   │   │   ├── mod.rs
+│   │   │   └── tests.rs
+│   │   ├── pod/
+│   │   │   ├── lifecycle.rs
+│   │   │   ├── lifecycle_tests.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── update.rs
+│   │   │   ├── update_tests.rs
+│   │   │   └── validation_tests.rs
+│   │   ├── recipe/
+│   │   │   ├── directives.rs
+│   │   │   ├── directives_tests.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── parser.rs
+│   │   │   ├── parser_tests.rs
+│   │   │   ├── resolve.rs
+│   │   │   ├── resolve_tests.rs
+│   │   │   ├── validation.rs
+│   │   │   └── validation_tests.rs
+│   │   ├── update/
+│   │   │   ├── mod.rs
+│   │   │   ├── summary.rs
+│   │   │   ├── tests.rs
+│   │   │   └── writer.rs
+│   │   └── modes/
+│   │       ├── mod.rs
+│   │       ├── targets.rs
+│   │       ├── targets_tests.rs
+│   │       ├── update_runner.rs
+│   │       ├── update_runner_tests.rs
+│   │       ├── command/
+│   │       │   ├── exec.rs
+│   │       │   ├── exec_tests.rs
+│   │       │   ├── help.rs
+│   │       │   ├── list.rs
+│   │       │   ├── mod.rs
+│   │       │   └── tokenizer.rs
+│   │       ├── config/
+│   │       │   ├── edit.rs
+│   │       │   ├── help.rs
+│   │       │   ├── inspect.rs
+│   │       │   ├── inspect_tests.rs
+│   │       │   ├── mod.rs
+│   │       │   ├── render.rs
+│   │       │   └── show.rs
+│   │       ├── connect/
+│   │       │   ├── help.rs
+│   │       │   ├── mod.rs
+│   │       │   ├── shell.rs
+│   │       │   └── shell_tests.rs
+│   │       ├── default/
+│   │       │   ├── create.rs
+│   │       │   ├── down.rs
+│   │       │   ├── help.rs
+│   │       │   ├── mod.rs
+│   │       │   ├── reload.rs
+│   │       │   ├── remove.rs
+│   │       │   ├── restart.rs
+│   │       │   ├── start.rs
+│   │       │   ├── status/
+│   │       │   │   ├── mod.rs
+│   │       │   │   ├── table.rs
+│   │       │   │   └── tests.rs
+│   │       │   ├── stop.rs
+│   │       │   ├── up.rs
+│   │       │   ├── update.rs
+│   │       │   └── version.rs
+│   │       ├── image/
+│   │       │   ├── help.rs
+│   │       │   ├── mod.rs
+│   │       │   ├── preview.rs
+│   │       │   ├── prune.rs
+│   │       │   ├── prune_tests.rs
+│   │       │   └── update.rs
+│   │       ├── init/
+│   │       │   ├── create.rs
+│   │       │   ├── help.rs
+│   │       │   └── mod.rs
+│   │       ├── logs/
+│   │       │   ├── follow.rs
+│   │       │   ├── help.rs
+│   │       │   ├── mod.rs
+│   │       │   ├── runner.rs
+│   │       │   ├── runner_tests.rs
+│   │       │   └── show.rs
+│   │       └── recipe/
+│   │           ├── edit.rs
+│   │           ├── help.rs
+│   │           ├── inspect.rs
+│   │           ├── list.rs
+│   │           ├── mod.rs
+│   │           └── show.rs
+│   ├── io/
+│   │   ├── mod.rs
+│   │   ├── exec/
+│   │   │   ├── command.rs
+│   │   │   ├── command_tests.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── spinner.rs
+│   │   │   └── podman/
+│   │   │       ├── lifecycle.rs
+│   │   │       ├── lifecycle_tests.rs
+│   │   │       ├── mod.rs
+│   │   │       ├── query.rs
+│   │   │       ├── query_tests.rs
+│   │   │       ├── runtime.rs
+│   │   │       └── runtime_tests.rs
+│   │   ├── psl/
+│   │   │   ├── ast.rs
+│   │   │   ├── error_tests.rs
+│   │   │   ├── mod.rs
+│   │   │   ├── parser.rs
+│   │   │   ├── scanner.rs
+│   │   │   └── tests.rs
+│   │   └── system/
+│   │       ├── env.rs
+│   │       ├── fs.rs
+│   │       ├── fs_tests.rs
+│   │       ├── mod.rs
+│   │       └── path_resolve.rs
+│   └── utilities/
+│       ├── collection.rs
+│       ├── collection_tests.rs
+│       ├── format.rs
+│       ├── mod.rs
+│       ├── path.rs
+│       ├── path_tests.rs
+│       └── string.rs
 └── tests/
     ├── cli_matrix.rs
     ├── cli_workflows.rs
-    └── common/
-        └── mod.rs
+    ├── common/
+    │   └── mod.rs
+    └── completion.rs
 ```
 
 ## Root Files and Templates
 
-| File                    | Function |
-| :---------------------- | :------- |
-| `Cargo.toml`            | Defines crate metadata, the `podoxide` library target, the `pods` binary target, and release optimizations. |
-| `build.rs`              | Generates the compile-time application version string with Git commit count, short hash, and dirty-tree build metadata. |
-| `pods.conf`             | Provides the root configuration template embedded and written by `pods init`. |
-| `PSL_SPEC.md`           | Specifies the PodScript Language (PSL) syntax, lexical grammar, block schemas, and parser resource bounds. |
-| `recipe.pod`            | Provides the root recipe template embedded and written by `pods init`. |
-| `.pods-completion.bash` | Provides Bash autocompletion for all CLI modes, actions, and flags. |
+| File                        | Function |
+| :-------------------------- | :------- |
+| `.github/workflows/ci.yml`  | Runs formatting (`cargo fmt`), Clippy (`--all-targets -- -D warnings`), test suite, and release build in Linux CI. |
+| `.gitignore`                | Excludes build artifacts, local test workspaces (`.test/`), and editor/backup files from Git tracking. |
+| `.pods-completion.bash`     | Provides pure-Bash autocompletion for modes, actions, action-scoped flags, `.conf` files, groups, recipes, containers, and recipe commands. |
+| `Cargo.toml`                | Defines crate metadata, MSRV (`1.88`), workspace lints, library and binary targets, and release optimizations. |
+| `build.rs`                  | Generates the compile-time application version string with Git commit count, short hash, and dirty-tree build metadata. |
+| `podoxide.code-workspace`   | Defines editor workspace formatting settings (4-space indentation, final newlines, trailing-whitespace trimming). |
+| `pods.conf`                 | Provides the root configuration template embedded and written by `pods init`. |
+| `PSL_SPEC.md`               | Specifies the PodScript Language (PSL) syntax, lexical grammar, block schemas, and parser resource bounds. |
+| `recipe.pod`                | Provides the root recipe template embedded and written by `pods init`. |
+| `rustfmt.toml`              | Configures repository `rustfmt` formatting rules (Edition 2024, 100-column width, preserving ASCII import order). |
 | `src/main.rs`           | Serves as the binary entry point (`pods`), delegates execution to `podoxide`, and returns `ExitCode`. |
 | `src/lib.rs`            | Serves as the library root, enforces `#![forbid(unsafe_code)]`, and exports `core`, `error`, `io`, and `utilities`. |
 | `src/error/mod.rs`      | Declares and re-exports the central domain error submodules, `MAX_ERROR_TOKEN_BYTES`, `PodError`, and `SystemError`. |
@@ -287,7 +298,7 @@ Executes or lists predefined maintenance commands declared inside a recipe's `po
 | File                                  | Function |
 | :------------------------------------ | :------- |
 | `src/core/modes/command/mod.rs`       | Parses `command` mode parameters, validates command definitions in alignment with `Recipe::inspect`, and dispatches to `exec`, `list`, or `help`. |
-| `src/core/modes/command/exec.rs`      | Resolves the target container and executes the selected recipe command via `podman exec -it`. |
+| `src/core/modes/command/exec.rs`      | Resolves the target container and executes the selected recipe command via TTY-aware `podman exec` (`-it` on TTY, `-i` when piped). |
 | `src/core/modes/command/help.rs`      | Formats and outputs the CLI help text for `pods command`. |
 | `src/core/modes/command/list.rs`      | Collects, sorts, and displays all valid commands and descriptions defined in a target recipe. |
 | `src/core/modes/command/tokenizer.rs` | Splits `command.execute` strings into bounded quote-aware argv tokens. |
@@ -450,6 +461,7 @@ The `tests/` directory verifies the compiled `pods` binary in isolated RAII temp
 | `tests/common/mod.rs`    | Provides `TestWorkspace` (RAII temp directory cleanup and executable mock `podman` shim) and `CliOutput` for subprocess execution. |
 | `tests/cli_matrix.rs`    | Verifies missing-config bypass/error matrices, `simulate true`/`false` and `--simulate` override matrices, argument pipeline validation, and Podman `< 5.8.0` version enforcement. |
 | `tests/cli_workflows.rs` | Verifies installed-symlink CWD resolution, custom `--config` debug logging and broken-config display, non-zero Podman exit propagation without duplicate `ERROR:` lines, live shared-image `pods update` pull deduplication and reload, and live `pods image prune` preview/abort/confirm/failure flows. |
+| `tests/completion.rs`    | Verifies `.pods-completion.bash` in isolated Bash subshells (`set -u`): zero shell variable leaks, split and glued `--config=` `.conf` filtering, `--flag=value` scanning, action-scoped flag filtering, unknown command rejection, and dynamic group/recipe/container/command completion. |
 
 ## Execution Flow
 

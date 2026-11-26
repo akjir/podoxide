@@ -7,7 +7,7 @@ description: >-
 # Podoxide Development Workflow
 
 ## 1. Edit-Build-Test Cycle
-1. **Verify Baseline:** Run `cargo test` and `cargo clippy -- -D warnings` before editing files.
+1. **Verify Baseline:** Run `cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` before editing files.
 2. **Edit (`AGENTS.md` Sections 1–3, `P-FILE-SIZE`):** Keep `mod.rs` files minimal (declarations, re-exports, constants, thin dispatchers) and place core logic in leaf `.rs` files kept around **400–500 lines** (`P-FILE-SIZE`):
    - **Layout & Imports (`P-LICENSE-HEADER`):** Follow the 8-part vertical layout (verbatim GPL-3.0 header from `src/main.rs` + blank line + `//!` docs). Enforce `std::` then `crate::`, `self::`, `super::` import order (including in `mod tests`), single-module braces (`imports_granularity = Module`, no nested `::`), no production globs (`use ...::*;`), and direct type imports vs. module-qualified free functions.
    - **Types & Docs (`P-FN-DOCS`, `P-NO-DEAD-CODE`):** Favor concrete types, named-field structs, and two-state enums over ambiguous `bool` parameters. Document every production item (`pub`, `pub(crate)`, private, and extracted helpers) with `///`; omit redundant `///` in `#[cfg(test)] mod tests`. Write only directly called items (or active `Ok(())` / `Default` compilation stubs).
@@ -16,7 +16,7 @@ description: >-
    - Deconstruct `Option`/`Result` via `match`, `if let`, `?`, or `let ... else` (never check `.is_some()`/`.is_ok()` then unwrap). Prefer flat `for` loops calling a helper over complex combinator chains (`P-FUNCTIONAL-COMBINATORS`, `P-VERTICAL-CLARITY`).
    - Eliminate avoidable loop allocations (`.to_string()`, `.to_owned()`, `.clone()`, `PathBuf::from()`, intermediate `.collect::<Vec<_>>()`), and check `MAX_*` bounds before scanning or allocating the $(N+1)$-th element (`P-BOUND-ALLOC`).
 4. **License, Documentation & Dead-Code Gate (`P-LICENSE-HEADER`, `P-FN-DOCS`, `P-NO-DEAD-CODE`):** Verify license headers, `//!` and `///` docs, and delete all orphaned functions, fields, variants, imports, `_unused` items, `#[allow(dead_code)]`, and obsolete unit tests.
-5. **Test & Lint:** Run `cargo test` and `cargo clippy -- -D warnings` after every modification.
+5. **Test & Lint:** Run `cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` after every modification.
 6. **Sync Docs, Templates & Changelog:** Follow **`update-documentation`** (`USAGE.md`, `README.md`, `PSL_SPEC.md`, CLI help, `.pods-completion.bash`, `pods.conf`, `recipe.pod`, `ARCHITECTURE.md`, `AGENTS.md`) and **`changelog-updater`** (`CHANGELOG.md`).
 
 ## 2. Testing Standards (`cargo test`)

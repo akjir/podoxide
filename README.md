@@ -11,7 +11,7 @@ Podoxide replaces complex orchestration wrappers and shell scripts with a single
 - **Deterministic Lifecycle:** Creates and starts containers in top-to-bottom declaration order (`up`) and stops and removes them in reverse bottom-to-top order (`down`).
 - **Unified Block DSL (`PSL`):** Uses a single-pass, zero-copy scanner for both application configuration (`pods.conf`) and pod recipes (`*.pod`).
 - **Target Grouping:** Resolves individual recipes and nested `@group` targets with cycle detection.
-- **Simulation & Diagnostics:** Previews generated `podman` commands via `--simulate` and validates host paths and configuration settings before execution.
+- **Simulation & Diagnostics:** Previews generated `podman` commands via `--simulate`, validates recipe path syntax before execution, and checks host directory existence via `pods config inspect`.
 
 ## Requirements
 
@@ -19,12 +19,12 @@ Podoxide replaces complex orchestration wrappers and shell scripts with a single
 | :--- | :--- |
 | Operating System | Linux |
 | Container Engine | Podman 5.8.0+ (rootful or rootless) |
-| Build Toolchain | Rust (`rustc`, `cargo`, Edition 2024) |
+| Build Toolchain | Rust 1.88+ (`rustc`, `cargo`, Edition 2024) |
 | External Crates | None (`std` only) |
 
 ## Installation
 
-Clone the repository and compile the release binary:
+Clone the repository and install the release binary (or install directly into `~/.cargo/bin` with `cargo install --path .`):
 
 ```bash
 git clone https://github.com/akjir/podoxide.git
@@ -33,15 +33,16 @@ cargo build --release
 sudo install -m 755 target/release/pods /usr/local/bin/pods
 ```
 
-Enable Bash tab-completion (optional):
+Enable Bash tab-completion for the current session or install it persistently:
 
 ```bash
 source .pods-completion.bash
+install -Dm 644 .pods-completion.bash ~/.local/share/bash-completion/completions/pods
 ```
 
 ## Quick Start
 
-1. Initialize a workspace configuration (`pods.conf`):
+1. Initialize workspace templates (`pods.conf` with `simulate true` and `recipe.pod`):
 
 ```bash
 pods init
@@ -53,35 +54,35 @@ pods init
 pods config inspect
 ```
 
-3. Preview and start a recipe or `@group`:
+3. Preview the generated Podman commands, then set `simulate false` in `pods.conf` to run live:
 
 ```bash
-pods --simulate up example-stack
-pods up example-stack
+pods --simulate up recipe
+pods up recipe
 ```
 
-4. Check status or tear down the pod:
+4. Check container status or tear down the pod:
 
 ```bash
 pods status
-pods down example-stack
+pods down recipe
 ```
 
 ## CLI Overview & Documentation
 
-Podoxide uses a mode-driven CLI syntax:
+Podoxide uses a mode-driven CLI syntax with flexible flag placement and optional sub-actions:
 
 ```text
-pods [global-flags] <lifecycle-action> [action-flags] <target...>
-pods [global-flags] <mode> <sub-action> [action-flags] [arguments...]
+pods [OPTIONS] <lifecycle-action> [TARGETS...]
+pods [OPTIONS] <mode> [sub-action] [ARGUMENTS...]
 ```
 
 | Mode / Scope | Alias | Primary Purpose |
 | :--- | :--- | :--- |
-| *(default)* | - | Manage pod lifecycles (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`). |
-| `init` | - | Initialize a default `pods.conf` file. |
+| *(default)* | - | Manage pod lifecycles (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help`, `version`). |
+| `init` | - | Initialize default `pods.conf` and `recipe.pod` template files. |
 | `config` | `cfg` | Validate, display, or edit `pods.conf`. |
-| `recipe` | `rec` | List, inspect, create, or edit `*.pod` recipes. |
+| `recipe` | `rec` | List, inspect, show, or edit `*.pod` recipes. |
 | `image` | `img` | Pull or prune container images defined in recipes. |
 | `command` | `cmd` | List or execute maintenance commands defined inside recipes. |
 | `connect` | `con` | Open an interactive shell inside a running container. |
@@ -95,22 +96,13 @@ For complete documentation, refer to the dedicated specifications in this reposi
 
 ## Development
 
-Build the binary in debug mode:
+Build, format-check, lint, and test the workspace:
 
 ```bash
 cargo build
-```
-
-Run the unit and integration test suite:
-
-```bash
+cargo fmt -- --check
+cargo clippy --all-targets -- -D warnings
 cargo test
-```
-
-Run static analysis (must pass with zero warnings):
-
-```bash
-cargo clippy -- -D warnings
 ```
 
 ## Disclaimer & License

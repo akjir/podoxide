@@ -8,7 +8,7 @@ description: >-
 
 ## 1. Strict Separation of Concerns (Single Source of Truth)
 * **`README.md` (Project Entry Point):** Keep under 130 lines. Do NOT copy detailed CLI flag tables, sub-action matrices, target resolution rules, or PSL grammar/file templates into `README.md`. Update `README.md` ONLY when top-level CLI modes, 3-letter aliases, lifecycle action names, system requirements, installation steps, or repository document links change.
-* **`USAGE.md` (CLI & Schema Reference):** Single Source of Truth for all CLI modes, 3-letter aliases (`cmd`, `cfg`, `con`, `img`, `log`, `rec`), lifecycle actions (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`), mode sub-actions, flags, targeting rules, and `pods.conf` / `*.pod` field schemas.
+* **`USAGE.md` (CLI & Schema Reference):** Single Source of Truth for all CLI modes, 3-letter aliases (`cmd`, `cfg`, `con`, `img`, `log`, `rec`), default actions (`up`, `down`, `create`, `remove`, `start`, `stop`, `restart`, `reload`, `update`, `status`, `help`, `version`), mode sub-actions, flags, targeting rules, and `pods.conf` / `*.pod` field schemas.
 * **`PSL_SPEC.md` (Language Specification):** Single Source of Truth for the PodScript Language (`PSL`) lexical rules, root-block grammar, parser bounds, and canonical syntax used in `pods.conf` and `*.pod`.
 * **`.pods-completion.bash` & Templates:** Update `.pods-completion.bash` whenever CLI modes, aliases, actions, or flags change. Keep root `pods.conf`, `recipe.pod`, and CLI `help` output synchronized with `USAGE.md` and `PSL_SPEC.md`.
 
@@ -18,9 +18,9 @@ Omit a Table of Contents. Maintain this exact section order:
 2. **`## Overview`:** Short intro + bullet list of core architectural traits (zero external dependencies, direct process execution, deterministic lifecycle, unified PSL scanner, `@group` resolution, `--simulate`).
 3. **`## Requirements`:** 2-column table (`Component | Requirement`).
 4. **`## Installation`:** Copy-paste ready `git clone`, `cargo build --release`, `install`, and `.pods-completion.bash` commands.
-5. **`## Quick Start`:** Self-contained numbered commands (`pods init`, `pods config show`, `pods --simulate up example-stack`, `pods up example-stack`, `pods status`, `pods down example-stack`).
+5. **`## Quick Start`:** Self-contained numbered commands (`pods init`, `pods config inspect`, `pods --simulate up recipe`, `pods up recipe`, `pods status`, `pods down recipe`).
 6. **`## CLI Overview & Documentation`:** General mode-driven syntax block, 3-column summary table (`Mode / Scope | Alias | Primary Purpose`), and links to `[USAGE.md](USAGE.md)`, `[PSL_SPEC.md](PSL_SPEC.md)`, `[ARCHITECTURE.md](ARCHITECTURE.md)`, and `[CHANGELOG.md](CHANGELOG.md)`.
-7. **`## Development`:** Self-contained `cargo build`, `cargo test`, and `cargo clippy -- -D warnings` commands.
+7. **`## Development`:** Self-contained `cargo build`, `cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` commands.
 8. **`## Disclaimer & License`:** 2-sentence warranty disclaimer and GPL-3.0 link to `[LICENSE](LICENSE)`.
 
 ## 3. `USAGE.md` Structure (Complete Technical Reference)

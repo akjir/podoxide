@@ -62,9 +62,9 @@ Argument parsing follows these rules:
 - **Mode Resolution:** If the first positional argument matches a mode name (`command`, `config`, `connect`, `image`, `init`, `logs`, `recipe`) or its 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`), that mode is selected. Otherwise, Podoxide selects the [Default Mode](#default-mode) and treats the first positional argument as the action.
 - **Mode Aliases:** Every mode except `init` provides a 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`) as an exact drop-in replacement for the first positional mode argument (for example, `pods cmd exec <recipe> <command>` is identical to `pods command exec <recipe> <command>`).
 - **No Arguments:** Running `pods` without arguments executes `pods help`.
-- **Option Placement:** Options prefixed with `--` can appear anywhere in the command line. Options that require a value (`--config`, `--since`, `--tail`, `--until`) accept both `--flag=<value>` and space-separated `--flag <value>` syntax.
-- **Configuration Bypass:** The `init` mode, `pods version`, all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading `pods.conf`.
-- **Privilege Check:** When executed with elevated privileges (`sudo` or `root`), Podoxide prints a warning and requires interactive confirmation (`yes`) before running.
+- **Option Placement & Scoping:** Options prefixed with `--` can appear anywhere in the command line. Options that require a value (`--config`, `--since`, `--tail`, `--until`) accept both `--flag=<value>` and space-separated `--flag <value>` syntax. Action-scoped flags are validated strictly against the resolved action: `--all` is permitted only for `status` (without explicit targets), `recipe list`, and `image prune`; `--full` is permitted only for `status`; `--force` and `--preview` are permitted only for `image prune` and cannot be combined; `--since`, `--tail`, `--timestamps`, and `--until` are permitted only for `logs show` and `logs follow`; and `--config` is rejected in `init` mode.
+- **Configuration Bypass:** The `init` mode, `pods version`, `pods config show` (which prints raw source even on a syntactically broken `pods.conf`), all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading or validating `pods.conf`.
+- **Environment & Privilege Checks:** Podoxide verifies Linux and Podman 5.8.0+ before executing runtime operations, and prints a warning requiring interactive confirmation (`yes`) when executed with elevated privileges (`sudo` or `root`). All `help` actions and `pods version` bypass both the Podman version check and the elevated-privilege prompt; `pods init` bypasses the Podman version check.
 
 ### Modes Overview
 
@@ -93,14 +93,14 @@ By default, Podoxide loads `./pods.conf`, written in the block-based PodScript L
 
 | Block / Directive  | Type      | Default | Required | Description                                                                                 |
 | :----------------- | :-------- | :------ | :------- | :------------------------------------------------------------------------------------------ |
-| `general.editor`   | `string`  | `""`    | No       | External editor command executed by `pods config edit` and `pods recipe edit`.              |
+| `general.editor`   | `string`  | `""`    | No       | External editor executable (bare name on `PATH` or absolute path; rejects `"podman"` and relative slash paths) used by `config edit` and `recipe edit`. |
 | `general.simulate` | `boolean` | `true`  | No       | Enable dry-run simulation mode globally unless explicitly set to `false`.                   |
 | `pods.path`        | `string`  | `""`    | No       | Default base directory for pod volume paths when a recipe omits `path` in its `pod` block.  |
 | `recipes.path`     | `string`  | `"."`   | No       | Directory path where Podoxide searches for `<recipe>.pod` files.                            |
 | `recipes.groups`   | `block`   | `{}`    | Yes      | Non-empty block mapping group names to one or more recipe names or `@<group>` entries.      |
 
 > [!IMPORTANT]
-> Every recipe must belong to at least one group in `recipes.groups` to be recognized by lifecycle commands, `pods image update`, and `recipe` mode actions.
+> Every recipe must belong to at least one group in `recipes.groups` to be recognized by default mode actions, `image update`, `recipe`, `command`, `logs`, and recipe resolution in `connect`. In `connect`, unregistered targets without `/` fall back to direct unmanaged Podman container names.
 
 ```psl
 general {
@@ -109,7 +109,7 @@ general {
 }
 
 pods {
-    path /pods
+    path ./pods
 }
 
 recipes {
@@ -139,10 +139,10 @@ The `pod <id> { ... }` block configures the Podman pod and recipe metadata:
 
 | Field / Directive        | Type        | Required | Description                                                                                   |
 | :----------------------- | :---------- | :------- | :-------------------------------------------------------------------------------------------- |
-| `<id>`                   | `string`    | Yes      | Pod name in Podman (normalized to lowercase with underscores); specified in the block header. |
+| `<id>`                   | `string`    | Yes      | Pod name in Podman (normalized to lowercase with `_`; must start with `[a-z0-9]` and match `[a-z0-9_.-]*` without `..`); specified in the block header. |
 | `name`                   | `string`    | Yes      | Human-readable display name of the recipe.                                                    |
 | `description`            | `string`    | No       | Summary displayed by `pods recipe list`.                                                      |
-| `registry`               | `string`    | Yes      | Default image registry prefixed to container images that do not specify `container.registry`. |
+| `registry`               | `string`    | Yes      | Default image registry prefixed to container images without `container.registry` (rejects `://`, leading/trailing `/`, and `//`). |
 | `path`                   | `string`    | Cond.    | Base host directory for relative volume mounts; defaults to `<pods.path>/<id>`.               |
 | `publish`                | `directive` | No       | Port mapping arguments translated into `--publish` flags on `podman pod create` (repeatable). |
 | `option`                 | `directive` | No       | Custom Podman flags/arguments not directly supported by `pods`, appended to `podman pod create` (repeatable). |
@@ -160,15 +160,17 @@ Each `publish` directive in the `pod` block maps to a `--publish` flag on `podma
 | `publish 8080 80 TCP`                  | `--publish 8080:80/TCP`                    |
 | `publish 127.0.0.1:8080 80 TCP`        | `--publish 127.0.0.1:8080:80/TCP`          |
 
+Ports must be decimal integers in `1..=65535` (or `<port>-<port>` ranges), optional host bind addresses must be valid IPv4 or bracketed IPv6 literals, and protocols must be `TCP` or `UDP` (case-insensitive, normalized to uppercase).
+
 #### Maintenance Commands (`command <name>`)
 
-Each `command <name> { ... }` block inside `pod` defines a named maintenance command for `pods command`:
+Each `command <name> { ... }` block inside `pod` defines a named maintenance command for `pods command`. Both `container` and `execute` must be non-empty; `pods recipe inspect` rejects incomplete command blocks.
 
 | Directive     | Type     | Required | Description                                                                             |
 | :------------ | :------- | :------- | :-------------------------------------------------------------------------------------- |
 | `container`   | `string` | Yes      | Target container by 1-based index (`1`), relative name (`*db` or `db`), or full name.   |
-| `execute`     | `string` | Yes      | Command line executed inside the container via `podman exec -it`.                       |
-| `user`        | `string` | No       | Username or UID passed to `podman exec -it -u <user>`.                                  |
+| `execute`     | `string` | Yes      | Command line executed inside the container via `podman exec` (`-it` on TTY, `-i` when piped). |
+| `user`        | `string` | No       | Username or UID passed to `podman exec -u <user>`.                                      |
 | `description` | `string` | No       | Summary shown in `pods command list` (omitting triggers a warning when listing).        |
 
 ### Container Fields
@@ -178,8 +180,8 @@ Containers declared in `container [<id>] { ... }` blocks are created and started
 | Field / Directive | Type        | Required | Description                                                                                 |
 | :---------------- | :---------- | :------- | :------------------------------------------------------------------------------------------ |
 | `<id>`            | `string`    | No       | Container name in the block header; supports relative (`*db`), explicit, or omitted naming. |
-| `image`           | `string`    | Yes      | Image repository and tag (`example/db-server:latest`).                                      |
-| `registry`        | `string`    | No       | Registry override for this container; falls back to `pod.registry`.                         |
+| `image`           | `string`    | Yes      | Image repository and tag (`example/db-server:latest`; rejects leading/trailing `/` and `//`). |
+| `registry`        | `string`    | No       | Registry override for this container (rejects `://`, leading/trailing `/`, and `//`); falls back to `pod.registry`. |
 | `restart`         | `string`    | No       | Restart policy passed to `--restart` (for example, `always` or `on-failure`).               |
 | `volume`          | `directive` | No       | Volume mount definition `<host_dir> <container_dir> [<options>]` (repeatable).              |
 | `option`          | `directive` | No       | Custom Podman flags/arguments not directly supported by `pods`, appended to `podman create` (repeatable). |
@@ -188,18 +190,18 @@ Containers declared in `container [<id>] { ... }` blocks are created and started
 #### Container Naming Rules
 
 - **Omitted (`container { ... }`):** Expands to `<pod_id>-<index>` (for example, `example-stack-1`).
-- **Prefixed with `*` (`container *db { ... }`):** Expands to `<pod_id>-<suffix>` (for example, `*db` becomes `example-stack-db`).
-- **Without `*` (`container custom { ... }`):** Normalized (lowercase, spaces replaced with `_`) and used as the exact container name.
+- **Prefixed with `*` (`container *db { ... }`):** Expands to `<pod_id>-<suffix>` (for example, `*db` becomes `example-stack-db`). Normalized suffixes must match `[a-z0-9_][a-z0-9_.-]*` without `..` (allowing a leading `_`).
+- **Without `*` (`container custom { ... }`):** Normalized (lowercase, spaces replaced with `_`) and used as the exact container name. Must start with an ASCII lowercase letter or digit (`[a-z0-9][a-z0-9_.-]*` without `..`).
 
 #### Volume Mount Rules (`volume`)
 
 Each `volume` directive specifies a host source, container destination, and optional mount options (`volume <host_dir> <container_dir> [<options>]`):
 
-| `host_dir` Value   | Resolution                    | Generated `--volume` Value                    |
-| :----------------- | :---------------------------- | :-------------------------------------------- |
-| `""`               | Anonymous volume              | `<container_dir>[:<options>]`                 |
-| `data` or `./data` | Resolved against `pod.path`   | `<pod.path>/data:<container_dir>[:<options>]` |
-| `/var/data`        | Absolute host path used as-is | `/var/data:<container_dir>[:<options>]`       |
+| `host_dir` Value   | Resolution                              | Generated `--volume` Value                    |
+| :----------------- | :-------------------------------------- | :-------------------------------------------- |
+| `""`               | Anonymous volume (`<options>` rejected) | `<container_dir>`                             |
+| `data` or `./data` | Resolved against `pod.path`             | `<pod.path>/data:<container_dir>[:<options>]` |
+| `/var/data`        | Absolute host path used as-is           | `/var/data:<container_dir>[:<options>]`       |
 
 #### Custom Podman Options (`option`)
 
@@ -209,11 +211,11 @@ The `option` directive in `pod` and `container` blocks passes flags and options 
 | :------------------------------------------------------------------ | :---------------------------------------------------------------- |
 | `option --userns=keep-id`                                           | `--userns=keep-id`                                                |
 | `option "--env DB_PASSWORD=secret"` or `option --env DB_PASSWORD=secret` | `--env` `DB_PASSWORD=secret`                                 |
-| `option "--health-cmd='redis-cli ping \| grep -q PONG \|\| exit 1'"` | `--health-cmd=redis-cli ping \| grep -q PONG \|\| exit 1`         |
-| `option --health-cmd='redis-cli ping \| grep -q PONG \|\| exit 1'`  | `--health-cmd=redis-cli ping \| grep -q PONG \|\| exit 1`         |
-| `option --health-cmd="redis-cli ping \| grep -q PONG \|\| exit 1"`  | `--health-cmd=redis-cli ping \| grep -q PONG \|\| exit 1`         |
-| `option --health-cmd 'redis-cli ping \| grep -q PONG \|\| exit 1'`  | `--health-cmd` `redis-cli ping \| grep -q PONG \|\| exit 1`       |
-| `option --health-cmd "redis-cli ping \| grep -q PONG \|\| exit 1"`  | `--health-cmd` `redis-cli ping \| grep -q PONG \|\| exit 1`       |
+| `option "--health-cmd='cache-cli ping \| grep -q PONG \|\| exit 1'"` | `--health-cmd=cache-cli ping \| grep -q PONG \|\| exit 1`         |
+| `option --health-cmd='cache-cli ping \| grep -q PONG \|\| exit 1'`  | `--health-cmd=cache-cli ping \| grep -q PONG \|\| exit 1`         |
+| `option --health-cmd="cache-cli ping \| grep -q PONG \|\| exit 1"`  | `--health-cmd=cache-cli ping \| grep -q PONG \|\| exit 1`         |
+| `option --health-cmd 'cache-cli ping \| grep -q PONG \|\| exit 1'`  | `--health-cmd` `cache-cli ping \| grep -q PONG \|\| exit 1`       |
+| `option --health-cmd "cache-cli ping \| grep -q PONG \|\| exit 1"`  | `--health-cmd` `cache-cli ping \| grep -q PONG \|\| exit 1`       |
 
 Unescaped nested identical quotes (`option '--flag='value''` or `option "--flag="value""`) and unbalanced inner quotes are rejected with a diagnostic error.
 
@@ -223,7 +225,7 @@ Unescaped nested identical quotes (`option '--flag='value''` or `option "--flag=
 pod example-stack {
     name        "Example Web Stack"
     description "A minimal but complete example recipe with a web app and database."
-    path        /pods/example-stack
+    path        ./pods/example-stack
     registry    docker.io
     publish     8080 80 TCP
     option      --userns=keep-id
@@ -270,7 +272,7 @@ The [Default Mode](#default-mode) actions, `pods image update`, `logs`, `connect
 - **Unprefixed Name:** `example-app/example-stack-db` or `example-app/db` checks for an exact resolved container name match first (`example-stack-db`), then falls back to `<pod_id>-<name>` (`example-stack-db`).
 - **Exclusivity in Lifecycle Actions:** Default mode actions and `pods image update` accept either pod/group targets (`<recipe>`, `@<group>`) or one or more `<recipe>/<container>` container targets in a single invocation, deduplicating repeated `(recipe, container_name)` pairs in first-appearance order. Mixing pod/group targets with `<recipe>/<container>` targets is rejected.
 - **Automatic Pod Creation:** When creating a targeted container (`create`, `up`, `reload`, `update`), Podoxide checks whether the parent pod exists in Podman (`podman pod exists`) and creates the pod automatically before creating the container if the pod is missing.
-- **Direct Container Name (`connect` only):** If `<target>` contains no `/` and no matching `<target>.pod` file exists in `recipes.path`, `pods connect <target>` connects directly to a running Podman container with that name.
+- **Direct Container Name (`connect` only):** If `<target>` contains no `/` and is not registered in `recipes.groups`, `pods connect <target>` connects directly to a running unmanaged Podman container with that name (unreferenced `.pod` files on disk never hijack direct container names). Unmanaged container names accept uppercase ASCII letters (`[A-Za-z0-9][A-Za-z0-9_.-]*` without `..`).
 
 ## Default Mode
 
@@ -291,20 +293,20 @@ pods [OPTIONS] <action> [TARGETS...]
 | `remove <target...>`  | Remove all containers in reverse bottom-to-top order and remove the pod without stopping them first.         |
 | `restart <target...>` | Stop and start an existing pod and its containers (`stop` + `start`) without removing or recreating them.    |
 | `start <target...>`   | Start an existing stopped pod and its containers in top-to-bottom order without recreating them.             |
-| `status [target...]`  | Display a formatted status table of managed containers and report invalid recipes with `Recipe Error`.       |
+| `status [target...]`  | Always queries live `podman ps -a` (even in simulate mode), displays a formatted status table, and distinguishes missing `.pod` files (`Not Found`) from invalid recipes (`Recipe Error`). |
 | `stop <target...>`    | Stop a running pod and its containers in reverse bottom-to-top order without removing them.                  |
 | `up <target...>`      | Create and start the pod and its containers in deterministic top-to-bottom order (`create` + `start`).       |
-| `update <target...>`  | Pull the latest container images, reload the pod (or targeted container) if an image was updated and no pull failed, and print a grouped `Update Summary:`. |
-| `version`             | Display the application version with Git build metadata and exit.                                            |
+| `update <target...>`  | Deduplicate identical image pulls per run, compare running container image IDs against pulled images (catching shared or pre-pulled updates), reload updated targets if no pull failed, display bounded `stderr` on failure, print `Update Summary:`, and exit non-zero if any Podman operation fails. |
+| `version`             | Display the application version with Git build metadata and exit (bypasses Podman and privilege checks).     |
 
 ### Options
 
 | Option            | Description                                                                             |
 | :---------------- | :-------------------------------------------------------------------------------------- |
-| `--all`           | Include unmanaged Podman containers in `status` output alongside managed containers.    |
+| `--all`           | Include unmanaged Podman containers in `status` output (`status` only; invalid with explicit targets). |
 | `--config=<name>` | Load an alternative configuration file by name or path.                                 |
 | `--debug`         | Enable verbose debug logging.                                                           |
-| `--full`          | Insert `TARGET NAME` (`<recipe>/<index>` for managed containers, `-` for unmanaged) after `NAME` and append `COMMAND` and `PORTS` columns to `status`. |
+| `--full`          | Insert `TARGET NAME` (`<recipe>/<index>` for managed containers, `-` for unmanaged) after `NAME` and append `COMMAND` and `PORTS` columns (`status` only). |
 | `--simulate`      | Print generated Podman commands without executing them.                                 |
 
 ### Usage
@@ -336,7 +338,7 @@ pods remove example-app
 # Tear down and rebuild a pod from its .pod recipe to apply configuration changes
 pods reload example-app
 
-# Pull the latest images for a group and rebuild its pods
+# Pull the latest images for a group and reload pods whose images changed
 pods update @backend
 
 # Stop all containers in reverse order and remove multiple recipes and groups
@@ -358,7 +360,7 @@ pods --config=staging --debug reload example-app
 
 ## Logs Mode (`log`)
 
-The `logs` (`log`) mode fetches or streams container logs for a recipe's pod or a single container within that pod via `podman pod logs`.
+The `logs` (`log`) mode fetches or streams container logs for a recipe's pod or a single container within that pod via `podman pod logs`. Colored output (`--color`) is enabled automatically when stdout is a TTY (or in simulate mode) unless the `NO_COLOR` environment variable is set.
 
 ```bash
 pods logs [OPTIONS] [ACTION] <recipe>[/<container>]
@@ -379,10 +381,10 @@ pods logs [OPTIONS] [ACTION] <recipe>[/<container>]
 | `--config=<name>` | Load an alternative configuration file by name or path.                          |
 | `--debug`         | Enable verbose debug logging.                                                    |
 | `--simulate`      | Print the generated `podman pod logs` command without executing it.              |
-| `--since=<time>`  | Show logs generated since the given duration (such as `15m`) or timestamp.       |
-| `--tail=<n>`      | Show only the last `<n>` lines of log output.                                    |
-| `--timestamps`    | Prepend timestamps to each log line.                                             |
-| `--until=<time>`  | Show logs generated before the given duration or timestamp.                      |
+| `--since=<time>`  | Show logs generated since a duration (`15m`) or timestamp (including space-separated timestamps; `show`/`follow` only). |
+| `--tail=<n>`      | Show only the last `<n>` lines (non-negative integer or `all`, case-insensitive; `show`/`follow` only). |
+| `--timestamps`    | Prepend timestamps to each log line (`show`/`follow` only).                      |
+| `--until=<time>`  | Show logs generated before a duration or timestamp (including space-separated timestamps; `show`/`follow` only). |
 
 ### Usage
 
@@ -410,7 +412,7 @@ pods --config=staging --debug logs follow example-app/app --simulate
 
 ## Connect Mode (`con`)
 
-The `connect` (`con`) mode opens an interactive shell (`bash` if available, falling back to `sh`) inside a running container via `podman exec -it`.
+The `connect` (`con`) mode opens an interactive shell (`bash` if available, falling back to `sh`) inside a running container via `podman exec` (`-it` when attached to an interactive TTY, `-i` when piped). Registered recipes take precedence over unmanaged container names; unmanaged container names accept uppercase ASCII letters.
 
 ```bash
 pods connect [OPTIONS] [ACTION] <target>
@@ -455,7 +457,7 @@ pods --config=staging --debug connect example-app/db --simulate
 
 ## Command Mode (`cmd`)
 
-The `command` (`cmd`) mode lists or executes maintenance commands declared in `command <name>` blocks inside a recipe's `pod` block via `podman exec -it`.
+The `command` (`cmd`) mode lists or executes maintenance commands declared in `command <name>` blocks inside a recipe's `pod` block via `podman exec` (`-it` when attached to an interactive TTY, `-i` when stdin or stdout is piped).
 
 ```bash
 pods command [OPTIONS] [ACTION] <recipe> [<command>|<index>]
@@ -513,7 +515,7 @@ pods recipe [OPTIONS] [ACTION] [<recipe>]
 | :-------- | :---------------------------------------------------------------------------------------------------------------------------- |
 | `edit`    | Open the specified `.pod` recipe file in the external editor configured in `pods.conf`.                                       |
 | `help`    | Display command-line help for `recipe` mode.                                                                                  |
-| `inspect` | Validate the specified `.pod` recipe file and display detailed syntax or semantic diagnostics on error.                       |
+| `inspect` | Validate the specified `.pod` recipe file (including non-empty `container` and `execute` directives in `command` blocks) and display detailed syntax or semantic diagnostics on error. |
 | `list`    | List all recipes registered in `pods.conf` with descriptions and validation status (`[OK]`, `[ERROR]`, `[NOT FOUND]`) (default). |
 | `show`    | Print the `.pod` recipe file with 1-based line numbers (default when `<recipe>` is given without action).                     |
 
@@ -521,7 +523,7 @@ pods recipe [OPTIONS] [ACTION] [<recipe>]
 
 | Option            | Description                                                                             |
 | :---------------- | :-------------------------------------------------------------------------------------- |
-| `--all`           | Include unreferenced `.pod` files found in `recipes.path` when running `recipe list`.   |
+| `--all`           | Include unreferenced `.pod` files found in `recipes.path` (`recipe list` only).         |
 | `--config=<name>` | Load an alternative configuration file by name or path.                                 |
 | `--debug`         | Enable verbose debug logging.                                                           |
 | `--simulate`      | Print the editor command without executing it when running `recipe edit`.               |
@@ -570,7 +572,7 @@ pods config [OPTIONS] [ACTION]
 | `edit`    | Open the active configuration file in the external editor defined by `general.editor`.                                     |
 | `help`    | Display command-line help for `config` mode.                                                                               |
 | `inspect` | Display the validated configuration tree, recipe inspection status, and validation summary (default when action is omitted). |
-| `show`    | Print the active `pods.conf` file with 1-based line numbers.                                                               |
+| `show`    | Print the active `pods.conf` file with 1-based line numbers (bypasses PSL validation, so it works even on syntactically broken configuration files). |
 
 ### Options
 
@@ -616,18 +618,18 @@ pods image [OPTIONS] [ACTION] [TARGETS...]
 | Action               | Description                                                                                                                       |
 | :------------------- | :-------------------------------------------------------------------------------------------------------------------------------- |
 | `help`               | Display command-line help for `image` mode (default when called without arguments).                                               |
-| `prune`              | Remove unused dangling container images (or all unused images when `--all` is passed).                                            |
-| `update <target...>` | Download and pull the latest container images defined in the target recipes (`<recipe>`, `@<group>`, or `<recipe>/<container>`) without executing `reload` and print a grouped `Update Summary:`. |
+| `prune`              | Deduplicate multi-tagged unused images by full image ID, prompt for confirmation on `stderr` (aborting with non-zero exit status on decline or EOF), and remove dangling images (or all unused images with `--all`). |
+| `update <target...>` | Deduplicate identical image pulls per run, download the latest container images defined in target recipes (`<recipe>`, `@<group>`, or `<recipe>/<container>`) without executing `reload`, display bounded `stderr` on failure, print a grouped `Update Summary:`, and exit non-zero if any pull fails. |
 
 ### Options
 
 | Option            | Description                                                                                      |
 | :---------------- | :----------------------------------------------------------------------------------------------- |
-| `--all`           | Target all unused images (including tagged images not used by any container), not just dangling. |
+| `--all`           | Target all unused images, including unreferenced tagged images (`prune` only).                   |
 | `--config=<name>` | Load an alternative configuration file by name or path.                                          |
 | `--debug`         | Enable verbose debug logging.                                                                    |
-| `--force`         | Skip the interactive confirmation prompt before pruning images.                                  |
-| `--preview`       | List unused images that would be removed and calculate total reclaimable disk space.             |
+| `--force`         | Skip the interactive confirmation prompt before pruning (`prune` only; invalid with `--preview`). |
+| `--preview`       | List deduplicated unused images and total reclaimable disk space (`prune` only; invalid with `--force`). |
 | `--simulate`      | Print the generated `podman pull` or `podman image prune` commands without executing them.       |
 
 ### Usage
@@ -663,7 +665,7 @@ pods --debug image prune --all --simulate
 
 ## Init Mode
 
-The `init` mode initializes a workspace in the current working directory by creating `recipe.pod` and `pods.conf`. If a target file already exists, `pods init` logs a warning and skips overwriting it; if a directory with the same name exists, `pods init` aborts with an error.
+The `init` mode initializes a workspace in the current working directory by creating `recipe.pod` and `pods.conf`. It bypasses configuration loading and the Podman version check, and rejects `--config`. If a target file already exists, `pods init` logs a warning and skips overwriting it; if a directory with the same name exists, `pods init` aborts with an error.
 
 ```bash
 pods init [OPTIONS] [ACTION]

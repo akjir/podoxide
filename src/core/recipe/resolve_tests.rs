@@ -38,7 +38,7 @@ fn load_root_recipe_pod_and_temp_recipes() {
         root_recipe.pod.description,
         "A minimal but complete example recipe with a web app and database."
     );
-    assert_eq!(root_recipe.pod.path, PathBuf::from("/pods/example-stack"));
+    assert_eq!(root_recipe.pod.path, PathBuf::from("./pods/example-stack"));
     assert_eq!(root_recipe.pod.registry, "docker.io");
     assert_eq!(root_recipe.pod.publish, vec![String::from("8080:80/TCP")]);
     assert_eq!(
