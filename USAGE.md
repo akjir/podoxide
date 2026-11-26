@@ -63,8 +63,8 @@ Argument parsing follows these rules:
 - **Mode Aliases:** Every mode except `init` provides a 3-letter alias (`cmd`, `cfg`, `con`, `img`, `log`, `rec`) as an exact drop-in replacement for the first positional mode argument (for example, `pods cmd exec <recipe> <command>` is identical to `pods command exec <recipe> <command>`).
 - **No Arguments:** Running `pods` without arguments executes `pods help`.
 - **Option Placement & Scoping:** Options prefixed with `--` can appear anywhere in the command line. Options that require a value (`--config`, `--since`, `--tail`, `--until`) accept both `--flag=<value>` and space-separated `--flag <value>` syntax. Action-scoped flags are validated strictly against the resolved action: `--all` is permitted only for `status` (without explicit targets), `recipe list`, and `image prune`; `--full` is permitted only for `status`; `--force` and `--preview` are permitted only for `image prune` and cannot be combined; `--since`, `--tail`, `--timestamps`, and `--until` are permitted only for `logs show` and `logs follow`; and `--config` is rejected in `init` mode.
-- **Configuration Bypass:** The `init` mode, `pods version`, `pods config show` (which prints raw source even on a syntactically broken `pods.conf`), all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without loading or validating `pods.conf`.
-- **Environment & Privilege Checks:** Podoxide verifies Linux and Podman 5.8.0+ before executing runtime operations, and prints a warning requiring interactive confirmation (`yes`) when executed with elevated privileges (`sudo` or `root`). All `help` actions and `pods version` bypass both the Podman version check and the elevated-privilege prompt; `pods init` bypasses the Podman version check.
+- **Configuration Bypass:** The `init` mode, `pods version`, all `help` actions (`pods help`, `pods <mode> help`), and parameterless calls to `command`, `connect`, `image`, or `logs` (including their 3-letter aliases) run without accessing `pods.conf`. `pods config show` bypasses PSL parsing and validation so syntactically broken configuration files can be displayed, while still requiring the file to exist on disk.
+- **Environment & Privilege Checks:** Podoxide verifies Linux and Podman 5.8.0+ before executing Podman-backed operations, and prints a warning requiring interactive confirmation (`yes`) when executed with elevated privileges (`sudo` or `root`). Offline actions (`help`, `version`, `init`, `config`, `recipe`, and `command list`) bypass the Podman version check. Read-only offline actions (`help`, `version`, `config show`/`inspect`, `recipe list`/`inspect`/`show`, and `command list`) also bypass the elevated-privilege prompt.
 
 ### Modes Overview
 
@@ -142,7 +142,7 @@ The `pod <id> { ... }` block configures the Podman pod and recipe metadata:
 | `<id>`                   | `string`    | Yes      | Pod name in Podman (normalized to lowercase with `_`; must start with `[a-z0-9]` and match `[a-z0-9_.-]*` without `..`); specified in the block header. |
 | `name`                   | `string`    | Yes      | Human-readable display name of the recipe.                                                    |
 | `description`            | `string`    | No       | Summary displayed by `pods recipe list`.                                                      |
-| `registry`               | `string`    | Yes      | Default image registry prefixed to container images without `container.registry` (rejects `://`, leading/trailing `/`, and `//`). |
+| `registry`               | `string`    | Yes      | Default image registry prefixed to container images without `container.registry` (rejects `://`, leading/trailing `/`, `//`, malformed or empty host/namespace components, and invalid port syntax). |
 | `path`                   | `string`    | Cond.    | Base host directory for relative volume mounts; defaults to `<pods.path>/<id>`.               |
 | `publish`                | `directive` | No       | Port mapping arguments translated into `--publish` flags on `podman pod create` (repeatable). |
 | `option`                 | `directive` | No       | Custom Podman flags/arguments not directly supported by `pods`, appended to `podman pod create` (repeatable). |
@@ -160,7 +160,7 @@ Each `publish` directive in the `pod` block maps to a `--publish` flag on `podma
 | `publish 8080 80 TCP`                  | `--publish 8080:80/TCP`                    |
 | `publish 127.0.0.1:8080 80 TCP`        | `--publish 127.0.0.1:8080:80/TCP`          |
 
-Ports must be decimal integers in `1..=65535` (or `<port>-<port>` ranges), optional host bind addresses must be valid IPv4 or bracketed IPv6 literals, and protocols must be `TCP` or `UDP` (case-insensitive, normalized to uppercase).
+Ports must be decimal integers in `1..=65535` (or ascending `<start>-<end>` ranges with `start <= end`), optional host bind addresses must be valid IPv4 or bracketed IPv6 literals, and protocols must be `TCP` or `UDP` (case-insensitive, normalized to uppercase).
 
 #### Maintenance Commands (`command <name>`)
 
@@ -180,8 +180,8 @@ Containers declared in `container [<id>] { ... }` blocks are created and started
 | Field / Directive | Type        | Required | Description                                                                                 |
 | :---------------- | :---------- | :------- | :------------------------------------------------------------------------------------------ |
 | `<id>`            | `string`    | No       | Container name in the block header; supports relative (`*db`), explicit, or omitted naming. |
-| `image`           | `string`    | Yes      | Image repository and tag (`example/db-server:latest`; rejects leading/trailing `/` and `//`). |
-| `registry`        | `string`    | No       | Registry override for this container (rejects `://`, leading/trailing `/`, and `//`); falls back to `pod.registry`. |
+| `image`           | `string`    | Yes      | Image repository and tag (`example/db-server:latest`; rejects `://`, leading/trailing `/`, `//`, and malformed or empty repository, tag, or digest components). |
+| `registry`        | `string`    | No       | Registry override for this container (rejects `://`, leading/trailing `/`, `//`, malformed or empty host/namespace components, and invalid port syntax); falls back to `pod.registry`. |
 | `restart`         | `string`    | No       | Restart policy passed to `--restart` (for example, `always` or `on-failure`).               |
 | `volume`          | `directive` | No       | Volume mount definition `<host_dir> <container_dir> [<options>]` (repeatable).              |
 | `option`          | `directive` | No       | Custom Podman flags/arguments not directly supported by `pods`, appended to `podman create` (repeatable). |
@@ -360,7 +360,7 @@ pods --config=staging --debug reload example-app
 
 ## Logs Mode (`log`)
 
-The `logs` (`log`) mode fetches or streams container logs for a recipe's pod or a single container within that pod via `podman pod logs`. Colored output (`--color`) is enabled automatically when stdout is a TTY (or in simulate mode) unless the `NO_COLOR` environment variable is set.
+The `logs` (`log`) mode fetches or streams container logs for a recipe's pod or a single container within that pod via `podman pod logs`. Colored output (`--color`) is enabled automatically when stdout is a TTY (or in simulate mode) unless the `NO_COLOR` environment variable is set to a non-empty value (empty `NO_COLOR` values are ignored).
 
 ```bash
 pods logs [OPTIONS] [ACTION] <recipe>[/<container>]
@@ -382,7 +382,7 @@ pods logs [OPTIONS] [ACTION] <recipe>[/<container>]
 | `--debug`         | Enable verbose debug logging.                                                    |
 | `--simulate`      | Print the generated `podman pod logs` command without executing it.              |
 | `--since=<time>`  | Show logs generated since a duration (`15m`) or timestamp (including space-separated timestamps; `show`/`follow` only). |
-| `--tail=<n>`      | Show only the last `<n>` lines (non-negative integer or `all`, case-insensitive; `show`/`follow` only). |
+| `--tail=<n>`      | Show only the last `<n>` lines (non-negative integer or `all`, case-insensitive, translated to `-1` for `podman pod logs`; `show`/`follow` only). |
 | `--timestamps`    | Prepend timestamps to each log line (`show`/`follow` only).                      |
 | `--until=<time>`  | Show logs generated before a duration or timestamp (including space-separated timestamps; `show`/`follow` only). |
 
@@ -513,7 +513,7 @@ pods recipe [OPTIONS] [ACTION] [<recipe>]
 
 | Action    | Description                                                                                                                   |
 | :-------- | :---------------------------------------------------------------------------------------------------------------------------- |
-| `edit`    | Open the specified `.pod` recipe file in the external editor configured in `pods.conf`.                                       |
+| `edit`    | Open the specified `.pod` recipe file in the external editor configured in `pods.conf`, propagating non-zero editor exit codes. |
 | `help`    | Display command-line help for `recipe` mode.                                                                                  |
 | `inspect` | Validate the specified `.pod` recipe file (including non-empty `container` and `execute` directives in `command` blocks) and display detailed syntax or semantic diagnostics on error. |
 | `list`    | List all recipes registered in `pods.conf` with descriptions and validation status (`[OK]`, `[ERROR]`, `[NOT FOUND]`) (default). |
@@ -569,7 +569,7 @@ pods config [OPTIONS] [ACTION]
 
 | Action    | Description                                                                                                                |
 | :-------- | :------------------------------------------------------------------------------------------------------------------------- |
-| `edit`    | Open the active configuration file in the external editor defined by `general.editor`.                                     |
+| `edit`    | Open the active configuration file in the external editor defined by `general.editor`, propagating non-zero editor exit codes. |
 | `help`    | Display command-line help for `config` mode.                                                                               |
 | `inspect` | Display the validated configuration tree, recipe inspection status, and validation summary (default when action is omitted). |
 | `show`    | Print the active `pods.conf` file with 1-based line numbers (bypasses PSL validation, so it works even on syntactically broken configuration files). |
@@ -629,7 +629,7 @@ pods image [OPTIONS] [ACTION] [TARGETS...]
 | `--config=<name>` | Load an alternative configuration file by name or path.                                          |
 | `--debug`         | Enable verbose debug logging.                                                                    |
 | `--force`         | Skip the interactive confirmation prompt before pruning (`prune` only; invalid with `--preview`). |
-| `--preview`       | List deduplicated unused images and total reclaimable disk space (`prune` only; invalid with `--force`). |
+| `--preview`       | List deduplicated unused images (including alias tags per image ID) and total reclaimable disk space, warning on truncation past 1024 images (`prune` only; invalid with `--force`). |
 | `--simulate`      | Print the generated `podman pull` or `podman image prune` commands without executing them.       |
 
 ### Usage

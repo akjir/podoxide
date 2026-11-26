@@ -56,7 +56,7 @@ case "$cmd" in
         for arg in "$@"; do
             if [ "$arg" = "--no-trunc" ]; then
                 if [ -n "${MOCK_PODMAN_IN_USE_IMAGES:-}" ]; then
-                    printf '%b' "$MOCK_PODMAN_IN_USE_IMAGES"
+                    printf '%s' "$MOCK_PODMAN_IN_USE_IMAGES"
                 fi
                 exit 0
             fi
@@ -64,7 +64,7 @@ case "$cmd" in
         if [ -n "${MOCK_PODMAN_PS_FILE:-}" ] && [ -f "$MOCK_PODMAN_PS_FILE" ]; then
             cat "$MOCK_PODMAN_PS_FILE"
         elif [ -n "${MOCK_PODMAN_PS:-}" ]; then
-            printf '%b' "$MOCK_PODMAN_PS"
+            printf '%s' "$MOCK_PODMAN_PS"
         fi
         exit 0
         ;;
@@ -72,7 +72,7 @@ case "$cmd" in
         if [ -n "${MOCK_PODMAN_IMAGES_FILE:-}" ] && [ -f "$MOCK_PODMAN_IMAGES_FILE" ]; then
             cat "$MOCK_PODMAN_IMAGES_FILE"
         elif [ -n "${MOCK_PODMAN_IMAGES:-}" ]; then
-            printf '%b' "$MOCK_PODMAN_IMAGES"
+            printf '%s' "$MOCK_PODMAN_IMAGES"
         fi
         exit 0
         ;;
@@ -85,9 +85,9 @@ case "$cmd" in
             if [ -n "${MOCK_PODMAN_STATE_DIR:-}" ] \
                 && [ -f "$MOCK_PODMAN_STATE_DIR/pulled" ] \
                 && grep -Fxq -- "$target" "$MOCK_PODMAN_STATE_DIR/pulled"; then
-                printf '%s\n' "${MOCK_PODMAN_IMAGE_ID_AFTER:-sha256:0000000000000000000000000000000000000000000000000000000000000002}"
+                printf '%s\n' "${MOCK_PODMAN_IMAGE_ID_AFTER:-0000000000000000000000000000000000000000000000000000000000000002}"
             else
-                printf '%s\n' "${MOCK_PODMAN_IMAGE_ID_BEFORE:-sha256:0000000000000000000000000000000000000000000000000000000000000001}"
+                printf '%s\n' "${MOCK_PODMAN_IMAGE_ID_BEFORE:-0000000000000000000000000000000000000000000000000000000000000001}"
             fi
             exit 0
         fi
@@ -110,7 +110,7 @@ case "$cmd" in
                     exit 0
                 fi
             done
-            printf '%s\n' "${MOCK_PODMAN_CONTAINER_IMAGE_ID:-sha256:0000000000000000000000000000000000000000000000000000000000000001}"
+            printf '%s\n' "${MOCK_PODMAN_CONTAINER_IMAGE_ID:-0000000000000000000000000000000000000000000000000000000000000001}"
             exit 0
         fi
         exit 0

@@ -273,10 +273,10 @@ Whenever the user modifies `PSL_SPEC.md` or instructs you to change the PSL synt
 
 1. **Diff & Analyze Spec:** Read `PSL_SPEC.md` and identify the exact lexical, grammatical, or bound changes in Sections 2 through 6.
 2. **Update Tests First (TDD Red Phase):**
-   - Locate the PSL test suite (unit tests in `src/io/psl/` and domain integration tests in `src/core/config.rs`, `src/core/recipe.rs`, and `src/error/`).
+   - Locate the PSL test suite (unit tests in `src/io/psl/` and domain integration tests in `src/core/config/`, `src/core/recipe/`, and `src/error/`).
    - Add or update positive test cases for new valid syntax and negative test cases for new error conditions (`M-DELIM-INJECT-TESTS`, `M-EXTREME-BOUND-TESTS`, `M-FALLBACK-TESTS`).
    - Run `cargo test` to verify that the new/updated tests fail as expected against the old parser.
 3. **Update Parser Implementation (TDD Green Phase):**
    - Modify the scanner and parser in `src/io/psl/` to satisfy the updated `PSL_SPEC.md` while strictly adhering to `AGENTS.md` layout and memory rules (`P-UNIFIED-PARSER`, `P-NO-QUADRATIC`, `P-BOUND-ALLOC`, `P-UTF8-LOOKAROUND`).
 4. **Update Templates & Docs:** If the syntax change affects `pods.conf` or `*.pod` templates, update root templates and documentation per `update-documentation`.
-5. **Verify:** Run `cargo test` and `cargo clippy -- -D warnings` until all checks pass with zero warnings.
+5. **Verify:** Run `cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`, and `cargo test` until all checks pass with zero warnings.

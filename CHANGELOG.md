@@ -36,8 +36,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Replace verbose image pull output with a quiet animated progress spinner and clear per-image outcomes.
 - Indent container pull and reload output under pod headers and separate consecutive targets with blank lines during updates.
 - Enforce action-scoped CLI flag validation, rejecting unsupported flags per sub-action, `--all` with explicit status targets, `--config` in `init` mode, and combined `--force` and `--preview` flags.
-- Bypass Podman version and elevated-privilege checks for `help` and `version`, and bypass Podman version checks for `init`.
-- Detect interactive terminals for `command exec` and `connect` (`-it` on TTY, `-i` when piped) and for colored `logs` output while respecting `NO_COLOR`.
+- Bypass Podman version checks for offline actions (`help`, `version`, `init`, `config`, `recipe`, and `command list`), and bypass elevated-privilege prompts for read-only offline actions.
+- Detect interactive terminals for `command exec` and `connect` (`-it` on TTY, `-i` when piped) and for colored `logs` output while respecting non-empty `NO_COLOR` values.
+- Group multi-tag aliases per distinct image in `image prune --preview` and display a truncation warning with a lower-bound reclaimable total when more than 1024 unused images are present.
 - Change the default recipe template pod path to a rootless-friendly relative path (`./pods/example-stack`).
 
 ### Removed
@@ -52,13 +53,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Always query live container state in `status` even when simulation mode is active, and distinguish missing `.pod` files (`Not Found`) from invalid recipes (`Recipe Error`).
 - Distinguish stopped from nonexistent unmanaged containers in `connect`, prioritize registered recipes over unreferenced files on disk, and accept uppercase names for unmanaged containers.
 - Validate recipe `command` blocks during `recipe inspect` and require recipe registration consistently across `logs`, `command`, and `connect` recipe targets.
-- Accept `all` (case-insensitive) for `logs --tail` and space-separated timestamps for `logs --since` and `--until`.
+- Accept `all` (case-insensitive, forwarded as `-1` to Podman) for `logs --tail` and space-separated timestamps for `logs --since` and `--until`.
 - Preserve quoted arguments containing spaces when executing recipe maintenance commands and in pod and container option directives.
 - Prevent `init` dry-run simulation from writing template files to disk and document simulation support in `init` help and shell completion.
 - Point cyclic group reference diagnostics to the offending group definition line instead of the enclosing block header.
 - Create missing parent pods automatically before creating individually targeted containers.
-- Prevent failed image pulls from reporting targets as up to date or triggering pod reloads.
-- Reject mount options on anonymous volumes and prevent shell variable leaks in Bash completion.
+- Prevent failed image pulls from reporting targets as up to date or triggering pod reloads, and print a reload notice when a container runs an older image than the cached tag.
+- Propagate non-zero exit codes from `config edit` and `recipe edit` when the configured editor exits unsuccessfully.
+- Keep containers with identical explicit names in separate pods distinct in `status` output and trim trailing spaces from status table lines.
+- Reject mount options on anonymous volumes, descending port ranges in `publish`, and malformed empty components in `image` and `registry` values.
+- Fix Bash completion for word-break splitting on `=`, `@`, and `:`, quoted or escaped `--config` paths, directory slashes on glued `--config=` paths, quoted recipe headers and group entries, empty candidates, duplicate targets, and CLI-rejected flag or target combinations.
+- Prevent shell variable leaks in Bash completion and drain bounded subprocess pipes cleanly to avoid broken-pipe stalls.
 
 ### Security
 

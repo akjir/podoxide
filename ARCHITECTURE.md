@@ -217,10 +217,12 @@ podoxide/
 └── tests/
     ├── build_script.rs
     ├── cli_matrix.rs
+    ├── cli_runtime.rs
     ├── cli_workflows.rs
     ├── common/
     │   └── mod.rs
-    └── completion.rs
+    ├── completion.rs
+    └── completion_edge.rs
 ```
 
 ## Root Files and Templates
@@ -460,13 +462,15 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 
 The `tests/` directory verifies the compiled `pods` binary in isolated RAII temporary workspaces backed by a deterministic mock `podman` script on `PATH`, without depending on a live host Podman installation.
 
-| File                     | Function |
-| :----------------------- | :------- |
-| `tests/common/mod.rs`    | Provides `TestWorkspace` (RAII temp directory cleanup and executable mock `podman` shim) and `CliOutput` for subprocess execution. |
-| `tests/build_script.rs`  | Verifies `build_metadata.rs` version formatting, Git output validation, non-Git isolation, unborn/worktree/packed-refs handling, and Cargo rerun directives. |
-| `tests/cli_matrix.rs`    | Verifies missing-config bypass/error matrices, `simulate true`/`false` and `--simulate` override matrices, argument pipeline validation, and Podman `< 5.8.0` version enforcement. |
-| `tests/cli_workflows.rs` | Verifies installed-symlink CWD resolution, custom `--config` debug logging and broken-config display, non-zero Podman exit propagation without duplicate `ERROR:` lines, live shared-image `pods update` pull deduplication and reload, and live `pods image prune` preview/abort/confirm/failure flows. |
-| `tests/completion.rs`    | Verifies `.pods-completion.bash` in isolated Bash subshells (`set -u`): zero shell variable leaks, split and glued `--config=` `.conf` filtering, `--flag=value` scanning, action-scoped flag filtering, unknown command rejection, and dynamic group/recipe/container/command completion. |
+| File                       | Function |
+| :------------------------- | :------- |
+| `tests/common/mod.rs`      | Provides `TestWorkspace` (RAII temp directory cleanup and executable mock `podman` shim) and `CliOutput` for subprocess execution. |
+| `tests/build_script.rs`    | Verifies `build_metadata.rs` version formatting, Git output validation, non-Git isolation, unborn/worktree/packed-refs handling, and Cargo rerun directives. |
+| `tests/cli_matrix.rs`      | Verifies missing-config bypass/error matrices, `simulate true`/`false` and `--simulate` override matrices, argument pipeline validation, and Podman `< 5.8.0` version enforcement. |
+| `tests/cli_runtime.rs`     | Verifies live `status` table alignment and shared-name isolation, `connect` unmanaged uppercase container states, `image prune` in-use filtering and alias grouping, `logs --tail=all` translation, offline Podman-free bypasses, non-zero editor exit propagation, and stale-container `update` reloads. |
+| `tests/cli_workflows.rs`   | Verifies installed-symlink CWD resolution, custom `--config` debug logging and broken-config display, non-zero Podman exit propagation without duplicate `ERROR:` lines, live shared-image `pods update` pull deduplication and reload, and live `pods image prune` preview/abort/confirm/failure flows. |
+| `tests/completion.rs`      | Verifies `.pods-completion.bash` in isolated Bash subshells (`set -u`): zero shell variable leaks, split and glued `--config=` `.conf` filtering, `--flag=value` scanning, action-scoped flag filtering, unknown command rejection, and dynamic group/recipe/container/command completion. |
+| `tests/completion_edge.rs` | Verifies real Bash word-splitting (`=`, `@`, `:`), quoted and escaped `--config` paths, glued `--config=<dir>` slashes, CLI-rejected target/flag suppression and duplicate filtering, quoted PSL tokens/headers, and empty-item handling in `.pods-completion.bash`. |
 
 ## Execution Flow
 

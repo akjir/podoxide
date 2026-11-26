@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Commits all open changes after verifying that tests and Clippy checks pass (without modifying code), or commits immediately without verification when forced, and optionally pushes to origin. Triggered when the user types `/commit`, `/commit force`, `/commit push`, `/commit <message>`, `/commit force <message>`, or `/commit push <message>`.
+description: Commits all open changes after verifying that formatting, tests, and Clippy checks pass (without modifying code), or commits immediately without verification when forced, and optionally pushes to origin. Triggered when the user types `/commit`, `/commit force`, `/commit push`, `/commit <message>`, `/commit force <message>`, or `/commit push <message>`.
 ---
 
 # Commit Workflow
@@ -10,9 +10,10 @@ Execute this workflow whenever the user invokes `/commit`, `/commit force`, `/co
 ## 1. Pre-Commit Verification Gate (`/commit` and `/commit push` only)
 - **Force Bypass (`/commit force` / `/commit force <message>`):** Skip this section completely. Do not run any tests or linter checks; proceed directly to Section 2.
 - **Standard Verification (`/commit` / `/commit push`):** Before staging or committing any changes, verify that the workspace passes all checks:
-  1. **Run Test Suite:** Execute `cargo test` and verify that all unit, integration, and doc tests pass.
-  2. **Run Linter & Compiler Checks:** Execute `cargo clippy --all-targets -- -D warnings` and verify zero compiler or Clippy warnings.
-  3. **Abort on Failure (No Code Changes):** If `cargo test` or `cargo clippy` fails, stop the workflow immediately. Do NOT edit or fix any files, do NOT stage or commit changes, and do NOT push. Report the failing test or compiler output directly to the user.
+  1. **Check Formatting:** Execute `cargo fmt -- --check` and verify zero formatting diffs.
+  2. **Run Test Suite:** Execute `cargo test` and verify that all unit, integration, and doc tests pass.
+  3. **Run Linter & Compiler Checks:** Execute `cargo clippy --all-targets -- -D warnings` and verify zero compiler or Clippy warnings.
+  4. **Abort on Failure (No Code Changes):** If `cargo fmt -- --check`, `cargo test`, or `cargo clippy` fails, stop the workflow immediately. Do NOT edit or fix any files, do NOT stage or commit changes, and do NOT push. Report the failing check or compiler output directly to the user.
 
 ## 2. Stage & Commit All Open Changes
 When invoked via `/commit force`, or once all verification checks in Section 1 pass:
