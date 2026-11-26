@@ -15,15 +15,13 @@
 
 //! Unit tests for `pods config inspect` group expansion and rendering in [`super`].
 
-use std::env;
 use std::fs as std_fs;
 use std::path::PathBuf;
-use std::process;
 use std::str::FromStr;
 
 use crate::core::config::Config;
 use crate::core::context::Context;
-use crate::io::system::fs;
+use crate::io::system::fs::{self, TestTempDir};
 use super::{MAX_GROUP_OUTPUT_LINES, build_groups_state, handle, inspect_with};
 
 const VALID_RECIPE: &str = "\
@@ -37,19 +35,9 @@ container *app {
 }
 ";
 
-fn create_temp_test_dir(suffix: &str) -> PathBuf {
-    let dir = env::temp_dir().join(format!(
-        "podoxide_config_inspect_{}_{suffix}",
-        process::id()
-    ));
-    let _ = std_fs::remove_dir_all(&dir);
-    std_fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 #[test]
 fn inspect_with_clamps_diamond_group_dag_output_emits_truncation_notice_and_validates_recipes() {
-    let temp_dir = create_temp_test_dir("diamond_dag");
+    let temp_dir = TestTempDir::new("config_inspect_diamond");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
 
@@ -84,13 +72,11 @@ fn inspect_with_clamps_diamond_group_dag_output_emits_truncation_notice_and_vali
     assert!(!output.contains("Unreferenced Recipes:"));
     assert!(output.contains("Validation Summary:\n"));
     assert!(output.contains("- Recipe file for 'leaf_recipe' not found!\n"));
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn inspect_with_displays_settings_directories_and_clean_config() {
-    let temp_dir = create_temp_test_dir("clean");
+    let temp_dir = TestTempDir::new("config_inspect_clean");
     let pods_dir = temp_dir.join("pods");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&pods_dir).unwrap();
@@ -129,13 +115,11 @@ fn inspect_with_displays_settings_directories_and_clean_config() {
     let mut context = Context::new();
     context.config = config;
     assert!(handle(&context).is_ok());
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn inspect_with_distinguishes_subgroup_from_same_named_recipe_leaf() {
-    let temp_dir = create_temp_test_dir("same_named_leaf");
+    let temp_dir = TestTempDir::new("config_inspect_same_named");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
 
@@ -189,13 +173,11 @@ recipes {
     assert!(output.contains(
         "Validation Summary:\n- Recipe files for 'cloud', 'media' and 'proxy' not found!\n- 1 unreferenced recipe found!\n"
     ));
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn inspect_with_handles_missing_invalid_directories_empty_editor_and_singular_warnings() {
-    let temp_dir = create_temp_test_dir("singular");
+    let temp_dir = TestTempDir::new("config_inspect_singular");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
     fs::write_file(&recipes_dir.join("orphan.pod"), "invalid {{{ psl").unwrap();
@@ -249,13 +231,11 @@ fn inspect_with_handles_missing_invalid_directories_empty_editor_and_singular_wa
     assert!(bad_path_text.contains("[NOT FOUND]\n"));
     assert!(!bad_path_text.contains("[OK, "));
     assert!(!bad_path_text.contains("Unreferenced Recipes:"));
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn inspect_with_renders_tree_hierarchy_cyclic_and_missing_groups_and_plural_summary() {
-    let temp_dir = create_temp_test_dir("hierarchy");
+    let temp_dir = TestTempDir::new("config_inspect_hierarchy");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
 
@@ -346,6 +326,4 @@ fn inspect_with_renders_tree_hierarchy_cyclic_and_missing_groups_and_plural_summ
         "- Recipes 'broken_second' and 'recipe_001_empty' have errors! Run 'pods recipe inspect <recipe>' for details.\n"
     ));
     assert!(output.contains("- 2 unreferenced recipes found!\n"));
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }

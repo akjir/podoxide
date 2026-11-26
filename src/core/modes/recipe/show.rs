@@ -59,26 +59,16 @@ fn show_with<W: Write>(context: &Context, stdout: &mut W) -> Result<(), PodError
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::fs as std_fs;
-    use std::path::PathBuf;
-    use std::process;
 
     use crate::core::context::Context;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
-    use crate::io::system::fs;
+    use crate::io::system::fs::{self, TestTempDir};
     use super::{handle, show_with};
-
-    fn create_temp_test_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!("podoxide_recipe_show_{}_{suffix}", process::id()));
-        let _ = std_fs::remove_dir_all(&dir);
-        std_fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     #[test]
     fn show_with_outputs_numbered_lines_without_parsing_psl() {
-        let temp_dir = create_temp_test_dir("show_lines");
+        let temp_dir = TestTempDir::new("recipe_show_lines");
         // Write raw non-PSL content to prove show_with never parses the .pod file into an AST.
         fs::write_file(
             &temp_dir.join("recipe_002_no_pod.pod"),
@@ -87,7 +77,7 @@ mod tests {
         .unwrap();
 
         let mut context = Context::new();
-        context.config.recipes.path = temp_dir.clone();
+        context.config.recipes.path = temp_dir.to_path_buf();
         context.config.recipes.groups.insert(
             String::from("all"),
             vec![
@@ -105,18 +95,16 @@ mod tests {
         );
 
         assert!(handle(&context).is_ok());
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn show_with_rejects_missing_target_unregistered_recipe_and_missing_or_non_regular_file() {
-        let temp_dir = create_temp_test_dir("errors");
+        let temp_dir = TestTempDir::new("recipe_show_errors");
         let dir_as_recipe = temp_dir.join("dir_recipe.pod");
         std_fs::create_dir_all(&dir_as_recipe).unwrap();
 
         let mut context = Context::new();
-        context.config.recipes.path = temp_dir.clone();
+        context.config.recipes.path = temp_dir.to_path_buf();
         context.config.recipes.groups.insert(
             String::from("all"),
             vec![
@@ -153,7 +141,5 @@ mod tests {
         context.parameters = vec![String::from("dir_recipe")];
         let non_regular = show_with(&context, &mut stdout).unwrap_err();
         assert!(matches!(non_regular, PodError::Io(_)));
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 }

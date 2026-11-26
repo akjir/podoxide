@@ -16,16 +16,13 @@
 //! Unit tests for `pods status` target resolution, scanning, and table rendering in [`super`].
 
 use std::collections::BTreeMap;
-use std::env;
 use std::fs as std_fs;
-use std::path::PathBuf;
-use std::process;
 
 use crate::core::config::Config;
 use crate::core::context::Context;
 use crate::core::log::MAX_LOG_MESSAGE_BYTES;
 use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
-use crate::io::system::fs;
+use crate::io::system::fs::{self, TestTempDir};
 use super::table::{format_table_row, parse_status_record, update_column_widths};
 use super::{
     ExpectedContainer, MAX_STATUS_RECORDS, build_display_rows, collect_expected_containers,
@@ -76,9 +73,8 @@ container \"*app-1\" {
 }
 ";
 
-fn create_status_workspace(suffix: &str) -> (PathBuf, Config) {
-    let temp_dir = env::temp_dir().join(format!("podoxide_status_test_{}_{suffix}", process::id()));
-    let _ = std_fs::remove_dir_all(&temp_dir);
+fn create_status_workspace(suffix: &str) -> (TestTempDir, Config) {
+    let temp_dir = TestTempDir::new(&format!("status_test_{suffix}"));
     let pods_dir = temp_dir.join("pods");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&pods_dir).unwrap();
@@ -123,7 +119,7 @@ fn build_display_rows_handles_newline_and_semicolons_in_command_without_row_forg
 
 #[test]
 fn execute_with_filters_explicit_and_numeric_container_targets() {
-    let (temp_dir, mut config) = create_status_workspace("container_targets");
+    let (_temp_dir, mut config) = create_status_workspace("container_targets");
     fs::write_file(
         &config.recipes.path.join("numeric_recipe.pod"),
         NUMERIC_RECIPE_PSL,
@@ -187,8 +183,6 @@ fn execute_with_filters_explicit_and_numeric_container_targets() {
             other => panic!("expected PodError::Cli(MixedTargets), got {other:?}"),
         }
     }
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -330,13 +324,11 @@ fn execute_with_handles_groups_empty_results_bounds_and_errors() {
     assert!(empty_targets.expected.is_empty());
     assert!(empty_targets.invalid_recipes.is_empty());
     assert!(empty_targets.missing_recipes.is_empty());
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn execute_with_renders_filtered_and_full_status_tables_without_trailing_spaces() {
-    let (temp_dir, config) = create_status_workspace("explicit_target");
+    let (_temp_dir, config) = create_status_workspace("explicit_target");
     let mut context = Context::new();
     context.config = config;
     context.parameters = vec![String::from("recipe_011_simple_container")];
@@ -366,13 +358,11 @@ fn execute_with_renders_filtered_and_full_status_tables_without_trailing_spaces(
         full_output,
         format!("{expected_full_header}{expected_full_row}")
     );
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn execute_with_synthesizes_not_found_and_recipe_error_rows_with_all_and_full_flags() {
-    let (temp_dir, config) = create_status_workspace("missing_and_all");
+    let (_temp_dir, config) = create_status_workspace("missing_and_all");
     let mut context = Context::new();
     context.config = config;
     context.parameters = vec![String::from("recipe_017_container_naming")];
@@ -419,6 +409,4 @@ Recipe 'invalid_recipe' has errors! Run 'pods recipe inspect invalid_recipe' for
     assert!(all_full_output.contains("test_pod-my-db              recipe_017_container_naming/2"));
     assert!(all_full_output.contains("totally_custom              recipe_017_container_naming/3"));
     assert!(all_full_output.contains("test_simple_cnt_pod-app-1   recipe_011_simple_container/1"));
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }

@@ -15,15 +15,13 @@
 
 //! Unit tests for configuration file loading, path resolution, and editor validation in [`super`].
 
-use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::process;
 
 use crate::error::{ConfigErrorKind, PodError};
-use crate::io::system::fs as system_fs;
+use crate::io::system::fs::{self as system_fs, TestTempDir};
 use super::{
     Config, DEFAULT_CONFIG_NAME, DEFAULT_CONFIG_PATH, DEFAULT_RECIPES_PATH, extract_config_stem,
     resolve_config_name, resolve_config_path, validate_editor,
@@ -130,9 +128,7 @@ fn load_and_read_file_handle_root_temp_missing_and_invalid_paths() {
             .contains("recipes {")
     );
 
-    let temp_dir = env::temp_dir().join(format!("podoxide_config_test_{}", process::id()));
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = TestTempDir::new("config_test");
 
     let staging_path = temp_dir.join("staging.conf");
     let staging_content = "\
@@ -184,7 +180,6 @@ recipes {
         Config::load(&directory_config_path),
         Err(PodError::Io(_))
     ));
-    let _ = fs::remove_dir_all(&temp_dir);
 
     for invalid_path in [
         "",

@@ -19,7 +19,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::core::log;
+use crate::core::log::DebugGuard;
 use crate::error::{ConfigErrorKind, PodError};
 use super::{Config, MAX_GROUP_EXPANSION_DEPTH};
 
@@ -46,78 +46,79 @@ recipes {
 
     assert!(config.expand_targets(&[]).unwrap().is_empty());
 
-    log::set_debug_enabled(true);
-    assert_eq!(
-        config.expand_targets(&[String::from("target")]).unwrap(),
-        vec![String::from("target")]
-    );
-    assert_eq!(
-        config.expand_targets(&[String::from("@stack")]).unwrap(),
-        vec![String::from("push"), String::from("pop")]
-    );
-    assert_eq!(
-        config
-            .expand_targets(&[String::from("target"), String::from("@stack")])
-            .unwrap(),
-        vec![
-            String::from("target"),
-            String::from("push"),
-            String::from("pop"),
-        ]
-    );
-    assert_eq!(
-        config
-            .expand_targets(&[
+    {
+        let _debug_guard = DebugGuard::new(true);
+        assert_eq!(
+            config.expand_targets(&[String::from("target")]).unwrap(),
+            vec![String::from("target")]
+        );
+        assert_eq!(
+            config.expand_targets(&[String::from("@stack")]).unwrap(),
+            vec![String::from("push"), String::from("pop")]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[String::from("target"), String::from("@stack")])
+                .unwrap(),
+            vec![
                 String::from("target"),
-                String::from("@stack"),
+                String::from("push"),
+                String::from("pop"),
+            ]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[
+                    String::from("target"),
+                    String::from("@stack"),
+                    String::from("target"),
+                ])
+                .unwrap(),
+            vec![
                 String::from("target"),
-            ])
-            .unwrap(),
-        vec![
-            String::from("target"),
-            String::from("push"),
-            String::from("pop"),
-        ]
-    );
-    assert_eq!(
-        config
-            .expand_targets(&[
+                String::from("push"),
+                String::from("pop"),
+            ]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[
+                    String::from("the"),
+                    String::from("@glados"),
+                    String::from("lie"),
+                ])
+                .unwrap(),
+            vec![
                 String::from("the"),
-                String::from("@glados"),
+                String::from("cake"),
                 String::from("lie"),
-            ])
-            .unwrap(),
-        vec![
-            String::from("the"),
-            String::from("cake"),
-            String::from("lie"),
-        ]
-    );
-    assert_eq!(
-        config
-            .expand_targets(&[
+            ]
+        );
+        assert_eq!(
+            config
+                .expand_targets(&[
+                    String::from("lie"),
+                    String::from("cake"),
+                    String::from("@glados"),
+                ])
+                .unwrap(),
+            vec![
                 String::from("lie"),
                 String::from("cake"),
-                String::from("@glados"),
-            ])
-            .unwrap(),
-        vec![
-            String::from("lie"),
-            String::from("cake"),
-            String::from("the"),
-        ]
-    );
-    assert_eq!(
-        config.expand_targets(&[String::from("@diamond")]).unwrap(),
-        vec![
-            String::from("push"),
-            String::from("pop"),
-            String::from("the"),
-            String::from("cake"),
-            String::from("lie"),
-        ]
-    );
-    log::set_debug_enabled(false);
+                String::from("the"),
+            ]
+        );
+        assert_eq!(
+            config.expand_targets(&[String::from("@diamond")]).unwrap(),
+            vec![
+                String::from("push"),
+                String::from("pop"),
+                String::from("the"),
+                String::from("cake"),
+                String::from("lie"),
+            ]
+        );
+    }
 
     let unknown_recipe = config
         .expand_targets(&[

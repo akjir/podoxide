@@ -70,6 +70,7 @@ mod tests {
         CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, ImageAction,
         InitAction, LogsAction, ModeAction, RecipeAction,
     };
+    use crate::error::{ConfigErrorKind, PodError};
     use crate::io::exec::command::ExecOutcome;
     use super::dispatch_mode;
 
@@ -84,7 +85,6 @@ mod tests {
             &["remove", "recipe"],
             &["restart", "recipe"],
             &["start", "recipe"],
-            &["status"],
             &["stop", "recipe"],
             &["up", "recipe"],
             &["update", "recipe"],
@@ -102,7 +102,7 @@ mod tests {
             &["image", "help"],
             &["image", "prune"],
             &["image", "update", "recipe"],
-            &["init"],
+            &["init", "--simulate"],
             &["init", "help"],
             &["logs", "help"],
             &["logs", "follow", "recipe/db"],
@@ -124,6 +124,20 @@ mod tests {
                 "expected dispatch_mode to succeed for {arguments:?}"
             );
         }
+
+        // Route `status` with an unregistered target to verify dispatch without invoking host podman.
+        let mut status_context = Context::new();
+        cli::parse_args(
+            &mut status_context,
+            ["status", "unregistered_status_target"],
+        )
+        .unwrap();
+        status_context.load_config_if_required().unwrap();
+        let status_error = dispatch_mode(&status_context).unwrap_err();
+        assert!(matches!(
+            status_error,
+            PodError::Config(ref error) if error.kind == ConfigErrorKind::RecipeNotFound
+        ));
     }
 
     #[test]
@@ -170,6 +184,19 @@ mod tests {
             let mut context = Context::new();
             context.config = root_config.clone();
             context.action = action;
+            if action == ModeAction::Init(InitAction::Create) {
+                context.flags.set_simulate(true);
+            }
+            if action == ModeAction::Default(DefaultAction::Status) {
+                context.parameters = vec![String::from("unregistered_status_target")];
+                let error = dispatch_mode(&context).unwrap_err();
+                assert!(matches!(
+                    error,
+                    PodError::Config(ref config_error)
+                        if config_error.kind == ConfigErrorKind::RecipeNotFound
+                ));
+                continue;
+            }
             context.parameters = if action == ModeAction::Command(CommandAction::Exec) {
                 vec![String::from("recipe"), String::from("migrate")]
             } else if action == ModeAction::Connect(ConnectAction::Shell) {

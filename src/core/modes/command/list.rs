@@ -112,7 +112,6 @@ fn list_with<W: Write, E: Write>(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::str::FromStr;
 
     use crate::core::config::Config;
@@ -120,7 +119,7 @@ mod tests {
     use crate::core::pod::PodCommand;
     use crate::core::recipe::Recipe;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
-    use crate::io::system::fs;
+    use crate::io::system::fs::{self, TestTempDir};
     use super::{handle, list_commands, list_with};
 
     const COMMANDS_RECIPE_PSL: &str = "\
@@ -167,18 +166,6 @@ container absolute_db {
     restart never
 }
 ";
-
-    fn build_temp_directory(suffix: &str) -> PathBuf {
-        let mut directory = std::env::temp_dir();
-        directory.push(format!(
-            "podoxide_cmd_list_{}_{}",
-            std::process::id(),
-            suffix
-        ));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).unwrap();
-        directory
-    }
 
     #[test]
     fn list_commands_handles_empty_invalid_and_padded_lists() {
@@ -228,12 +215,12 @@ container absolute_db {
 
     #[test]
     fn list_with_outputs_sorted_commands_and_warnings() {
-        let directory = build_temp_directory("sorted");
+        let directory = TestTempDir::new("cmd_list_sorted");
         let recipe_path = directory.join("recipe_006_commands.pod");
         fs::write_file(&recipe_path, COMMANDS_RECIPE_PSL).unwrap();
 
         let mut config = Config::new();
-        config.recipes.path = directory.clone();
+        config.recipes.path = directory.to_path_buf();
         config.recipes.groups.insert(
             String::from("all"),
             vec![String::from("recipe_006_commands")],
@@ -288,8 +275,6 @@ Commands for recipe 'recipe_006_commands':
                 if recipe_error.kind == RecipeErrorKind::InvalidCommand
                     && recipe_error.line == Some(5)
         ));
-
-        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

@@ -19,6 +19,7 @@ mod cli;
 mod config;
 mod diagnostic;
 mod psl;
+mod quote_scan;
 mod recipe;
 mod span;
 

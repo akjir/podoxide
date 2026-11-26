@@ -46,27 +46,15 @@ fn show_with<W: Write>(config: &Config, stdout: &mut W) -> Result<(), PodError> 
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::fs as std_fs;
-    use std::path::PathBuf;
-    use std::process;
-
     use crate::core::config::Config;
     use crate::core::context::Context;
     use crate::error::{ConfigErrorKind, PodError};
-    use crate::io::system::fs;
+    use crate::io::system::fs::{self, TestTempDir};
     use super::{handle, show_with};
-
-    fn create_temp_test_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!("podoxide_config_show_{}_{suffix}", process::id()));
-        let _ = std_fs::remove_dir_all(&dir);
-        std_fs::create_dir_all(&dir).unwrap();
-        dir
-    }
 
     #[test]
     fn show_with_outputs_numbered_lines_and_rejects_missing_file() {
-        let temp_dir = create_temp_test_dir("show_lines");
+        let temp_dir = TestTempDir::new("config_show");
         let config_path = temp_dir.join("pods.conf");
         fs::write_file(
             &config_path,
@@ -109,7 +97,5 @@ mod tests {
             String::from_utf8(broken_stdout).unwrap(),
             "  1: general {{{ broken\n  2: second line\n"
         );
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 }

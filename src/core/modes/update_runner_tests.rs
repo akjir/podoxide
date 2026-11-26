@@ -15,11 +15,8 @@
 
 //! Unit tests for shared pod and container update orchestration in [`super`].
 
-use std::env;
 use std::fs as std_fs;
 use std::io::Write;
-use std::path::PathBuf;
-use std::process;
 use std::str::FromStr;
 
 use crate::core::config::Config;
@@ -29,7 +26,7 @@ use crate::core::update::{PullCache, SummaryKind, UpdateRunners};
 use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
 use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::PullOutcome;
-use crate::io::system::fs;
+use crate::io::system::fs::{self, TestTempDir};
 use super::{execute_update_with, execute_update_with_inspectors};
 
 const CACHE_RECIPE_PSL: &str = "\
@@ -66,9 +63,8 @@ container *app {
 }
 ";
 
-fn create_update_workspace(suffix: &str) -> (PathBuf, Config) {
-    let temp_dir = env::temp_dir().join(format!("podoxide_update_test_{}_{suffix}", process::id()));
-    let _ = std_fs::remove_dir_all(&temp_dir);
+fn create_update_workspace(suffix: &str) -> (TestTempDir, Config) {
+    let temp_dir = TestTempDir::new(&format!("update_test_{suffix}"));
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
 
@@ -126,8 +122,7 @@ fn mock_mixed_pull<W: Write, E: Write>(
 
 #[test]
 fn execute_update_with_handles_numeric_container_names() {
-    let temp_dir = env::temp_dir().join(format!("podoxide_update_numeric_{}", process::id()));
-    let _ = std_fs::remove_dir_all(&temp_dir);
+    let temp_dir = TestTempDir::new("update_numeric");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
 
@@ -189,13 +184,11 @@ fn execute_update_with_handles_numeric_container_names() {
     assert!(output.contains("- 2 (docker.io/example/first:latest)"));
     assert!(output.contains("- 5 (docker.io/example/only:latest)"));
     assert!(!output.contains("num_two_pod-db"));
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn execute_update_with_renders_grouped_summary_for_pods_and_containers() {
-    let (temp_dir, config) = create_update_workspace("grouped");
+    let (_temp_dir, config) = create_update_workspace("grouped");
     let mut context = Context::new();
     context.config = config;
     context.parameters = vec![String::from("@all")];
@@ -350,14 +343,11 @@ fn execute_update_with_renders_grouped_summary_for_pods_and_containers() {
     .unwrap_err();
     assert!(matches!(recipe_err, PodError::Psl(_) | PodError::Recipe(_)));
     assert!(err_stdout.is_empty());
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn tdd_cross_pod_duplicate_image_pull_deduplication() {
-    let temp_dir = env::temp_dir().join(format!("podoxide_tdd_dedup_{}", process::id()));
-    let _ = std_fs::remove_dir_all(&temp_dir);
+    let temp_dir = TestTempDir::new("tdd_dedup");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
 
@@ -466,6 +456,4 @@ container *db {
     assert!(
         stale_text.contains("Checked 2 pods (2 containers): 1 reloaded, 1 up to date, 0 failed.")
     );
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }

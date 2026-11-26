@@ -51,14 +51,9 @@ fn inspect_with<W: Write>(context: &Context, stdout: &mut W) -> Result<(), PodEr
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::fs as std_fs;
-    use std::path::PathBuf;
-    use std::process;
-
     use crate::core::context::Context;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
-    use crate::io::system::fs;
+    use crate::io::system::fs::{self, TestTempDir};
     use super::{handle, inspect_with};
 
     const VALID_RECIPE: &str = "\
@@ -72,19 +67,9 @@ container *app {
 }
 ";
 
-    fn create_temp_test_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!(
-            "podoxide_recipe_inspect_{}_{suffix}",
-            process::id()
-        ));
-        let _ = std_fs::remove_dir_all(&dir);
-        std_fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn inspect_with_validates_recipe_and_reports_diagnostic_errors() {
-        let temp_dir = create_temp_test_dir("inspect");
+        let temp_dir = TestTempDir::new("recipe_inspect");
         fs::write_file(&temp_dir.join("nginx.pod"), VALID_RECIPE).unwrap();
         fs::write_file(
             &temp_dir.join("broken.pod"),
@@ -93,7 +78,7 @@ container *app {
         .unwrap();
 
         let mut context = Context::new();
-        context.config.recipes.path = temp_dir.clone();
+        context.config.recipes.path = temp_dir.to_path_buf();
         context.config.recipes.groups.insert(
             String::from("all"),
             vec![
@@ -145,7 +130,5 @@ container *app {
             "Recipe 'nginx' is valid.\n"
         );
         assert!(handle(&context).is_ok());
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 }

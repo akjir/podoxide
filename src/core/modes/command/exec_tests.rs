@@ -15,11 +15,6 @@
 
 //! Unit tests for `pods command exec` and command argument tokenization in [`super`].
 
-use std::env;
-use std::fs as std_fs;
-use std::path::PathBuf;
-use std::process;
-
 use crate::core::config::Config;
 use crate::core::container::Container;
 use crate::core::context::Context;
@@ -27,7 +22,7 @@ use crate::core::modes::command::tokenizer;
 use crate::core::pod::PodCommand;
 use crate::core::recipe::Recipe;
 use crate::error::{CliErrorKind, PodError, RecipeErrorKind};
-use crate::io::system::fs;
+use crate::io::system::fs::{self, TestTempDir};
 use super::{exec_command, execute_with, handle};
 
 const COMMANDS_RECIPE_PSL: &str = "\
@@ -83,18 +78,15 @@ container absolute_db {
 }
 ";
 
-fn build_test_context(suffix: &str) -> (PathBuf, Context) {
-    let mut directory = env::temp_dir();
-    directory.push(format!("podoxide_cmd_exec_{}_{}", process::id(), suffix));
-    let _ = std_fs::remove_dir_all(&directory);
-    std_fs::create_dir_all(&directory).unwrap();
+fn build_test_context(suffix: &str) -> (TestTempDir, Context) {
+    let directory = TestTempDir::new(&format!("cmd_exec_{suffix}"));
 
     let recipe_path = directory.join("recipe_006_commands.pod");
     fs::write_file(&recipe_path, COMMANDS_RECIPE_PSL).unwrap();
 
     let mut config = Config::new();
     config.simulate = true;
-    config.recipes.path = directory.clone();
+    config.recipes.path = directory.to_path_buf();
     config.recipes.groups.insert(
         String::from("all"),
         vec![String::from("recipe_006_commands")],
@@ -315,13 +307,11 @@ fn execute_with_rejects_invalid_commands_and_missing_parameters() {
         }
         other => panic!("expected PodError::Recipe(ContainerNotFound), got {other:?}"),
     }
-
-    let _ = std_fs::remove_dir_all(&directory);
 }
 
 #[test]
 fn execute_with_simulates_named_and_indexed_commands() {
-    let (directory, mut context) = build_test_context("simulate");
+    let (_directory, mut context) = build_test_context("simulate");
 
     let cases = [
         (
@@ -375,8 +365,6 @@ fn execute_with_simulates_named_and_indexed_commands() {
         String::from("add_index"),
     ];
     assert!(handle(&context).is_ok());
-
-    let _ = std_fs::remove_dir_all(&directory);
 }
 
 #[test]

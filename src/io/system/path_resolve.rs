@@ -111,28 +111,17 @@ fn resolve_normal_component(resolved: &mut PathBuf, remaining_symlinks: &mut usi
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::fs;
     use std::os::unix::fs as unix_fs;
     use std::path::{Path, PathBuf};
-    use std::process;
 
+    use crate::io::system::fs::TestTempDir;
     use crate::utilities::path;
     use super::get_absolute_path;
 
-    fn create_temp_test_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!(
-            "podoxide_path_resolve_test_{}_{suffix}",
-            process::id()
-        ));
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn resolves_existing_missing_relative_and_symlinked_paths() {
-        let temp_dir = create_temp_test_dir("resolve");
+        let temp_dir = TestTempDir::new("path_resolve");
         let file_path = temp_dir.join("sample.pod");
         fs::write(&file_path, "pod app {}\n").unwrap();
 
@@ -199,7 +188,5 @@ mod tests {
         unix_fs::symlink(&loop_b, &loop_a).unwrap();
         unix_fs::symlink(&loop_a, &loop_b).unwrap();
         assert!(get_absolute_path(&loop_a.join("cycle.pod")).ends_with("cycle.pod"));
-
-        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

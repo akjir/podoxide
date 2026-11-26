@@ -78,6 +78,7 @@ mod tests {
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::context::{Context, DefaultAction};
+    use crate::error::{ConfigErrorKind, PodError};
     use crate::io::exec::command::ExecOutcome;
     use super::handle;
 
@@ -102,6 +103,20 @@ mod tests {
         for action in actions {
             let mut context = Context::new();
             context.config = root_config.clone();
+            if action == DefaultAction::Status {
+                // Unregistered target proves routing into status::handle without invoking host podman.
+                context.parameters = vec![String::from("unregistered_status_target")];
+                let error = handle(&context, action).unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        PodError::Config(ref config_error)
+                            if config_error.kind == ConfigErrorKind::RecipeNotFound
+                    ),
+                    "expected status::handle RecipeNotFound, got {error:?}"
+                );
+                continue;
+            }
             if action.requires_targets() {
                 context.parameters = vec![String::from("recipe")];
             }

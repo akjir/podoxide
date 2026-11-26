@@ -16,10 +16,8 @@
 //! Unit tests for shared target resolution and recipe discovery helpers in [`super`].
 
 use std::collections::BTreeSet;
-use std::env;
 use std::fs as std_fs;
 use std::path::Path;
-use std::process;
 use std::str::FromStr;
 
 use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
@@ -28,7 +26,7 @@ use crate::core::context::Context;
 use crate::core::pod;
 use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
 use crate::io::exec::command::ExecOutcome;
-use crate::io::system::fs;
+use crate::io::system::fs::{self, TestTempDir};
 use super::{
     RecipeInspection, RecipeStatus, collect_container_specs, execute_lifecycle_action,
     inspect_recipe, list_unreferenced_recipes, resolve_container_targets,
@@ -57,8 +55,7 @@ container *app {
 
 #[test]
 fn execute_lifecycle_action_distinguishes_group_and_recipe_sharing_name() {
-    let temp_dir = env::temp_dir().join(format!("podoxide_targets_same_name_{}", process::id()));
-    let _ = std_fs::remove_dir_all(&temp_dir);
+    let temp_dir = TestTempDir::new("targets_same_name");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
 
@@ -115,8 +112,6 @@ recipes {
         }
         other => panic!("expected PodError::Config(RecipeNotFound), got {other:?}"),
     }
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -193,8 +188,7 @@ fn execute_lifecycle_action_handles_container_targets_and_rejects_invalid_specs(
 
 #[test]
 fn execute_lifecycle_action_handles_numeric_container_names_and_upfront_pod_validation() {
-    let temp_dir = env::temp_dir().join(format!("podoxide_targets_numeric_{}", process::id()));
-    let _ = std_fs::remove_dir_all(&temp_dir);
+    let temp_dir = TestTempDir::new("targets_numeric");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
 
@@ -271,8 +265,6 @@ fn execute_lifecycle_action_handles_numeric_container_names_and_upfront_pod_vali
         pod_calls, 0,
         "broken second recipe must abort before invoking pod_action on first recipe"
     );
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -308,8 +300,7 @@ fn inspect_recipe_split_spec_and_list_unreferenced_cover_edge_cases() {
     );
     assert!(split_recipe_container_spec("recipe/").is_err());
 
-    let temp_dir = env::temp_dir().join(format!("podoxide_targets_inspect_{}", process::id()));
-    let _ = std_fs::remove_dir_all(&temp_dir);
+    let temp_dir = TestTempDir::new("targets_inspect");
     let recipes_dir = temp_dir.join("recipes");
     std_fs::create_dir_all(&recipes_dir).unwrap();
     fs::write_file(&recipes_dir.join("alpha.pod"), ALPHA_RECIPE_PSL).unwrap();
@@ -350,6 +341,4 @@ fn inspect_recipe_split_spec_and_list_unreferenced_cover_edge_cases() {
             .unwrap()
             .is_none()
     );
-
-    let _ = std_fs::remove_dir_all(&temp_dir);
 }

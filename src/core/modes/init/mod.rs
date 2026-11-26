@@ -51,7 +51,8 @@ mod tests {
 
     #[test]
     fn handle_routes_init_actions() {
-        let context = Context::new();
+        let mut context = Context::new();
+        context.flags.set_simulate(true);
         assert_eq!(
             handle(&context, InitAction::Help).unwrap(),
             ExecOutcome::Succeeded

@@ -15,18 +15,16 @@
 
 //! Unit tests for `.pod` recipe file loading, path checks, and container target resolution in [`super`].
 
-use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::process;
 use std::str::FromStr;
 
 use crate::core::config::Config;
 use crate::core::container::{Container, VolumeMount};
 use crate::error::{PodError, RecipeErrorKind};
-use crate::io::system::fs as system_fs;
+use crate::io::system::fs::{self as system_fs, TestTempDir};
 use super::{Recipe, parser, validation};
 
 #[test]
@@ -123,9 +121,7 @@ fn load_root_recipe_pod_and_temp_recipes() {
         "example-stack-db"
     );
 
-    let temp_dir = env::temp_dir().join(format!("podoxide_recipe_test_{}", process::id()));
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = TestTempDir::new("recipe_test");
 
     let missing_error = parser::load(&temp_dir, "missing_recipe").unwrap_err();
     match &missing_error {
@@ -154,7 +150,7 @@ fn load_root_recipe_pod_and_temp_recipes() {
         b'/', b't', 0xFF, b'.', b'p', b'o', b'd',
     ]));
     for invalid_read_path in [
-        temp_dir.as_path(),
+        temp_dir.as_ref(),
         Path::new(""),
         Path::new("."),
         Path::new(".."),
@@ -317,8 +313,6 @@ container {
         let error = loaded.resolve_container_name(unknown).unwrap_err();
         assert_eq!(error.kind, RecipeErrorKind::ContainerNotFound);
     }
-
-    let _ = fs::remove_dir_all(&temp_dir);
 }
 
 #[test]

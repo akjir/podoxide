@@ -34,17 +34,20 @@ podoxide/
 ├── recipe.pod
 ├── README.md
 ├── USAGE.md
-└── src/
-    ├── lib.rs
-    ├── main.rs
-    ├── error/
-    │   ├── cli.rs
-    │   ├── config.rs
-    │   ├── diagnostic.rs
-    │   ├── mod.rs
-    │   ├── psl.rs
-    │   ├── recipe.rs
-    │   └── span.rs
+├── src/
+│   ├── lib.rs
+│   ├── main.rs
+│   ├── error/
+│   │   ├── cli.rs
+│   │   ├── config.rs
+│   │   ├── diagnostic.rs
+│   │   ├── mod.rs
+│   │   ├── psl.rs
+│   │   ├── quote_scan.rs
+│   │   ├── recipe.rs
+│   │   ├── recipe_tests.rs
+│   │   ├── span.rs
+│   │   └── span_tests.rs
     ├── core/
     │   ├── constants.rs
     │   ├── log.rs
@@ -197,11 +200,17 @@ podoxide/
     │       └── path_resolve.rs
     └── utilities/
         ├── collection.rs
+        ├── collection_tests.rs
         ├── format.rs
         ├── mod.rs
         ├── path.rs
         ├── path_tests.rs
         └── string.rs
+└── tests/
+    ├── cli_matrix.rs
+    ├── cli_workflows.rs
+    └── common/
+        └── mod.rs
 ```
 
 ## Root Files and Templates
@@ -220,9 +229,10 @@ podoxide/
 | `src/error/cli.rs`      | Defines `CliError` and `CliErrorKind` for CLI parsing and validation failures. |
 | `src/error/config.rs`   | Defines `ConfigError` and `ConfigErrorKind` for `pods.conf` semantic validation failures. |
 | `src/error/diagnostic.rs` | Defines `DiagnosticError`, `build_caret_annotation`, and sanitized diagnostic and I/O error formatters. |
-| `src/error/psl.rs`      | Defines `PslError` and `PslErrorKind` for PSL lexical, grammatical, and resource-limit failures. |
-| `src/error/recipe.rs`   | Defines `RecipeError` and `RecipeErrorKind` for `.pod` recipe validation and target resolution failures. |
-| `src/error/span.rs`     | Provides unified quote-aware source scanning and token span resolution for compiler-style diagnostics. |
+| `src/error/psl.rs`        | Defines `PslError` and `PslErrorKind` for PSL lexical, grammatical, and resource-limit failures. |
+| `src/error/quote_scan.rs` | Provides single-pass quote-aware byte scanning for inline comments, escapes, and unquoted delimiters. |
+| `src/error/recipe.rs`     | Defines `RecipeError` and `RecipeErrorKind` for `.pod` recipe validation and target resolution failures. |
+| `src/error/span.rs`       | Resolves token and column spans for compiler-style diagnostics on quote-delimited source lines. |
 
 ## Core Domain (`src/core/`)
 
@@ -430,6 +440,16 @@ The `src/utilities/` directory contains pure, allocation-bounded helper routines
 | `src/utilities/format.rs`     | Formats shell-escaped command strings (`format_command`), 1-based list indices (`format_index_prefix`), quoted conjunctions (`format_quoted_conjunction`), recipe inspection hints (`format_recipe_error_hint`), and byte counts (`format_bytes`), parses human-readable sizes (`parse_size_to_bytes`), aligns status columns (`format_line`), and formats CLI version headers (`format_version_header`). |
 | `src/utilities/path.rs`       | Provides pure lexical path normalization (`normalize_lexical_path`, `pop_relative_or_absolute`), full path construction (`build_full_path`), parent and relative display path resolution (`parent_or_cur_dir`, `relative_display_path`), directory, editor, volume option, and target path validation (`has_regular_target_name`, `is_valid_directory`, `is_valid_directory_path`, `is_valid_editor_value`, `is_valid_target_path`, `is_valid_volume_options`), path token sanitization (`sanitize_path_token`), extension matching (`matches_extension`), and parent traversal checks (`has_parent_dir`) with zero `crate::core` imports. |
 | `src/utilities/string.rs`     | Provides UTF-8 boundary clamping (`clamp_utf8_prefix`), control/BiDi character detection and sanitization (`contains_control_or_bidi`, `contains_control_or_whitespace`, `is_bidi_control`, `sanitize_char`, `sanitize_text`), empty value literal detection (`is_empty_value_literal`), shell quoting (`escape_shell`, `is_safe_shell_byte`), identifier, target, token, text, log flag, and pod/container name validation and normalization (`is_identifier_continue`, `is_identifier_start`, `is_valid_container_suffix`, `is_valid_group_target`, `is_valid_identifier`, `is_valid_log_tail`, `is_valid_log_time`, `is_valid_pod_or_container_name`, `is_valid_recipe_identifier`, `is_valid_target_segment`, `is_valid_text`, `is_valid_token`, `is_valid_unmanaged_container_name`, `normalize_name`), and strict ASCII integer parsing (`parse_ascii_u32`). |
+
+## Integration Tests (`tests/`)
+
+The `tests/` directory verifies the compiled `pods` binary in isolated RAII temporary workspaces backed by a deterministic mock `podman` script on `PATH`, without depending on a live host Podman installation.
+
+| File                     | Function |
+| :----------------------- | :------- |
+| `tests/common/mod.rs`    | Provides `TestWorkspace` (RAII temp directory cleanup and executable mock `podman` shim) and `CliOutput` for subprocess execution. |
+| `tests/cli_matrix.rs`    | Verifies missing-config bypass/error matrices, `simulate true`/`false` and `--simulate` override matrices, argument pipeline validation, and Podman `< 5.8.0` version enforcement. |
+| `tests/cli_workflows.rs` | Verifies installed-symlink CWD resolution, custom `--config` debug logging and broken-config display, non-zero Podman exit propagation without duplicate `ERROR:` lines, live shared-image `pods update` pull deduplication and reload, and live `pods image prune` preview/abort/confirm/failure flows. |
 
 ## Execution Flow
 

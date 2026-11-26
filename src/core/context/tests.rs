@@ -15,15 +15,14 @@
 
 //! Unit tests for [`super::Context`], [`super::Flags`], and mode/action enumerations.
 
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process;
 use std::str::FromStr;
 
 use crate::core::cli;
 use crate::core::config::{Config, PodsConfig, RecipesConfig};
 use crate::error::CliErrorKind;
+use crate::io::system::fs::TestTempDir;
 use super::{
     CommandAction, ConfigAction, ConnectAction, Context, DefaultAction, Flags, ImageAction,
     InitAction, LogsAction, Mode, ModeAction, RecipeAction,
@@ -453,9 +452,7 @@ fn requires_config_podman_elevation_and_simulate_sync_across_all_actions() {
         ModeAction::Recipe(RecipeAction::Show),
     ];
 
-    let temp_dir = env::temp_dir().join(format!("podoxide_ctx_sim_test_{}", process::id()));
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = TestTempDir::new("ctx_sim_test");
     let simulate_false_path = temp_dir.join("sim_false.conf");
     let simulate_true_path = temp_dir.join("sim_true.conf");
     fs::write(
@@ -482,6 +479,4 @@ fn requires_config_podman_elevation_and_simulate_sync_across_all_actions() {
         );
         assert_action_simulate_transitions(action, &simulate_false_path, &simulate_true_path);
     }
-
-    let _ = fs::remove_dir_all(&temp_dir);
 }

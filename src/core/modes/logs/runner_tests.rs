@@ -15,16 +15,11 @@
 
 //! Unit tests for `pods logs` target validation, flag validation, and execution in [`super`].
 
-use std::env;
-use std::fs as std_fs;
-use std::path::PathBuf;
-use std::process;
-
 use crate::core::config::Config;
 use crate::core::context::{Context, Flags};
 use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
 use crate::io::exec::command::ExecOutcome;
-use crate::io::system::fs;
+use crate::io::system::fs::{self, TestTempDir};
 use super::execute_logs_with;
 
 const COMMANDS_RECIPE_PSL: &str = "\
@@ -80,11 +75,8 @@ fn assert_invalid_flag_rejected(context: &Context, flags: Flags) {
     }
 }
 
-fn build_test_context(suffix: &str) -> (PathBuf, Context) {
-    let mut directory = env::temp_dir();
-    directory.push(format!("podoxide_mode_logs_{}_{}", process::id(), suffix));
-    let _ = std_fs::remove_dir_all(&directory);
-    std_fs::create_dir_all(&directory).unwrap();
+fn build_test_context(suffix: &str) -> (TestTempDir, Context) {
+    let directory = TestTempDir::new(&format!("mode_logs_{suffix}"));
 
     fs::write_file(
         &directory.join("recipe_011_simple_container.pod"),
@@ -105,7 +97,7 @@ fn build_test_context(suffix: &str) -> (PathBuf, Context) {
 
     let mut config = Config::new();
     config.simulate = true;
-    config.recipes.path = directory.clone();
+    config.recipes.path = directory.to_path_buf();
     config.recipes.groups.insert(
         String::from("all"),
         vec![
@@ -123,7 +115,7 @@ fn build_test_context(suffix: &str) -> (PathBuf, Context) {
 
 #[test]
 fn execute_logs_with_rejects_invalid_targets_flags_unregistered_and_invalid_recipes() {
-    let (directory, mut context) = build_test_context("errors");
+    let (_directory, mut context) = build_test_context("errors");
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -228,13 +220,11 @@ fn execute_logs_with_rejects_invalid_targets_flags_unregistered_and_invalid_reci
         }
         other => panic!("expected PodError::Recipe(ContainerNotFound), got {other:?}"),
     }
-
-    let _ = std_fs::remove_dir_all(&directory);
 }
 
 #[test]
 fn execute_logs_with_simulates_show_follow_options_and_container_filters() {
-    let (directory, mut context) = build_test_context("simulate");
+    let (_directory, mut context) = build_test_context("simulate");
 
     let mut option_flags = Flags::new();
     option_flags.since = Some(String::from("2026-01-01 12:00:00"));
@@ -305,6 +295,4 @@ fn execute_logs_with_simulates_show_follow_options_and_container_filters() {
         assert_eq!(String::from_utf8(stdout).unwrap(), expected_output);
         assert!(stderr.is_empty());
     }
-
-    let _ = std_fs::remove_dir_all(&directory);
 }

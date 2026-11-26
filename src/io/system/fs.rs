@@ -15,12 +15,20 @@
 
 //! Host filesystem operations and bounded file reading and writing.
 
+#[cfg(test)]
+use std::env;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::fs::{self, DirEntry, Metadata, OpenOptions};
 use std::io::{self, Read, Write};
+#[cfg(test)]
+use std::ops::Deref;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::process;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{PodError, PslError, PslErrorKind};
 use crate::io::psl::MAX_FILE_BYTES;
@@ -56,6 +64,50 @@ const LINUX_O_NONBLOCK: i32 = 0x4000;
 const LINUX_O_NONBLOCK: i32 = 0o4000;
 /// Maximum number of entries collected from a single directory listing.
 pub const MAX_DIRECTORY_ENTRIES: usize = 4096;
+#[cfg(test)]
+static TEMP_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+/// RAII temporary directory guard that removes its directory tree when dropped in tests.
+#[cfg(test)]
+pub(crate) struct TestTempDir {
+    path: PathBuf,
+}
+
+#[cfg(test)]
+impl TestTempDir {
+    /// Creates a unique temporary directory under [`env::temp_dir`] prefixed with `label`.
+    #[must_use]
+    pub(crate) fn new(label: &str) -> Self {
+        let sequence = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!("podoxide_{label}_{}_{sequence}", process::id()));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).expect("create test temp directory");
+        Self { path }
+    }
+}
+
+#[cfg(test)]
+impl AsRef<Path> for TestTempDir {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[cfg(test)]
+impl Deref for TestTempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.path
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestTempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
 
 /// Wraps an [`io::Error`] with its filesystem path while preserving the [`Error::source`] chain.
 #[derive(Debug)]

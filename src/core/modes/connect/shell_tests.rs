@@ -15,15 +15,12 @@
 
 //! Unit tests for `pods connect [shell] <target>` in [`super`].
 
-use std::env;
-use std::fs as std_fs;
 use std::path::PathBuf;
-use std::process;
 
 use crate::core::config::Config;
 use crate::core::context::Context;
 use crate::error::{CliErrorKind, ConfigErrorKind, PodError, RecipeErrorKind};
-use crate::io::system::fs;
+use crate::io::system::fs::{self, TestTempDir};
 use super::{execute_with, handle};
 
 const INVALID_RECIPE_PSL: &str = "\
@@ -65,15 +62,8 @@ container {
 }
 ";
 
-fn build_test_context(suffix: &str) -> (PathBuf, Context) {
-    let mut directory = env::temp_dir();
-    directory.push(format!(
-        "podoxide_connect_shell_{}_{}",
-        process::id(),
-        suffix
-    ));
-    let _ = std_fs::remove_dir_all(&directory);
-    std_fs::create_dir_all(&directory).unwrap();
+fn build_test_context(suffix: &str) -> (TestTempDir, Context) {
+    let directory = TestTempDir::new(&format!("connect_shell_{suffix}"));
 
     fs::write_file(
         &directory.join("recipe_001_valid.pod"),
@@ -95,7 +85,7 @@ fn build_test_context(suffix: &str) -> (PathBuf, Context) {
 
     let mut config = Config::new();
     config.simulate = true;
-    config.recipes.path = directory.clone();
+    config.recipes.path = directory.to_path_buf();
     config.recipes.groups.insert(
         String::from("all"),
         vec![
@@ -113,7 +103,7 @@ fn build_test_context(suffix: &str) -> (PathBuf, Context) {
 
 #[test]
 fn execute_with_rejects_invalid_parameters_and_targets() {
-    let (directory, mut context) = build_test_context("invalid_params");
+    let (_directory, mut context) = build_test_context("invalid_params");
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -167,14 +157,12 @@ fn execute_with_rejects_invalid_parameters_and_targets() {
             ),
         }
     }
-
-    let _ = std_fs::remove_dir_all(&directory);
 }
 
 #[test]
 fn execute_with_rejects_missing_or_invalid_recipes_and_distinguishes_stopped_unmanaged_containers()
 {
-    let (directory, mut context) = build_test_context("recipe_errors");
+    let (_directory, mut context) = build_test_context("recipe_errors");
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -271,13 +259,11 @@ fn execute_with_rejects_missing_or_invalid_recipes_and_distinguishes_stopped_unm
         }
         other => panic!("expected PodError::Cli(TargetNotFound), got {other:?}"),
     }
-
-    let _ = std_fs::remove_dir_all(&directory);
 }
 
 #[test]
 fn execute_with_simulates_single_multi_direct_and_unreferenced_pod_targets() {
-    let (directory, mut context) = build_test_context("simulate");
+    let (_directory, mut context) = build_test_context("simulate");
 
     let cases = [
         (
@@ -348,6 +334,4 @@ fn execute_with_simulates_single_multi_direct_and_unreferenced_pod_targets() {
             .unwrap()
             .contains("podman exec -it my_custom_container")
     );
-
-    let _ = std_fs::remove_dir_all(&directory);
 }

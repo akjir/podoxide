@@ -15,18 +15,15 @@
 
 //! Unit tests for `.pod` recipe semantic validation, command completeness, and zero-line errors in [`super`].
 
-use std::env;
-use std::fs;
 use std::path::PathBuf;
-use std::process;
 use std::str::FromStr;
 
 use crate::core::config::Config;
 use crate::core::container::Container;
-use crate::core::log;
+use crate::core::log::DebugGuard;
 use crate::core::pod::{Pod, PodCommand};
 use crate::error::{PodError, RecipeErrorKind};
-use crate::io::system::fs as system_fs;
+use crate::io::system::fs::{self as system_fs, TestTempDir};
 use super::{Recipe, validation};
 
 fn assert_validate_error(
@@ -41,9 +38,7 @@ fn assert_validate_error(
 
 #[test]
 fn recipe_validation_rejects_incomplete_commands_at_command_line_and_zero_line_omits_line_zero() {
-    let temp_dir = env::temp_dir().join(format!("podoxide_cmd_line_test_{}", process::id()));
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = TestTempDir::new("cmd_line_test");
 
     let missing_container_path = temp_dir.join("missing_container.pod");
     system_fs::write_file(
@@ -84,7 +79,7 @@ container *db {
     .unwrap();
 
     let mut temp_config = Config::new();
-    temp_config.recipes.path = temp_dir.clone();
+    temp_config.recipes.path = temp_dir.to_path_buf();
 
     for target in ["missing_container", "missing_execute"] {
         let error = Recipe::inspect(&temp_config, target).unwrap_err();
@@ -101,7 +96,6 @@ container *db {
             other => panic!("expected InvalidCommand at line 5 for {target}, got {other:?}"),
         }
     }
-    let _ = fs::remove_dir_all(&temp_dir);
 
     let mut zero_pod = Pod::new();
     zero_pod.id = String::from("-bad");
@@ -404,19 +398,18 @@ container *2 {
     );
 
     let mut debug_fallback_recipe = base_valid;
-    log::set_debug_enabled(true);
-    let debug_result = validation::validate_recipe_inner(
-        &mut debug_fallback_recipe,
-        &config_with_pod_path,
-        "debug_fallback",
-    );
-    log::set_debug_enabled(false);
+    let debug_result = {
+        let _debug_guard = DebugGuard::new(true);
+        validation::validate_recipe_inner(
+            &mut debug_fallback_recipe,
+            &config_with_pod_path,
+            "debug_fallback",
+        )
+    };
     debug_result.unwrap();
     assert_eq!(debug_fallback_recipe.pod.path, PathBuf::from("/pods/test"));
 
-    let temp_dir = env::temp_dir().join(format!("podoxide_validate_diag_{}", process::id()));
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).unwrap();
+    let temp_dir = TestTempDir::new("validate_diag");
     let broken_path = temp_dir.join("broken.pod");
     system_fs::write_file(
         &broken_path,
@@ -425,7 +418,7 @@ container *2 {
     .unwrap();
     let mut config_temp = Config::new();
     config_temp.pods.path = PathBuf::from("/pods");
-    config_temp.recipes.path = temp_dir.clone();
+    config_temp.recipes.path = temp_dir.to_path_buf();
     let broken_error = Recipe::inspect(&config_temp, "broken").unwrap_err();
     match broken_error {
         PodError::Recipe(recipe_error) => {
@@ -434,5 +427,4 @@ container *2 {
         }
         other => panic!("expected MissingPodRegistry with diagnostic, got {other:?}"),
     }
-    let _ = fs::remove_dir_all(&temp_dir);
 }

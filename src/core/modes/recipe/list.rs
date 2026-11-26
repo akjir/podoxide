@@ -226,15 +226,13 @@ fn write_entries<W: Write>(entries: &[RecipeListEntry], max_length: usize, stdou
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::fs as std_fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
-    use std::process;
 
     use crate::core::context::Context;
     use crate::error::PodError;
-    use crate::io::system::fs;
+    use crate::io::system::fs::{self, TestTempDir};
     use super::{handle, list_with};
 
     const DESCRIPTION_RECIPE_PSL: &str = "\
@@ -258,16 +256,9 @@ container *simple {
 }
 ";
 
-    fn create_temp_test_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!("podoxide_recipe_list_{}_{suffix}", process::id()));
-        let _ = std_fs::remove_dir_all(&dir);
-        std_fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     #[test]
     fn list_with_displays_configured_recipes_and_unreferenced_files() {
-        let temp_dir = create_temp_test_dir("configured_and_unlinked");
+        let temp_dir = TestTempDir::new("recipe_list_configured");
         fs::write_file(
             &temp_dir.join("recipe_011_simple_container.pod"),
             SIMPLE_RECIPE_PSL,
@@ -282,7 +273,7 @@ container *simple {
 
         let mut context = Context::new();
         context.config.pods.path = PathBuf::from("/pods");
-        context.config.recipes.path = temp_dir.clone();
+        context.config.recipes.path = temp_dir.to_path_buf();
         context.config.recipes.groups.insert(
             String::from("all"),
             vec![
@@ -316,17 +307,15 @@ container *simple {
         );
 
         assert!(handle(&context).is_ok());
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn list_with_handles_empty_config_and_only_unreferenced_files() {
-        let temp_dir = create_temp_test_dir("empty_config");
+        let temp_dir = TestTempDir::new("recipe_list_empty");
         fs::write_file(&temp_dir.join("orphan.pod"), "").unwrap();
 
         let mut context = Context::new();
-        context.config.recipes.path = temp_dir.clone();
+        context.config.recipes.path = temp_dir.to_path_buf();
 
         let mut stdout = Vec::new();
         list_with(&context, &mut stdout).unwrap();
@@ -352,13 +341,11 @@ container *simple {
             String::from_utf8(empty_all_stdout).unwrap(),
             "There are no recipes defined in config.\n"
         );
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn list_with_handles_validation_statuses_padding_and_directory_errors() {
-        let temp_dir = create_temp_test_dir("validation");
+        let temp_dir = TestTempDir::new("recipe_list_validation");
         fs::write_file(&temp_dir.join("recipe_001_empty.pod"), "").unwrap();
         fs::write_file(&temp_dir.join("recipe_002_invalid.pod"), "invalid {{{ psl").unwrap();
         for index in 1..=8 {
@@ -367,7 +354,7 @@ container *simple {
 
         let mut context = Context::new();
         context.config.pods.path = PathBuf::from("/pods");
-        context.config.recipes.path = temp_dir.clone();
+        context.config.recipes.path = temp_dir.to_path_buf();
         context
             .config
             .recipes
@@ -445,7 +432,5 @@ container *simple {
         } else {
             assert!(matches!(dir_result, Err(PodError::Io(_))));
         }
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 }

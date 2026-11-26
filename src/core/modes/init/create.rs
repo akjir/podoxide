@@ -184,20 +184,18 @@ fn write_template_file<W: Write>(
 
 #[cfg(test)]
 mod tests {
-    use std::env;
     use std::ffi::OsString;
     use std::fs as std_fs;
     use std::io;
     use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::{self as unix_fs, PermissionsExt};
     use std::path::{Path, PathBuf};
-    use std::process;
 
     use crate::core::config::{Config, DEFAULT_CONFIG_PATH};
     use crate::core::context::Context;
     use crate::error::PodError;
     use crate::io::psl::parse_psl;
-    use crate::io::system::fs;
+    use crate::io::system::fs::{self, TestTempDir};
     use super::{
         CONFIG_TEMPLATE, DEFAULT_RECIPE_PATH, RECIPE_TEMPLATE, create_files,
         ensure_target_creatable, handle,
@@ -205,7 +203,7 @@ mod tests {
 
     #[test]
     fn create_files_simulates_without_writing_files() {
-        let temp_dir = create_temp_test_dir("simulate");
+        let temp_dir = TestTempDir::new("init_simulate");
         let recipe_path = temp_dir.join("recipe.pod");
         let config_path = temp_dir.join("pods.conf");
         let mut stderr = Vec::new();
@@ -233,13 +231,11 @@ mod tests {
         assert!(output_existing.contains("WARNING: File 'recipe.pod' already exists.\n"));
         assert!(output_existing.contains("INFO: Created 'pods.conf'.\n"));
         assert!(!fs::file_exists(&config_path));
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn create_files_warns_on_existing_files_and_rejects_directories() {
-        let temp_dir = create_temp_test_dir("existing");
+        let temp_dir = TestTempDir::new("init_existing");
         let recipe_path = temp_dir.join("recipe.pod");
         let config_path = temp_dir.join("pods.conf");
 
@@ -305,13 +301,11 @@ mod tests {
         ));
         assert!(!fs::file_exists(&recipe_path));
         assert!(stderr.is_empty());
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn create_files_writes_valid_root_templates_and_logs_info() {
-        let temp_dir = create_temp_test_dir("templates");
+        let temp_dir = TestTempDir::new("init_templates");
         let recipe_path = temp_dir.join("recipe.pod");
         let config_path = temp_dir.join("pods.conf");
         let mut stderr = Vec::new();
@@ -351,20 +345,12 @@ mod tests {
         assert_eq!(parsed_recipe.blocks[0].name, "pod");
         assert_eq!(parsed_recipe.blocks[1].name, "container");
         assert_eq!(parsed_recipe.blocks[2].name, "container");
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
-    }
-
-    fn create_temp_test_dir(suffix: &str) -> PathBuf {
-        let dir = env::temp_dir().join(format!("podoxide_init_test_{}_{suffix}", process::id()));
-        let _ = std_fs::remove_dir_all(&dir);
-        std_fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     #[test]
     fn handle_and_path_edge_cases_and_symlink_protection() {
         let mut context = Context::new();
+        context.flags.set_simulate(true);
         context.config.path = PathBuf::from("/nonexistent_ignored_dir/custom.conf");
         assert!(handle(&context).is_ok());
 
@@ -387,7 +373,7 @@ mod tests {
         let non_utf8_path = PathBuf::from(OsString::from_vec(vec![b'.', b'/', 0xFF, b'.', b'c']));
         assert!(ensure_target_creatable(&non_utf8_path, Path::new(".")).is_err());
 
-        let temp_dir = create_temp_test_dir("symlinks");
+        let temp_dir = TestTempDir::new("init_symlinks");
         let dangling_target = temp_dir.join("missing_target.pod");
         let dangling_recipe = temp_dir.join("recipe.pod");
         let config_path = temp_dir.join("pods.conf");
@@ -436,7 +422,5 @@ mod tests {
         );
         std_fs::set_permissions(&config_path, std_fs::Permissions::from_mode(0o600)).unwrap();
         assert_eq!(fs::read_file(&config_path).unwrap(), "protected write-only");
-
-        let _ = std_fs::remove_dir_all(&temp_dir);
     }
 }

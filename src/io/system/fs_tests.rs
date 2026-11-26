@@ -15,33 +15,27 @@
 
 //! Unit tests for host filesystem operations in [`super`].
 
-use std::env;
 use std::error::Error;
 use std::fs;
 use std::io::{self, Cursor};
 use std::os::unix::fs::{self as unix_fs, PermissionsExt};
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::process::Command;
 
 use crate::error::{PodError, PslErrorKind};
 use crate::io::psl::MAX_FILE_BYTES;
 use crate::utilities::path;
 use super::{
-    INITIAL_FILE_CAPACITY, MAX_DIRECTORY_ENTRIES, collect_matching_entry, directory_exists,
-    ensure_writable_target, file_exists, get_absolute_path, io_path_error, list_directory,
-    read_bounded_utf8, read_file, write_file, write_file_exclusive, write_file_nofollow,
+    INITIAL_FILE_CAPACITY, MAX_DIRECTORY_ENTRIES, TestTempDir, collect_matching_entry,
+    directory_exists, ensure_writable_target, file_exists, get_absolute_path, io_path_error,
+    list_directory, read_bounded_utf8, read_file, write_file, write_file_exclusive,
+    write_file_nofollow,
 };
-
-fn create_temp_test_dir(suffix: &str) -> PathBuf {
-    let dir = env::temp_dir().join(format!("podoxide_fs_test_{}_{suffix}", process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).unwrap();
-    dir
-}
 
 #[test]
 fn directory_and_file_existence_and_path_forwarding() {
-    let temp_dir = create_temp_test_dir("existence");
+    let temp_dir = TestTempDir::new("fs_existence");
     let file_path = temp_dir.join("sample.pod");
     write_file(&file_path, "pod app {}\n").unwrap();
 
@@ -59,13 +53,11 @@ fn directory_and_file_existence_and_path_forwarding() {
     let abs = get_absolute_path(&file_path);
     assert!(abs.is_absolute());
     assert!(abs.ends_with("sample.pod"));
-
-    let _ = fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn list_directory_skips_subdirectories_filters_extensions_and_enforces_bounds() {
-    let temp_dir = create_temp_test_dir("list_dir");
+    let temp_dir = TestTempDir::new("fs_list_dir");
     write_file(&temp_dir.join("b.pod"), "").unwrap();
     write_file(&temp_dir.join("a.pod"), "").unwrap();
     write_file(&temp_dir.join("notes.txt"), "").unwrap();
@@ -122,13 +114,11 @@ fn list_directory_skips_subdirectories_filters_extensions_and_enforces_bounds() 
             .to_string()
             .contains("directory entry limit exceeded")
     );
-
-    let _ = fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn read_write_exclusive_nofollow_nonblock_and_error_source_preservation() {
-    let temp_dir = create_temp_test_dir("read_write_sec");
+    let temp_dir = TestTempDir::new("fs_read_write_sec");
     let file_path = temp_dir.join("config.conf");
     let content = "general {\n    editor vim\n}\n";
 
@@ -242,6 +232,18 @@ fn read_write_exclusive_nofollow_nonblock_and_error_source_preservation() {
         read_bounded_utf8(Cursor::new(vec![0xFF, 0xFE]), INITIAL_FILE_CAPACITY),
         Err(PodError::Io(_))
     ));
+}
 
-    let _ = fs::remove_dir_all(&temp_dir);
+#[test]
+fn test_temp_dir_cleans_up_on_drop_and_panic() {
+    let mut leaked_path = PathBuf::new();
+    let result = panic::catch_unwind(AssertUnwindSafe(|| {
+        let dir = TestTempDir::new("fs_panic_cleanup");
+        leaked_path = dir.to_path_buf();
+        write_file(&dir.join("sample.txt"), "data").unwrap();
+        assert!(directory_exists(&dir));
+        panic!("intentional panic to verify RAII cleanup");
+    }));
+    assert!(result.is_err());
+    assert!(!leaked_path.exists());
 }

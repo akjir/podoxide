@@ -81,7 +81,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::core::context::Context;
-    use crate::core::log;
+    use crate::core::log::DebugGuard;
     use crate::error::{ConfigErrorKind, PodError};
     use super::{edit_with, handle};
 
@@ -92,11 +92,12 @@ mod tests {
         context.config.path = PathBuf::from("./tests/pods/configs/config_012_invalid_editor.conf");
         context.config.simulate = false;
 
-        log::set_debug_enabled(true);
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        edit_with(&context, &mut stdout, &mut stderr).unwrap();
-        log::set_debug_enabled(false);
+        {
+            let _debug_guard = DebugGuard::new(true);
+            edit_with(&context, &mut stdout, &mut stderr).unwrap();
+        }
 
         assert!(stdout.is_empty());
         assert_eq!(

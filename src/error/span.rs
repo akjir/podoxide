@@ -13,30 +13,15 @@
 // You should have received a copy of the GNU General Public License along with
 // this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Quote-aware source line scanning and token span resolution for compiler-style diagnostics.
+//! Token and column span resolution for compiler-style diagnostics.
 
 use std::ops::ControlFlow;
 use std::str::Chars;
 
 use crate::error::psl::PslErrorKind;
 use crate::utilities::string;
-
-/// Event emitted while scanning quote-delimited source text in a single pass.
-enum QuoteScanEvent {
-    DoubleQuoteEscape {
-        len: usize,
-        next_byte: Option<u8>,
-        start: usize,
-    },
-    QuoteToggle {
-        offset: usize,
-        opened: bool,
-    },
-    UnquotedByte {
-        byte: u8,
-        offset: usize,
-    },
-}
+use super::quote_scan;
+pub(super) use super::quote_scan::strip_inline_comment;
 
 /// Computes the 1-based character column and span for a [`PslErrorKind`] on `sanitized_line`.
 #[must_use]
@@ -45,36 +30,42 @@ pub(super) fn locate_psl_error_span(
     kind: PslErrorKind,
     column: Option<usize>,
 ) -> (usize, usize) {
-    let code_slice = strip_inline_comment(sanitized_line);
+    let code_slice = quote_scan::strip_inline_comment(sanitized_line);
     if let Some(column_number) = column {
         return locate_psl_span_at_column(sanitized_line, code_slice, kind, column_number);
     }
 
     match kind {
-        PslErrorKind::InvalidBlockHeader => {
-            span_from_byte_offset(code_slice, find_unquoted_byte(code_slice, b'{'), 1)
-        }
-        PslErrorKind::InvalidEscapeSequence => find_invalid_escape_bytes(code_slice).map_or_else(
-            || highlight_trimmed_code(code_slice),
-            |(start, len)| byte_range_to_char_span(code_slice, start, len),
+        PslErrorKind::InvalidBlockHeader => span_from_byte_offset(
+            code_slice,
+            quote_scan::find_unquoted_byte(code_slice, b'{'),
+            1,
         ),
+        PslErrorKind::InvalidEscapeSequence => quote_scan::find_invalid_escape_bytes(code_slice)
+            .map_or_else(
+                || highlight_trimmed_code(code_slice),
+                |(start, len)| byte_range_to_char_span(code_slice, start, len),
+            ),
         PslErrorKind::InvalidIdentifier
         | PslErrorKind::MissingDirectiveArgument
         | PslErrorKind::UnexpectedRootDirective => highlight_first_token(code_slice),
         PslErrorKind::LimitExceeded
         | PslErrorKind::UnclosedBlock
         | PslErrorKind::UnexpectedToken => highlight_trimmed_code(code_slice),
-        PslErrorKind::UnexpectedClosingBrace => {
-            span_from_byte_offset(code_slice, find_unquoted_byte(code_slice, b'}'), 1)
-        }
-        PslErrorKind::UnterminatedString => find_unterminated_quote_byte(sanitized_line)
-            .map_or_else(
+        PslErrorKind::UnexpectedClosingBrace => span_from_byte_offset(
+            code_slice,
+            quote_scan::find_unquoted_byte(code_slice, b'}'),
+            1,
+        ),
+        PslErrorKind::UnterminatedString => {
+            quote_scan::find_unterminated_quote_byte(sanitized_line).map_or_else(
                 || highlight_trimmed_code(code_slice),
                 |byte_offset| {
                     let byte_len = sanitized_line.len().saturating_sub(byte_offset).max(1);
                     byte_range_to_char_span(sanitized_line, byte_offset, byte_len)
                 },
-            ),
+            )
+        }
     }
 }
 
@@ -116,18 +107,6 @@ pub(super) fn locate_token_span_at_arg(
     locate_token_span(code_slice, token, prefer_argument)
 }
 
-/// Strips any trailing `#` comment outside of single- or double-quoted strings.
-#[must_use]
-pub(super) fn strip_inline_comment(line: &str) -> &str {
-    let comment_start = scan_quoted_text(line, |event| match event {
-        QuoteScanEvent::UnquotedByte { byte: b'#', offset } => ControlFlow::Break(offset),
-        _ => ControlFlow::Continue(()),
-    });
-    comment_start
-        .and_then(|offset| line.get(..offset))
-        .unwrap_or(line)
-}
-
 /// Converts a byte range `(byte_start, byte_len)` inside `line` into a 1-based character column and character span.
 #[must_use]
 fn byte_range_to_char_span(line: &str, byte_start: usize, byte_len: usize) -> (usize, usize) {
@@ -140,16 +119,6 @@ fn byte_range_to_char_span(line: &str, byte_start: usize, byte_len: usize) -> (u
     (col_number, span_len)
 }
 
-/// Returns the byte length of the `\<char>` escape sequence starting at `backslash_index` in `text`.
-#[must_use]
-fn escape_sequence_byte_len(text: &str, backslash_index: usize) -> usize {
-    let char_len = text
-        .get(backslash_index + 1..)
-        .and_then(|rest| rest.chars().next())
-        .map_or(0, char::len_utf8);
-    1 + char_len
-}
-
 /// Returns the character width (1 or 2) of a backslash escape sequence starting at 1-based `column`.
 #[must_use]
 fn escape_span_at_column(line: &str, column: usize) -> usize {
@@ -160,19 +129,6 @@ fn escape_span_at_column(line: &str, column: usize) -> usize {
         .max(1)
 }
 
-/// Finds the byte offset and length of an invalid escape sequence inside a double-quoted string on `code_slice`.
-#[must_use]
-fn find_invalid_escape_bytes(code_slice: &str) -> Option<(usize, usize)> {
-    scan_quoted_text(code_slice, |event| match event {
-        QuoteScanEvent::DoubleQuoteEscape {
-            len,
-            next_byte: Some(next),
-            start,
-        } if !matches!(next, b'"' | b'\\' | b'n' | b'r' | b't') => ControlFlow::Break((start, len)),
-        _ => ControlFlow::Continue(()),
-    })
-}
-
 /// Searches `code_slice` for a standalone token matching `target` (preferring argument tokens when `prefer_argument` is `true`).
 #[must_use]
 fn find_matching_token_bytes(
@@ -180,76 +136,30 @@ fn find_matching_token_bytes(
     target: &str,
     prefer_argument: bool,
 ) -> Option<(usize, usize)> {
-    let bytes = code_slice.as_bytes();
-    let mut cursor = 0;
     let mut first_match = None;
-    let mut token_index = 0_usize;
-
-    while let Some(&byte) = bytes.get(cursor) {
-        if byte.is_ascii_whitespace() || byte == b'{' || byte == b'}' {
-            cursor += 1;
-            continue;
-        }
-        let (token_start, token_end) = scan_next_code_token(code_slice, cursor);
-        if token_matches_target(code_slice, token_start, token_end, target) {
-            let span = (token_start, token_end - token_start);
-            if !prefer_argument || token_index > 0 || first_match.is_some() {
-                return Some(span);
+    let resolved = scan_code_tokens(code_slice, |index, start, end| {
+        if token_matches_target(code_slice, start, end, target) {
+            let span = (start, end - start);
+            if !prefer_argument || index > 0 || first_match.is_some() {
+                return ControlFlow::Break(span);
             }
             first_match = Some(span);
         }
-        token_index += 1;
-        cursor = token_end;
-    }
-    first_match
+        ControlFlow::Continue(())
+    });
+    resolved.or(first_match)
 }
 
 /// Returns the `(byte_start, byte_len)` of the `target_index`-th token (`0` = directive name, `1..` = arguments) in `code_slice`.
 #[must_use]
 fn find_token_bytes_at_index(code_slice: &str, target_index: usize) -> Option<(usize, usize)> {
-    let bytes = code_slice.as_bytes();
-    let mut cursor = 0;
-    let mut token_index = 0_usize;
-
-    while let Some(&byte) = bytes.get(cursor) {
-        if byte.is_ascii_whitespace() || byte == b'{' || byte == b'}' {
-            cursor += 1;
-            continue;
-        }
-        let (token_start, token_end) = scan_next_code_token(code_slice, cursor);
-        if token_index == target_index {
-            return Some((token_start, token_end - token_start));
-        }
-        token_index += 1;
-        cursor = token_end;
-    }
-    None
-}
-
-/// Finds the first byte offset of `target_byte` outside of single- or double-quoted strings in `code_slice`.
-#[must_use]
-fn find_unquoted_byte(code_slice: &str, target_byte: u8) -> Option<usize> {
-    scan_quoted_text(code_slice, |event| match event {
-        QuoteScanEvent::UnquotedByte { byte, offset } if byte == target_byte => {
-            ControlFlow::Break(offset)
-        }
-        _ => ControlFlow::Continue(()),
-    })
-}
-
-/// Finds the byte offset of an unclosed opening `"` or `'` quote on `line`.
-#[must_use]
-fn find_unterminated_quote_byte(line: &str) -> Option<usize> {
-    let mut open_quote_offset = None;
-    let _ = scan_quoted_text(line, |event| match event {
-        QuoteScanEvent::QuoteToggle { offset, opened } => {
-            open_quote_offset = opened.then_some(offset);
+    scan_code_tokens(code_slice, |index, start, end| {
+        if index == target_index {
+            ControlFlow::Break((start, end - start))
+        } else {
             ControlFlow::Continue(())
         }
-        QuoteScanEvent::UnquotedByte { byte: b'#', .. } => ControlFlow::Break(()),
-        _ => ControlFlow::Continue(()),
-    });
-    open_quote_offset
+    })
 }
 
 /// Computes the 1-based character column and span for the first whitespace-delimited token on `code_slice`.
@@ -363,6 +273,29 @@ fn scan_bare_code_token(code_slice: &str, start: usize) -> (usize, usize) {
     (start, cursor)
 }
 
+/// Iterates bare and quoted code tokens in `code_slice` with 0-based indices until `on_token` breaks.
+fn scan_code_tokens<T, F>(code_slice: &str, mut on_token: F) -> Option<T>
+where
+    F: FnMut(usize, usize, usize) -> ControlFlow<T>,
+{
+    let bytes = code_slice.as_bytes();
+    let mut cursor = 0;
+    let mut token_index = 0_usize;
+    while let Some(&byte) = bytes.get(cursor) {
+        if byte.is_ascii_whitespace() || byte == b'{' || byte == b'}' {
+            cursor += 1;
+            continue;
+        }
+        let (token_start, token_end) = scan_next_code_token(code_slice, cursor);
+        if let ControlFlow::Break(value) = on_token(token_index, token_start, token_end) {
+            return Some(value);
+        }
+        token_index += 1;
+        cursor = token_end;
+    }
+    None
+}
+
 /// Scans a single bare or quoted token starting at `start` in `code_slice` and returns `(start, end)`.
 #[must_use]
 fn scan_next_code_token(code_slice: &str, start: usize) -> (usize, usize) {
@@ -379,7 +312,7 @@ fn scan_quoted_code_token(code_slice: &str, start: usize, quote: u8) -> (usize, 
     let mut cursor = start + 1;
     while let Some(&byte) = bytes.get(cursor) {
         if quote == b'"' && byte == b'\\' {
-            cursor += escape_sequence_byte_len(code_slice, cursor);
+            cursor += quote_scan::escape_sequence_byte_len(code_slice, cursor);
             continue;
         }
         if byte == quote {
@@ -388,27 +321,6 @@ fn scan_quoted_code_token(code_slice: &str, start: usize, quote: u8) -> (usize, 
         cursor += 1;
     }
     (start, bytes.len())
-}
-
-/// Scans `text` in a single pass tracking single- and double-quote state and emitting [`QuoteScanEvent`] items.
-fn scan_quoted_text<T, F>(text: &str, mut on_event: F) -> Option<T>
-where
-    F: FnMut(QuoteScanEvent) -> ControlFlow<T>,
-{
-    let bytes = text.as_bytes();
-    let mut in_double = false;
-    let mut in_single = false;
-    let mut index = 0;
-
-    while index < bytes.len() {
-        if let Some(event) =
-            step_quoted_text(text, bytes, &mut index, &mut in_double, &mut in_single)
-            && let ControlFlow::Break(value) = on_event(event)
-        {
-            return Some(value);
-        }
-    }
-    None
 }
 
 /// Converts an optional byte offset and byte length in `code_slice` into a character span, or highlights `code_slice`.
@@ -422,43 +334,6 @@ fn span_from_byte_offset(
         || highlight_trimmed_code(code_slice),
         |byte_offset| byte_range_to_char_span(code_slice, byte_offset, byte_len),
     )
-}
-
-/// Advances the quote-aware scanner by one step at `*index` and returns any significant [`QuoteScanEvent`].
-fn step_quoted_text(
-    text: &str,
-    bytes: &[u8],
-    index: &mut usize,
-    in_double: &mut bool,
-    in_single: &mut bool,
-) -> Option<QuoteScanEvent> {
-    let offset = *index;
-    let byte = bytes[offset];
-    if *in_double && byte == b'\\' {
-        let len = escape_sequence_byte_len(text, offset);
-        *index += len;
-        return Some(QuoteScanEvent::DoubleQuoteEscape {
-            len,
-            next_byte: bytes.get(offset + 1).copied(),
-            start: offset,
-        });
-    }
-    *index += 1;
-    if !*in_single && byte == b'"' {
-        *in_double = !*in_double;
-        return Some(QuoteScanEvent::QuoteToggle {
-            offset,
-            opened: *in_double,
-        });
-    }
-    if !*in_double && byte == b'\'' {
-        *in_single = !*in_single;
-        return Some(QuoteScanEvent::QuoteToggle {
-            offset,
-            opened: *in_single,
-        });
-    }
-    (!*in_double && !*in_single).then_some(QuoteScanEvent::UnquotedByte { byte, offset })
 }
 
 /// Evaluates whether `code_slice[start..end]` matches `target` directly, unquoted, or as an assigned `key="val"` token.
@@ -517,60 +392,5 @@ fn unescaped_double_quote_matches(inner: &str, target: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::error::{ConfigError, ConfigErrorKind, RecipeError, RecipeErrorKind};
-    use super::unescaped_double_quote_matches;
-
-    #[test]
-    fn token_span_resolution_handles_empty_escaped_and_colliding_tokens() {
-        let empty_double = ConfigError::with_token(ConfigErrorKind::InvalidPath, 1, "")
-            .with_diagnostic("    path \"\" # empty\n", "./pods.conf");
-        assert_eq!(empty_double.diagnostic.as_ref().unwrap().col_number, 10);
-        assert_eq!(
-            empty_double.diagnostic.as_ref().unwrap().annotation_carets,
-            "         ^^"
-        );
-
-        let empty_single = ConfigError::with_token(ConfigErrorKind::InvalidPath, 1, "")
-            .with_diagnostic("    path '' # empty\n", "./pods.conf");
-        assert_eq!(empty_single.diagnostic.as_ref().unwrap().col_number, 10);
-        assert_eq!(
-            empty_single.diagnostic.as_ref().unwrap().annotation_carets,
-            "         ^^"
-        );
-
-        let escaped_token =
-            RecipeError::with_token(RecipeErrorKind::InvalidDescription, 1, "bad\ndesc")
-                .with_diagnostic("    description \"bad\\ndesc\" # comment\n", "./recipe.pod");
-        let escaped_diag = escaped_token.diagnostic.as_ref().unwrap();
-        assert_eq!(escaped_diag.col_number, 17);
-        assert_eq!(
-            escaped_diag.annotation_carets,
-            "                ^^^^^^^^^^^"
-        );
-
-        let collision = RecipeError::with_token(RecipeErrorKind::DuplicateBlock, 1, "command")
-            .with_diagnostic("    command command {\n", "./recipe.pod");
-        assert_eq!(collision.diagnostic.as_ref().unwrap().col_number, 13);
-
-        let duplicate_group =
-            ConfigError::with_token(ConfigErrorKind::DuplicateDirective, 1, "alpha")
-                .with_diagnostic("        alpha beta alpha\n", "./pods.conf");
-        assert_eq!(duplicate_group.diagnostic.as_ref().unwrap().col_number, 9);
-
-        let invalid_boolean =
-            ConfigError::with_token(ConfigErrorKind::InvalidBoolean, 1, "simulate")
-                .with_diagnostic("    simulate simulate\n", "./pods.conf");
-        assert_eq!(invalid_boolean.diagnostic.as_ref().unwrap().col_number, 14);
-
-        assert!(!unescaped_double_quote_matches("plain", "plain"));
-        assert!(unescaped_double_quote_matches(
-            "a\\nb\\rc\\td\\\"e\\\\f",
-            "a b c d\"e\\f"
-        ));
-        assert!(unescaped_double_quote_matches("trailing\\", "trailing\\"));
-        assert!(!unescaped_double_quote_matches("a\\nb", "a "));
-        assert!(!unescaped_double_quote_matches("a\\nb", "a b extra"));
-        assert!(!unescaped_double_quote_matches("a\\nb", "a x"));
-    }
-}
+#[path = "span_tests.rs"]
+mod tests;
