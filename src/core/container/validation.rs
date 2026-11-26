@@ -15,7 +15,10 @@
 
 //! Container field validation, image/registry token validation, and container name resolution.
 
+use std::net::Ipv6Addr;
+
 use crate::core::pod::Pod;
+use crate::core::recipe::validation as recipe_validation;
 use crate::error::{RecipeError, RecipeErrorKind};
 use crate::utilities::{collection, path, string};
 use super::{Container, VolumeMount, volume};
@@ -71,23 +74,53 @@ pub fn resolve_container_name_value(
     Ok(normalized)
 }
 
-/// Evaluates whether `value` is a valid container image reference without leading/trailing `/` or URL schemes.
+/// Evaluates whether `value` is a valid container image reference (`[host[:port]/]repo[:tag][@digest]`).
 #[must_use]
 pub(crate) fn is_valid_image_value(value: &str) -> bool {
-    string::is_valid_token(value)
-        && !value.starts_with('/')
-        && !value.ends_with('/')
-        && !value.contains("//")
+    if !string::is_valid_token(value) || value.contains("://") {
+        return false;
+    }
+    let without_digest = match value.split_once('@') {
+        Some((name_part, digest)) => {
+            if !is_valid_image_digest(digest) {
+                return false;
+            }
+            name_part
+        }
+        None => value,
+    };
+    if without_digest.is_empty() {
+        return false;
+    }
+    let (prefix_path, final_segment) = match without_digest.rsplit_once('/') {
+        Some((prefix, last)) => (Some(prefix), last),
+        None => (None, without_digest),
+    };
+    if let Some(prefix) = prefix_path
+        && !is_valid_image_prefix(prefix)
+    {
+        return false;
+    }
+    is_valid_image_leaf(final_segment)
 }
 
-/// Evaluates whether `value` is a valid registry hostname or prefix without schemes (`://`) or leading/trailing `/`.
+/// Evaluates whether `value` is a valid registry hostname (`host[:port][/namespace...]`) without schemes or traversal segments.
 #[must_use]
 pub(crate) fn is_valid_registry_value(value: &str) -> bool {
-    string::is_valid_token(value)
-        && !value.starts_with('/')
-        && !value.ends_with('/')
-        && !value.contains("://")
-        && !value.contains("//")
+    if !string::is_valid_token(value) || value.contains("://") {
+        return false;
+    }
+    let (host_segment, namespace) = match value.split_once('/') {
+        Some((host, path_suffix)) => (host, Some(path_suffix)),
+        None => (value, None),
+    };
+    if !is_valid_registry_host(host_segment) {
+        return false;
+    }
+    match namespace {
+        Some(path_suffix) => path_suffix.split('/').all(is_valid_repo_segment),
+        None => true,
+    }
 }
 
 /// Validates that all fields of `container` are well-formed.
@@ -174,6 +207,113 @@ pub(crate) fn validate_optional_registry(value: &str, line: usize) -> Result<(),
 #[must_use]
 pub(super) const fn container_label(name: &str) -> &str {
     if name.is_empty() { "container" } else { name }
+}
+
+/// Evaluates whether `algorithm` is a non-empty digest algorithm identifier (such as `sha256`).
+#[must_use]
+fn is_valid_digest_algorithm(algorithm: &str) -> bool {
+    let Some((&first, rest)) = algorithm.as_bytes().split_first() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && rest
+            .iter()
+            .copied()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'_' | b'-'))
+}
+
+/// Evaluates whether `encoded` is a non-empty digest payload without delimiter characters.
+#[must_use]
+fn is_valid_digest_encoded(encoded: &str) -> bool {
+    !encoded.is_empty()
+        && encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'=' | b'_' | b'-'))
+}
+
+/// Evaluates whether `digest` is a non-empty `<algorithm>:<encoded>` OCI image digest.
+#[must_use]
+fn is_valid_image_digest(digest: &str) -> bool {
+    let Some((algorithm, encoded)) = digest.split_once(':') else {
+        return false;
+    };
+    is_valid_digest_algorithm(algorithm) && is_valid_digest_encoded(encoded)
+}
+
+/// Evaluates whether the terminal `<name>[:<tag>]` image segment has a valid name and non-empty tag.
+#[must_use]
+fn is_valid_image_leaf(segment: &str) -> bool {
+    match segment.split_once(':') {
+        Some((name, tag)) => is_valid_repo_segment(name) && is_valid_image_tag(tag),
+        None => is_valid_repo_segment(segment),
+    }
+}
+
+/// Evaluates whether the leading `/` path segments before an image leaf are non-empty and safe.
+#[must_use]
+fn is_valid_image_prefix(prefix: &str) -> bool {
+    let mut segments = prefix.split('/');
+    let Some(first) = segments.next() else {
+        return false;
+    };
+    let first_valid = if first.contains([':', '[', ']']) {
+        is_valid_registry_host(first)
+    } else {
+        is_valid_repo_segment(first)
+    };
+    first_valid && segments.all(is_valid_repo_segment)
+}
+
+/// Evaluates whether `tag` is a non-empty container image tag without separator characters.
+#[must_use]
+fn is_valid_image_tag(tag: &str) -> bool {
+    !tag.is_empty() && tag != "." && tag != ".." && !tag.contains([':', '/', '@'])
+}
+
+/// Evaluates whether `after_open_bracket` forms `<ipv6>][:<port>]` with a valid IPv6 literal and optional `1..=65535` port.
+#[must_use]
+fn is_valid_ipv6_registry_host(after_open_bracket: &str) -> bool {
+    let Some((address, remainder)) = after_open_bracket.split_once(']') else {
+        return false;
+    };
+    if address.parse::<Ipv6Addr>().is_err() {
+        return false;
+    }
+    if remainder.is_empty() {
+        return true;
+    }
+    remainder
+        .strip_prefix(':')
+        .and_then(recipe_validation::parse_valid_port)
+        .is_some()
+}
+
+/// Evaluates whether `host_segment` is a non-empty registry host or bracketed IPv6 literal with an optional valid `:port` (`1..=65535`).
+#[must_use]
+fn is_valid_registry_host(host_segment: &str) -> bool {
+    if let Some(rest) = host_segment.strip_prefix('[') {
+        return is_valid_ipv6_registry_host(rest);
+    }
+    if host_segment.contains(['[', ']']) {
+        return false;
+    }
+    match host_segment.split_once(':') {
+        Some((host, port)) => {
+            is_valid_repo_segment(host)
+                && !host.starts_with('-')
+                && recipe_validation::parse_valid_port(port).is_some()
+        }
+        None => is_valid_repo_segment(host_segment) && !host_segment.starts_with('-'),
+    }
+}
+
+/// Evaluates whether `segment` is a non-empty image repository or registry namespace path segment without `.`, `..`, `:`, `@`, or brackets.
+#[must_use]
+fn is_valid_repo_segment(segment: &str) -> bool {
+    !segment.is_empty()
+        && segment != "."
+        && segment != ".."
+        && !segment.contains([':', '@', '[', ']'])
 }
 
 /// Validates that `image` is non-empty and satisfies [`is_valid_image_value`].

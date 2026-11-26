@@ -244,11 +244,17 @@ impl UpdateSummary {
         containers: &[ContainerPullRecord],
     ) {
         match action {
-            UpdateAction::Failed => self.failed.push(format_pod_detail_entry(
-                label,
-                containers,
-                PullOutcome::Failed,
-            )),
+            UpdateAction::Failed => {
+                let has_failed_pull = containers
+                    .iter()
+                    .any(|record| record.outcome == PullOutcome::Failed);
+                let entry = if has_failed_pull {
+                    format_pod_detail_entry(label, containers, PullOutcome::Failed)
+                } else {
+                    format!("{label}: reload failed")
+                };
+                self.failed.push(entry);
+            }
             UpdateAction::Reloaded => self.changed.push(format_pod_detail_entry(
                 label,
                 containers,

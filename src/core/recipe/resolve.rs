@@ -22,11 +22,14 @@ use crate::error::{RecipeError, RecipeErrorKind};
 use crate::utilities::string;
 use super::Recipe;
 
+/// Matched 0-based container index, reference to [`Container`], and resolved container name.
+pub(super) type ResolvedContainer<'a> = (usize, &'a Container, Cow<'a, str>);
+
 /// Resolves `container_spec` (`1..=N`, `*suffix`, or name) against `recipe.containers`, returning the 0-based index, matched [`Container`], and its resolved name.
 pub(super) fn resolve_container_entry<'a>(
     recipe: &'a Recipe,
     container_spec: &str,
-) -> Result<(usize, &'a Container, Cow<'a, str>), RecipeError> {
+) -> Result<ResolvedContainer<'a>, RecipeError> {
     if !recipe.has_pod
         || !string::is_valid_pod_or_container_name(&recipe.pod.id)
         || !string::is_valid_text(container_spec)
@@ -40,8 +43,9 @@ pub(super) fn resolve_container_entry<'a>(
     let trimmed_spec = container_spec.trim();
     if let Some(index) =
         string::parse_ascii_u32(trimmed_spec).and_then(|value| usize::try_from(value).ok())
+        && let Some(found) = resolve_by_index(recipe, index)?
     {
-        return resolve_by_index(recipe, index, container_spec);
+        return Ok(found);
     }
     let normalized = string::normalize_name(trimmed_spec);
     if let Some(suffix) = normalized.strip_prefix('*') {
@@ -70,7 +74,7 @@ fn find_container_by_exact_or_prefixed<'a>(
     pod_id: &str,
     exact: &str,
     prefixed: &str,
-) -> Option<(usize, &'a Container, Cow<'a, str>)> {
+) -> Option<ResolvedContainer<'a>> {
     let mut fallback = None;
     for (index, container) in containers.iter().enumerate() {
         let Ok(resolved) = resolve_stored_container_name(container, pod_id, index + 1) else {
@@ -86,28 +90,19 @@ fn find_container_by_exact_or_prefixed<'a>(
     fallback
 }
 
-/// Resolves a 1-based numeric container index (`1..=N`) against `recipe.containers`.
+/// Resolves a 1-based numeric container index (`1..=N`) against `recipe.containers`, returning `Ok(None)` when out of range.
 fn resolve_by_index<'a>(
     recipe: &'a Recipe,
     index: usize,
-    raw_spec: &str,
-) -> Result<(usize, &'a Container, Cow<'a, str>), RecipeError> {
+) -> Result<Option<ResolvedContainer<'a>>, RecipeError> {
     let Some(zero_based) = index.checked_sub(1) else {
-        return Err(RecipeError::at_line_or_none(
-            RecipeErrorKind::ContainerNotFound,
-            recipe.pod.line,
-            raw_spec,
-        ));
+        return Ok(None);
     };
     let Some(container) = recipe.containers.get(zero_based) else {
-        return Err(RecipeError::at_line_or_none(
-            RecipeErrorKind::ContainerNotFound,
-            recipe.pod.line,
-            raw_spec,
-        ));
+        return Ok(None);
     };
     let resolved = resolve_stored_container_name(container, &recipe.pod.id, index)?;
-    Ok((zero_based, container, resolved))
+    Ok(Some((zero_based, container, resolved)))
 }
 
 /// Resolves a `*suffix` container target after verifying that `suffix` is a valid non-empty suffix.
@@ -115,7 +110,7 @@ fn resolve_by_suffix<'a>(
     recipe: &'a Recipe,
     suffix: &str,
     raw_spec: &str,
-) -> Result<(usize, &'a Container, Cow<'a, str>), RecipeError> {
+) -> Result<ResolvedContainer<'a>, RecipeError> {
     if !string::is_valid_container_suffix(suffix) {
         return Err(RecipeError::at_line_or_none(
             RecipeErrorKind::ContainerNotFound,

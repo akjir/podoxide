@@ -427,4 +427,19 @@ container *2 {
         }
         other => panic!("expected MissingPodRegistry with diagnostic, got {other:?}"),
     }
+
+    for inverted_publish in ["publish 600-500", "publish 8090-8080 8080-8090"] {
+        let input = format!(
+            "pod app {{\n    name App\n    registry docker.io\n    {inverted_publish}\n}}\ncontainer {{\n    image alpine:latest\n}}\n"
+        );
+        let error = Recipe::from_str(&input).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                PodError::Recipe(ref recipe_error)
+                    if recipe_error.kind == RecipeErrorKind::InvalidPublish
+            ),
+            "expected InvalidPublish for {inverted_publish:?}, got {error:?}"
+        );
+    }
 }

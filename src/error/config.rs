@@ -50,18 +50,19 @@ impl ConfigError {
         let line_number = self.line.unwrap_or(1).max(1);
         let prefer_argument = matches!(
             self.kind,
-            ConfigErrorKind::InvalidBoolean
+            ConfigErrorKind::DisallowedEditor
+                | ConfigErrorKind::GroupDepthExceeded
+                | ConfigErrorKind::InvalidBoolean
                 | ConfigErrorKind::InvalidGroupTarget
                 | ConfigErrorKind::InvalidPath
         );
         let token = self.token.as_deref();
-        let (annotation_text, help_text) = diagnostic_messages(self.kind, token);
         let built = diagnostic::build_diagnostic_from_line(
             source,
             file_path,
             line_number,
-            annotation_text,
-            help_text,
+            self.kind.annotation_text(),
+            self.kind.help_text(),
             |sanitized_line| {
                 span::locate_token_span(
                     span::strip_inline_comment(sanitized_line),
@@ -114,9 +115,11 @@ impl Error for ConfigError {}
 /// Specific semantic validation failure encountered while validating `pods.conf`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConfigErrorKind {
+    DisallowedEditor,
     DuplicateBlock,
     DuplicateDirective,
     EmptyGroupsBlock,
+    GroupDepthExceeded,
     InvalidArgumentCount,
     InvalidBoolean,
     InvalidGroupTarget,
@@ -136,9 +139,11 @@ impl ConfigErrorKind {
     #[must_use]
     pub const fn annotation_text(self) -> &'static str {
         match self {
+            Self::DisallowedEditor => "'podman' is not allowed as an external editor",
             Self::DuplicateBlock => "block is already defined earlier in this configuration",
             Self::DuplicateDirective => "directive is already defined in this block",
             Self::EmptyGroupsBlock => "the 'groups' block must define at least one recipe group",
+            Self::GroupDepthExceeded => "group reference exceeds maximum nesting depth of 64",
             Self::InvalidArgumentCount => "wrong number of arguments for this block or directive",
             Self::InvalidBoolean => "expected boolean literal 'true' or 'false'",
             Self::InvalidGroupTarget => {
@@ -160,10 +165,16 @@ impl ConfigErrorKind {
     #[must_use]
     pub const fn help_text(self) -> &'static str {
         match self {
+            Self::DisallowedEditor => {
+                "configure a text editor such as 'vim', 'nvim', or 'nano' instead of 'podman'."
+            }
             Self::DuplicateBlock => "merge the settings into a single block definition.",
             Self::DuplicateDirective => "keep only one definition of this directive per block.",
             Self::EmptyGroupsBlock => {
                 "add at least one group mapping inside 'groups { ... }' (for example: 'all recipe')."
+            }
+            Self::GroupDepthExceeded => {
+                "reduce nested '@group' references to a maximum depth of 64 levels."
             }
             Self::InvalidArgumentCount => {
                 "configuration blocks take no arguments, and 'editor', 'simulate', and 'path' take 1 argument."
@@ -206,9 +217,11 @@ impl ConfigErrorKind {
     #[must_use]
     pub const fn message(self) -> &'static str {
         match self {
+            Self::DisallowedEditor => "editor 'podman' is not allowed in configuration",
             Self::DuplicateBlock => "duplicate block in configuration",
             Self::DuplicateDirective => "duplicate directive in configuration",
             Self::EmptyGroupsBlock => "no recipe groups defined in 'groups' block",
+            Self::GroupDepthExceeded => "group nesting depth limit exceeded",
             Self::InvalidArgumentCount => "invalid number of arguments for block or directive",
             Self::InvalidBoolean => "invalid boolean value (expected 'true' or 'false')",
             Self::InvalidGroupTarget => "invalid target in recipe group",
@@ -231,36 +244,6 @@ impl Display for ConfigErrorKind {
     }
 }
 
-/// Resolves tailored diagnostic annotation and help messages for `kind` and `token`.
-#[must_use]
-fn diagnostic_messages(kind: ConfigErrorKind, token: Option<&str>) -> (&'static str, &'static str) {
-    if kind == ConfigErrorKind::InvalidPath && token.is_some_and(is_disallowed_podman_editor_token)
-    {
-        return (
-            "'podman' is not allowed as an external editor",
-            "configure a text editor such as 'vim', 'nvim', or 'nano' instead of 'podman'.",
-        );
-    }
-    (kind.annotation_text(), kind.help_text())
-}
-
-/// Evaluates whether `token` is a bare or absolute `podman` executable name disallowed as an editor.
-#[must_use]
-fn is_disallowed_podman_editor_token(token: &str) -> bool {
-    if token.is_empty()
-        || token.starts_with('-')
-        || (token.contains('/') && !token.starts_with('/'))
-        || token.contains("..")
-        || string::contains_control_or_whitespace(token)
-    {
-        return false;
-    }
-    token
-        .rsplit('/')
-        .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("podman"))
-}
-
 #[cfg(test)]
 mod tests {
     use crate::error::MAX_ERROR_TOKEN_BYTES;
@@ -269,9 +252,17 @@ mod tests {
     #[test]
     fn config_error_kind_display_and_diagnostics() {
         let variants = [
+            (
+                ConfigErrorKind::DisallowedEditor,
+                "editor 'podman' is not allowed",
+            ),
             (ConfigErrorKind::DuplicateBlock, "duplicate block"),
             (ConfigErrorKind::DuplicateDirective, "duplicate directive"),
             (ConfigErrorKind::EmptyGroupsBlock, "no recipe groups"),
+            (
+                ConfigErrorKind::GroupDepthExceeded,
+                "group nesting depth limit exceeded",
+            ),
             (
                 ConfigErrorKind::InvalidArgumentCount,
                 "invalid number of arguments",
@@ -358,14 +349,14 @@ mod tests {
         assert!(formatted_oversized.len() <= MAX_ERROR_TOKEN_BYTES + 64);
         assert!(formatted_oversized.ends_with("ä'"));
 
-        let podman_editor = ConfigError::with_token(ConfigErrorKind::InvalidPath, 2, "podman")
+        let podman_editor = ConfigError::with_token(ConfigErrorKind::DisallowedEditor, 2, "podman")
             .with_diagnostic("general {\n    editor podman\n}\n", "./pods.conf");
         let podman_diag = podman_editor.diagnostic.as_ref().unwrap();
         assert!(podman_diag.annotation_text.contains("podman"));
         assert!(podman_diag.help_text.contains("podman"));
 
         let abs_podman =
-            ConfigError::with_token(ConfigErrorKind::InvalidPath, 2, "/usr/bin/podman")
+            ConfigError::with_token(ConfigErrorKind::DisallowedEditor, 2, "/usr/bin/podman")
                 .with_diagnostic("general {\n    editor /usr/bin/podman\n}\n", "./pods.conf");
         assert!(
             abs_podman
@@ -376,11 +367,11 @@ mod tests {
                 .contains("podman")
         );
 
-        let traversal_podman =
-            ConfigError::with_token(ConfigErrorKind::InvalidPath, 2, "../podman")
-                .with_diagnostic("pods {\n    path ../podman\n}\n", "./pods.conf");
+        let colon_podman_path =
+            ConfigError::with_token(ConfigErrorKind::InvalidPath, 2, "/tmp/a:b/podman")
+                .with_diagnostic("pods {\n    path /tmp/a:b/podman\n}\n", "./pods.conf");
         assert_eq!(
-            traversal_podman
+            colon_podman_path
                 .diagnostic
                 .as_ref()
                 .unwrap()

@@ -37,7 +37,16 @@ fn container_and_volume_validation() {
         RecipeErrorKind::MissingContainerImage
     );
 
-    for bad_image in ["-invalid:latest", "/alpine:latest", "alpine:latest/"] {
+    for bad_image in [
+        "-invalid:latest",
+        "/alpine:latest",
+        "alpine:latest/",
+        ":latest",
+        "alpine:",
+        "alpine@",
+        "@sha256:abc",
+        "repo/../app:1",
+    ] {
         container.image = String::from(bad_image);
         assert_eq!(
             container.validate().unwrap_err().kind,
@@ -46,8 +55,40 @@ fn container_and_volume_validation() {
         );
     }
 
+    for valid_image in [
+        "alpine:latest",
+        "myorg/app:1.0@sha256:deadbeef",
+        "localhost:5000/ns/app:v2",
+    ] {
+        container.image = String::from(valid_image);
+        assert!(
+            container.validate().is_ok(),
+            "expected valid image {valid_image:?}"
+        );
+    }
     container.image = String::from("alpine:latest");
-    assert!(container.validate().is_ok());
+
+    for bad_registry in [":5000", "docker.io:", "localhost:notaport"] {
+        container.registry = String::from(bad_registry);
+        assert_eq!(
+            container.validate().unwrap_err().kind,
+            RecipeErrorKind::InvalidRegistry,
+            "expected InvalidRegistry for {bad_registry:?}"
+        );
+    }
+    for valid_registry in [
+        "docker.io",
+        "localhost:5000",
+        "registry.example.com:5000/ns",
+        "[::1]:5000",
+    ] {
+        container.registry = String::from(valid_registry);
+        assert!(
+            container.validate().is_ok(),
+            "expected valid registry {valid_registry:?}"
+        );
+    }
+    container.registry.clear();
 
     let valid_anonymous = VolumeMount {
         container_dir: String::from("/container/dir/anonymous"),

@@ -297,7 +297,17 @@ fn container_update_detects_stale_image_on_pre_pulled_up_to_date() {
     assert_eq!(stale_result.action, UpdateAction::Reloaded);
     assert_eq!(stale_result.record.outcome, PullOutcome::Updated);
     let stale_text = String::from_utf8(stale_out).unwrap();
-    assert!(stale_text.contains("Stop container 'db_pod-db': "));
+    let notice = "Container 'db_pod-db' is running an older image; reloading.";
+    let notice_pos = stale_text
+        .find(notice)
+        .expect("expected stale-container notice before reload");
+    let stop_pos = stale_text
+        .find("Stop container 'db_pod-db': ")
+        .expect("expected Stop container output");
+    assert!(
+        notice_pos < stop_pos,
+        "stale notice must appear before reload output:\n{stale_text}"
+    );
     assert!(stale_text.contains("Create container 'db_pod-db': "));
     assert!(stale_text.contains("Start container 'db_pod-db': "));
 

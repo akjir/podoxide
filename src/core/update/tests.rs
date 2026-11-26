@@ -363,4 +363,25 @@ fn update_summary_renders_simulated_footers_and_enforces_bucket_bounds() {
             .count(),
         MAX_SUMMARY_ENTRIES
     );
+
+    // Reload failure after successful pulls must include 'reload failed' in the Failed bucket.
+    let mut reload_fail_summary =
+        UpdateSummary::new(SummaryKind::LifecycleUpdate, SummaryScope::Pod);
+    reload_fail_summary.record_pod(&pod_result(
+        "webapp",
+        "Web App",
+        UpdateAction::Failed,
+        vec![
+            pull_record("webapp-db", "docker.io/postgres:16", PullOutcome::UpToDate),
+            pull_record("webapp-app", "docker.io/app:latest", PullOutcome::Updated),
+        ],
+    ));
+    assert!(reload_fail_summary.has_failures());
+    let mut reload_fail_out = Vec::new();
+    reload_fail_summary.write_to(&mut reload_fail_out);
+    let reload_fail_text = String::from_utf8(reload_fail_out).unwrap();
+    assert!(
+        reload_fail_text.contains("  Failed (1):\n    - webapp (Web App): reload failed\n"),
+        "expected reload failure detail in Failed bucket:\n{reload_fail_text}"
+    );
 }

@@ -27,6 +27,15 @@ use crate::error::{RecipeError, RecipeErrorKind};
 use crate::utilities::{collection, path, string};
 use super::Recipe;
 
+/// Parses `value` as a decimal TCP/UDP port number in `1..=65535`.
+#[must_use]
+pub(crate) fn parse_valid_port(value: &str) -> Option<u16> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value.parse::<u16>().ok().filter(|&port| port > 0)
+}
+
 /// Validates that every `pod.options` entry is a safe option argument.
 pub(crate) fn validate_pod_options(options: &[String], line: usize) -> Result<(), RecipeError> {
     for option in options {
@@ -68,13 +77,16 @@ pub(super) fn is_valid_host_bind_spec(value: &str) -> bool {
     is_valid_port_or_range(value)
 }
 
-/// Evaluates whether `value` is a numeric port (`1..=65535`) or port range (`<port>-<port>`).
+/// Evaluates whether `value` is a numeric port (`1..=65535`) or ascending port range (`<start>-<end>` with `start <= end`).
 #[must_use]
 pub(super) fn is_valid_port_or_range(value: &str) -> bool {
     if let Some((start, end)) = value.split_once('-') {
-        return is_valid_port(start) && is_valid_port(end);
+        return matches!(
+            (parse_valid_port(start), parse_valid_port(end)),
+            (Some(start_port), Some(end_port)) if start_port <= end_port
+        );
     }
-    is_valid_port(value)
+    parse_valid_port(value).is_some()
 }
 
 /// Evaluates whether `endpoint` is a valid publish endpoint without a `/<proto>` suffix.
@@ -151,15 +163,6 @@ fn is_valid_host_ip(value: &str) -> bool {
         return ipv6.parse::<Ipv6Addr>().is_ok();
     }
     value.parse::<Ipv4Addr>().is_ok()
-}
-
-/// Evaluates whether `value` is a decimal TCP/UDP port number in `1..=65535`.
-#[must_use]
-fn is_valid_port(value: &str) -> bool {
-    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return false;
-    }
-    value.parse::<u16>().is_ok_and(|port| port > 0)
 }
 
 /// Evaluates whether `spec` is a complete Podman `--publish` specification string.

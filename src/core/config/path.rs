@@ -73,8 +73,8 @@ pub fn resolve_config_path(config: Option<&Path>) -> PathBuf {
 /// # Errors
 ///
 /// Returns [`PodError`] with [`ConfigErrorKind::MissingEditor`] when `editor` is empty or
-/// whitespace-only, or [`ConfigErrorKind::InvalidPath`] when `editor` is not a valid executable
-/// name or path.
+/// whitespace-only, [`ConfigErrorKind::DisallowedEditor`] when `editor` resolves to `podman`,
+/// or [`ConfigErrorKind::InvalidPath`] when `editor` is not a valid executable name or path.
 pub fn validate_editor(editor: &str) -> Result<&str, PodError> {
     if editor.trim().is_empty() {
         return Err(PodError::from(ConfigError::new(
@@ -83,10 +83,12 @@ pub fn validate_editor(editor: &str) -> Result<&str, PodError> {
         )));
     }
     if !path_util::is_valid_editor_value(editor) {
-        return Err(PodError::from(ConfigError::without_line(
-            ConfigErrorKind::InvalidPath,
-            editor,
-        )));
+        let kind = if path_util::is_disallowed_editor_value(editor) {
+            ConfigErrorKind::DisallowedEditor
+        } else {
+            ConfigErrorKind::InvalidPath
+        };
+        return Err(PodError::from(ConfigError::without_line(kind, editor)));
     }
     Ok(editor)
 }

@@ -235,6 +235,7 @@ where
         stdout,
         stderr,
     )?;
+    let previous_outcome = record.outcome;
     record.outcome = detect_stale_container_image(
         &container.name,
         &record.image,
@@ -243,6 +244,15 @@ where
         runners.query_container_image,
         runners.query_image,
     );
+    if previous_outcome == PullOutcome::UpToDate && record.outcome == PullOutcome::Updated {
+        log::write_print(
+            stdout,
+            &format!(
+                "Container '{}' is running an older image; reloading.",
+                container.name
+            ),
+        );
+    }
     let action = apply_update_action(container, pod, record.outcome, simulate, stdout, stderr)?;
     Ok(ContainerUpdateResult { action, record })
 }

@@ -328,11 +328,12 @@ fn parse_bool_directive(directive: &PslDirective<'_>) -> Result<bool, ConfigErro
 fn parse_editor_directive(directive: &PslDirective<'_>) -> Result<String, ConfigError> {
     let value = parse_single_argument(directive)?;
     if !path_util::is_valid_editor_value(value) {
-        return Err(ConfigError::with_token(
-            ConfigErrorKind::InvalidPath,
-            directive.line,
-            value,
-        ));
+        let kind = if path_util::is_disallowed_editor_value(value) {
+            ConfigErrorKind::DisallowedEditor
+        } else {
+            ConfigErrorKind::InvalidPath
+        };
+        return Err(ConfigError::with_token(kind, directive.line, value));
     }
     Ok(value.to_owned())
 }

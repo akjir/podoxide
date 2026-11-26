@@ -217,7 +217,7 @@ pod \"  Si  Po \" {
     publish 8080 80 TCP
     publish \"127.0.0.1:\" 42
     publish 127.0.0.1:62 43 UDP
-    publish 600-500
+    publish 500-600
     publish \"\" 83
     publish 124
     publish 12 UDP
@@ -266,7 +266,7 @@ container {
             "8080:80/TCP",
             "127.0.0.1::42",
             "127.0.0.1:62:43/UDP",
-            "600-500",
+            "500-600",
             "83",
             "124",
             "12/UDP",
@@ -347,4 +347,42 @@ fn resolve_container_rejects_empty_wildcard_and_handles_unvalidated_recipes() {
     let invalid_pod_resolve = invalid_pod_recipe.resolve_container_name("*f").unwrap_err();
     assert_eq!(invalid_pod_resolve.kind, RecipeErrorKind::ContainerNotFound);
     assert_eq!(invalid_pod_resolve.line, Some(3));
+
+    let mut numeric_recipe = Recipe::from_str(
+        "\
+pod num_pod {
+    name \"Numeric Pod\"
+    path /pods/num_pod
+    registry docker.io
+}
+container 0 {
+    image alpine:latest
+}
+container 8080 {
+    image alpine:latest
+}
+container *10 {
+    image alpine:latest
+}
+",
+    )
+    .unwrap();
+    let mut numeric_config = Config::new();
+    numeric_config.pods.path = PathBuf::from("/pods");
+    validation::validate_recipe_inner(&mut numeric_recipe, &numeric_config, "num_pod").unwrap();
+
+    assert_eq!(numeric_recipe.resolve_container_name("0").unwrap(), "0");
+    assert_eq!(
+        numeric_recipe.resolve_container_name("8080").unwrap(),
+        "8080"
+    );
+    assert_eq!(
+        numeric_recipe.resolve_container_name("10").unwrap(),
+        "num_pod-10"
+    );
+    assert_eq!(numeric_recipe.resolve_container_name("1").unwrap(), "0");
+    assert_eq!(
+        numeric_recipe.resolve_container_name("4").unwrap_err().kind,
+        RecipeErrorKind::ContainerNotFound
+    );
 }

@@ -23,10 +23,98 @@ use crate::utilities::collection::{self, MAX_COLLECTION_PREALLOC};
 use crate::utilities::string;
 use super::{Config, MAX_GROUP_EXPANSION_DEPTH};
 
-/// Mutable single-pass state for target expansion, cycle detection, and order-preserving deduplication.
+/// Depth-bounded DFS validator verifying acyclicity and [`MAX_GROUP_EXPANSION_DEPTH`] across groups.
+struct GroupDepthValidator<'a> {
+    group_lines: &'a BTreeMap<&'a str, usize>,
+    groups: &'a BTreeMap<String, Vec<String>>,
+    heights: BTreeMap<&'a str, usize>,
+    visiting: BTreeSet<&'a str>,
+}
+
+impl<'a> GroupDepthValidator<'a> {
+    /// Creates a new [`GroupDepthValidator`] for `groups` and their source line map `group_lines`.
+    #[must_use]
+    fn new(
+        groups: &'a BTreeMap<String, Vec<String>>,
+        group_lines: &'a BTreeMap<&'a str, usize>,
+    ) -> Self {
+        Self {
+            group_lines,
+            groups,
+            heights: BTreeMap::new(),
+            visiting: BTreeSet::new(),
+        }
+    }
+
+    /// Computes and memoizes the maximum defined-group nesting height starting from `group_name`.
+    fn compute_group_height(
+        &mut self,
+        group_name: &'a str,
+        targets: &'a [String],
+        fallback_line: usize,
+    ) -> Result<usize, ConfigError> {
+        if let Some(&cached_height) = self.heights.get(group_name) {
+            return Ok(cached_height);
+        }
+        let line = self
+            .group_lines
+            .get(group_name)
+            .copied()
+            .unwrap_or(fallback_line);
+        self.visiting.insert(group_name);
+        let mut max_height = 1_usize;
+        for target in targets {
+            let candidate_height = self.compute_target_height(target.as_str(), line)?;
+            max_height = max_height.max(candidate_height);
+        }
+        self.visiting.remove(group_name);
+        self.heights.insert(group_name, max_height);
+        Ok(max_height)
+    }
+
+    /// Evaluates a single target entry of the currently visiting group for cycles and [`MAX_GROUP_EXPANSION_DEPTH`].
+    fn compute_target_height(
+        &mut self,
+        target: &'a str,
+        line: usize,
+    ) -> Result<usize, ConfigError> {
+        let Some(subgroup) = target.strip_prefix('@') else {
+            return Ok(1);
+        };
+        let Some(subgroup_targets) = self.groups.get(subgroup) else {
+            return Ok(1);
+        };
+        if self.visiting.contains(subgroup) {
+            return Err(ConfigError::with_token(
+                ConfigErrorKind::InvalidGroupTarget,
+                line,
+                target,
+            ));
+        }
+        if self.visiting.len() >= MAX_GROUP_EXPANSION_DEPTH {
+            return Err(ConfigError::with_token(
+                ConfigErrorKind::GroupDepthExceeded,
+                line,
+                target,
+            ));
+        }
+        let child_height = self.compute_group_height(subgroup, subgroup_targets, line)?;
+        let candidate_height = child_height.saturating_add(1);
+        if candidate_height > MAX_GROUP_EXPANSION_DEPTH {
+            return Err(ConfigError::with_token(
+                ConfigErrorKind::GroupDepthExceeded,
+                line,
+                target,
+            ));
+        }
+        Ok(candidate_height)
+    }
+}
+
+/// Mutable single-pass state for target expansion, cycle detection, height memoization, and deduplication.
 struct TargetExpander<'a> {
     collected: Vec<String>,
-    expanded_groups: BTreeSet<&'a str>,
+    expanded_groups: BTreeMap<&'a str, usize>,
     seen_recipes: BTreeSet<&'a str>,
     visiting: BTreeSet<&'a str>,
 }
@@ -37,7 +125,7 @@ impl<'a> TargetExpander<'a> {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             collected: Vec::with_capacity(capacity),
-            expanded_groups: BTreeSet::new(),
+            expanded_groups: BTreeMap::new(),
             seen_recipes: BTreeSet::new(),
             visiting: BTreeSet::new(),
         }
@@ -104,17 +192,9 @@ pub(super) fn validate_groups_acyclic(
     group_lines: &BTreeMap<&str, usize>,
     fallback_line: usize,
 ) -> Result<(), ConfigError> {
-    let mut visiting = BTreeSet::new();
-    let mut verified = BTreeSet::new();
-    for group_name in groups.keys() {
-        verify_group_acyclic(
-            group_name.as_str(),
-            groups,
-            group_lines,
-            &mut visiting,
-            &mut verified,
-            fallback_line,
-        )?;
+    let mut validator = GroupDepthValidator::new(groups, group_lines);
+    for (group_name, targets) in groups {
+        validator.compute_group_height(group_name.as_str(), targets, fallback_line)?;
     }
     Ok(())
 }
@@ -128,13 +208,13 @@ fn collect_group_recipes<'a>(group_targets: &'a [String], recipes: &mut BTreeSet
     }
 }
 
-/// Recursively expands a single `@<group>` target from `config.recipes.groups` within [`MAX_GROUP_EXPANSION_DEPTH`].
+/// Recursively expands a single `@<group>` target within [`MAX_GROUP_EXPANSION_DEPTH`], returning its nesting height.
 fn expand_group_target<'a>(
     config: &'a Config,
     group_target: &'a str,
     group_name: &'a str,
     expander: &mut TargetExpander<'a>,
-) -> Result<(), ConfigError> {
+) -> Result<usize, ConfigError> {
     if !string::is_valid_identifier(group_name) {
         return Err(ConfigError::without_line(
             ConfigErrorKind::UnknownGroup,
@@ -147,24 +227,36 @@ fn expand_group_target<'a>(
             group_target,
         ));
     };
-    if expander.visiting.contains(group_name)
-        || expander.visiting.len() >= MAX_GROUP_EXPANSION_DEPTH
-    {
+    if expander.visiting.contains(group_name) {
         return Err(ConfigError::without_line(
             ConfigErrorKind::InvalidGroupTarget,
             group_target,
         ));
     }
-    if expander.expanded_groups.contains(group_name) {
-        return Ok(());
+    if let Some(&cached_height) = expander.expanded_groups.get(group_name) {
+        if expander.visiting.len().saturating_add(cached_height) > MAX_GROUP_EXPANSION_DEPTH {
+            return Err(ConfigError::without_line(
+                ConfigErrorKind::GroupDepthExceeded,
+                group_target,
+            ));
+        }
+        return Ok(cached_height);
+    }
+    if expander.visiting.len() >= MAX_GROUP_EXPANSION_DEPTH {
+        return Err(ConfigError::without_line(
+            ConfigErrorKind::GroupDepthExceeded,
+            group_target,
+        ));
     }
     expander.visiting.insert(group_name);
+    let mut max_height = 1_usize;
     for entry in entries {
-        expand_single_group_entry(config, entry.as_str(), expander)?;
+        let child_height = expand_single_group_entry(config, entry.as_str(), expander)?;
+        max_height = max_height.max(child_height.saturating_add(1));
     }
     expander.visiting.remove(group_name);
-    expander.expanded_groups.insert(group_name);
-    Ok(())
+    expander.expanded_groups.insert(group_name, max_height);
+    Ok(max_height)
 }
 
 /// Expands a single entry (`@<subgroup>` or `<recipe>`) declared inside a group in `config.recipes.groups`.
@@ -172,7 +264,7 @@ fn expand_single_group_entry<'a>(
     config: &'a Config,
     entry: &'a str,
     expander: &mut TargetExpander<'a>,
-) -> Result<(), ConfigError> {
+) -> Result<usize, ConfigError> {
     if let Some(subgroup_name) = entry.strip_prefix('@') {
         return expand_group_target(config, entry, subgroup_name, expander);
     }
@@ -183,7 +275,7 @@ fn expand_single_group_entry<'a>(
         ));
     }
     expander.push_unique(entry);
-    Ok(())
+    Ok(0)
 }
 
 /// Expands a single CLI target (`@<group>` or `<recipe>`) into `expander`.
@@ -193,7 +285,8 @@ fn expand_single_target<'a>(
     expander: &mut TargetExpander<'a>,
 ) -> Result<(), ConfigError> {
     if let Some(group_name) = target.strip_prefix('@') {
-        return expand_group_target(config, target, group_name, expander);
+        expand_group_target(config, target, group_name, expander)?;
+        return Ok(());
     }
     if !has_recipe(config, target) {
         return Err(ConfigError::without_line(
@@ -209,62 +302,4 @@ fn expand_single_target<'a>(
 #[must_use]
 fn group_contains_recipe(entries: &[String], recipe_name: &str) -> bool {
     entries.iter().any(|entry| entry == recipe_name)
-}
-
-/// Performs depth-bounded DFS cycle detection starting from `group_name`.
-fn verify_group_acyclic<'a>(
-    group_name: &'a str,
-    groups: &'a BTreeMap<String, Vec<String>>,
-    group_lines: &BTreeMap<&str, usize>,
-    visiting: &mut BTreeSet<&'a str>,
-    verified: &mut BTreeSet<&'a str>,
-    fallback_line: usize,
-) -> Result<(), ConfigError> {
-    let Some(targets) = groups.get(group_name) else {
-        return Ok(());
-    };
-    let line = group_lines
-        .get(group_name)
-        .copied()
-        .unwrap_or(fallback_line);
-    if visiting.len() >= MAX_GROUP_EXPANSION_DEPTH {
-        return Err(ConfigError::with_token(
-            ConfigErrorKind::InvalidGroupTarget,
-            line,
-            group_name,
-        ));
-    }
-    if verified.contains(group_name) {
-        return Ok(());
-    }
-    visiting.insert(group_name);
-    verify_group_targets(targets, groups, group_lines, visiting, verified, line)?;
-    visiting.remove(group_name);
-    verified.insert(group_name);
-    Ok(())
-}
-
-/// Inspects all `@<subgroup>` targets of the currently visiting group for cycles and depth limits.
-fn verify_group_targets<'a>(
-    targets: &'a [String],
-    groups: &'a BTreeMap<String, Vec<String>>,
-    group_lines: &BTreeMap<&str, usize>,
-    visiting: &mut BTreeSet<&'a str>,
-    verified: &mut BTreeSet<&'a str>,
-    line: usize,
-) -> Result<(), ConfigError> {
-    for target in targets {
-        let Some(subgroup) = target.strip_prefix('@') else {
-            continue;
-        };
-        if visiting.contains(subgroup) || visiting.len() >= MAX_GROUP_EXPANSION_DEPTH {
-            return Err(ConfigError::with_token(
-                ConfigErrorKind::InvalidGroupTarget,
-                line,
-                target.as_str(),
-            ));
-        }
-        verify_group_acyclic(subgroup, groups, group_lines, visiting, verified, line)?;
-    }
-    Ok(())
 }

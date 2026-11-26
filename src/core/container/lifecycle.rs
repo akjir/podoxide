@@ -243,7 +243,7 @@ pub fn up_with<W: Write, E: Write>(
     Ok(create_outcome.combine(start_outcome))
 }
 
-/// Executes `podman create` for an already validated `container` and `pod` without re-validating `pod`.
+/// Executes `podman create` for an already validated `container` and `pod` without creating `pod`.
 pub(crate) fn create_validated<W: Write, E: Write>(
     container: &Container,
     pod: &Pod,
@@ -251,7 +251,26 @@ pub(crate) fn create_validated<W: Write, E: Write>(
     stdout: &mut W,
     stderr: &mut E,
 ) -> Result<ExecOutcome, PodError> {
-    create_validated_with_pod_check(container, pod, simulate, podman::pod_exists, stdout, stderr)
+    let label = validation::container_label(&container.name);
+    let volumes =
+        volume::format_volume_mounts(&container.volumes, &pod.path, container.line, label)?;
+    let image = update::resolve_image_reference(container, pod);
+    let prefix = format!("Create container '{}': ", container.name);
+    podman::create_container(
+        &CreateContainer {
+            commands: &container.commands,
+            container_name: &container.name,
+            image: &image,
+            options: &container.options,
+            pod_name: &pod.id,
+            restart: &container.restart,
+            volumes: &volumes,
+        },
+        &prefix,
+        simulate,
+        stdout,
+        stderr,
+    )
 }
 
 /// Validates `container` and `pod`, ensures `pod` exists via `pod_exists`, and executes `podman create`.
@@ -269,43 +288,7 @@ where
     F: FnOnce(&str) -> bool,
 {
     container.validate_create(pod)?;
-    create_validated_with_pod_check(container, pod, simulate, pod_exists, stdout, stderr)
-}
-
-/// Formats volumes, ensures `pod` exists via `pod_exists`, and executes `podman create` for already validated inputs.
-fn create_validated_with_pod_check<W, E, F>(
-    container: &Container,
-    pod: &Pod,
-    simulate: bool,
-    pod_exists: F,
-    stdout: &mut W,
-    stderr: &mut E,
-) -> Result<ExecOutcome, PodError>
-where
-    W: Write,
-    E: Write,
-    F: FnOnce(&str) -> bool,
-{
-    let label = validation::container_label(&container.name);
-    let volumes =
-        volume::format_volume_mounts(&container.volumes, &pod.path, container.line, label)?;
-    let image = update::resolve_image_reference(container, pod);
-    let pod_outcome = pod.ensure_created_validated(simulate, pod_exists, stdout, stderr)?;
-    let prefix = format!("Create container '{}': ", container.name);
-    let create_outcome = podman::create_container(
-        &CreateContainer {
-            commands: &container.commands,
-            container_name: &container.name,
-            image: &image,
-            options: &container.options,
-            pod_name: &pod.id,
-            restart: &container.restart,
-            volumes: &volumes,
-        },
-        &prefix,
-        simulate,
-        stdout,
-        stderr,
-    )?;
+    let pod_outcome = pod.ensure_created_with(simulate, pod_exists, stdout, stderr)?;
+    let create_outcome = create_validated(container, pod, simulate, stdout, stderr)?;
     Ok(pod_outcome.combine(create_outcome))
 }

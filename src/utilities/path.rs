@@ -58,6 +58,12 @@ pub fn has_regular_target_name(path: &Path) -> bool {
     path.file_name().is_some() && !raw_bytes.ends_with(b"/") && !raw_bytes.ends_with(b"/.")
 }
 
+/// Evaluates whether `value` is a structurally valid editor path whose executable name is disallowed (`podman`).
+#[must_use]
+pub fn is_disallowed_editor_value(value: &str) -> bool {
+    valid_editor_file_name(value).is_some_and(|file_name| file_name.eq_ignore_ascii_case("podman"))
+}
+
 /// Evaluates whether `path` is a valid UTF-8 directory path without `..` traversal, colons, or control characters.
 #[must_use]
 pub fn is_valid_directory(path: &Path) -> bool {
@@ -86,22 +92,7 @@ pub fn is_valid_directory_path(value: &str) -> bool {
 /// Evaluates whether `value` is a safe bare executable name or absolute path without `..` traversal, leading dashes, or control/whitespace characters.
 #[must_use]
 pub fn is_valid_editor_value(value: &str) -> bool {
-    if value.is_empty()
-        || value.starts_with('-')
-        || (value.contains('/') && !value.starts_with('/'))
-        || string::contains_control_or_whitespace(value)
-        || has_parent_dir(Path::new(value))
-    {
-        return false;
-    }
-    let Some(file_name) = value.rsplit('/').next() else {
-        return false;
-    };
-    !file_name.is_empty()
-        && file_name != "."
-        && file_name != ".."
-        && !file_name.starts_with('-')
-        && !file_name.eq_ignore_ascii_case("podman")
+    valid_editor_file_name(value).is_some_and(|file_name| !file_name.eq_ignore_ascii_case("podman"))
 }
 
 /// Evaluates whether `path` is a structurally valid, UTF-8 target file path without `..` traversal or leading `-`/`+`.
@@ -283,6 +274,24 @@ fn strip_leading_cur_dir(mut path: &Path) -> &Path {
         path = stripped;
     }
     path
+}
+
+/// Extracts the validated terminal executable name from a bare or absolute editor path.
+#[must_use]
+fn valid_editor_file_name(value: &str) -> Option<&str> {
+    if value.is_empty()
+        || value.starts_with('-')
+        || (value.contains('/') && !value.starts_with('/'))
+        || string::contains_control_or_whitespace(value)
+        || has_parent_dir(Path::new(value))
+    {
+        return None;
+    }
+    let file_name = value.rsplit('/').next()?;
+    if file_name.is_empty() || file_name == "." || file_name == ".." || file_name.starts_with('-') {
+        return None;
+    }
+    Some(file_name)
 }
 
 #[cfg(test)]

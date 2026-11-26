@@ -126,7 +126,17 @@ container *b {
     assert_eq!(stale_result.containers[0].outcome, PullOutcome::UpToDate);
     assert_eq!(stale_result.containers[1].outcome, PullOutcome::Updated);
     let stale_text = String::from_utf8(stale_out).unwrap();
-    assert!(stale_text.contains("  Stop container 'shared-b': "));
+    let notice = "  Container 'shared-b' is running an older image; reloading.";
+    let notice_pos = stale_text
+        .find(notice)
+        .expect("expected indented stale-container notice before pod reload");
+    let stop_pos = stale_text
+        .find("  Stop container 'shared-b': ")
+        .expect("expected indented Stop container output");
+    assert!(
+        notice_pos < stop_pos,
+        "stale notice must appear before pod reload output:\n{stale_text}"
+    );
     assert!(stale_text.contains("  Start container 'shared-b': "));
 
     let mut current_cache = PullCache::new();

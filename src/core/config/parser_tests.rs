@@ -83,7 +83,7 @@ fn red_team_cycles_depth_path_traversal_editor_and_target_exploits() {
         "        g{:03} leaf\n    }}\n}}\n",
         MAX_GROUP_EXPANSION_DEPTH + 1
     ));
-    assert_config_error(&deep_psl, ConfigErrorKind::InvalidGroupTarget);
+    assert_config_error(&deep_psl, ConfigErrorKind::GroupDepthExceeded);
 
     let valid_dag = "\
 recipes {
@@ -178,12 +178,12 @@ recipes {
     .unwrap_err();
     match podman_editor_error {
         PodError::Config(config_error) => {
-            assert_eq!(config_error.kind, ConfigErrorKind::InvalidPath);
+            assert_eq!(config_error.kind, ConfigErrorKind::DisallowedEditor);
             let diagnostic = config_error.diagnostic.as_ref().unwrap();
             assert!(diagnostic.annotation_text.contains("podman"));
             assert!(diagnostic.help_text.contains("podman"));
         }
-        other => panic!("expected PodError::Config(InvalidPath), got {other:?}"),
+        other => panic!("expected PodError::Config(DisallowedEditor), got {other:?}"),
     }
 
     for valid_editor in ["vim", "nvim", "/usr/bin/vim", "/usr/local/bin/editor_1"] {
@@ -402,5 +402,79 @@ fn reject_all_semantic_and_syntactic_config_errors() {
             assert_eq!(diagnostic.annotation_carets, "^^^^^^");
         }
         other => panic!("expected PodError::Psl, got {other:?}"),
+    }
+}
+
+#[test]
+fn sorted_deep_group_chain_missing_at_max_depth_and_editor_path_diagnostics() {
+    // Bottom-up sorted 66-level chain (a00 -> a65) must be rejected on parse.
+    let mut sorted_deep = String::from("recipes {\n    groups {\n        a00 app\n");
+    for index in 1..=(MAX_GROUP_EXPANSION_DEPTH + 1) {
+        sorted_deep.push_str(&format!("        a{index:02} @a{:02}\n", index - 1));
+    }
+    sorted_deep.push_str("    }\n}\n");
+    let sorted_err = Config::from_str(&sorted_deep).unwrap_err();
+    assert!(
+        matches!(
+            sorted_err,
+            PodError::Config(ref error) if error.kind == ConfigErrorKind::GroupDepthExceeded
+        ),
+        "expected GroupDepthExceeded for sorted 66-level group chain, got {sorted_err:?}"
+    );
+
+    // Undefined @missing at exact depth 64 must pass parse and fail with UnknownGroup on expand.
+    let mut missing_at_64 = String::from("recipes {\n    groups {\n");
+    for index in 0..(MAX_GROUP_EXPANSION_DEPTH - 1) {
+        missing_at_64.push_str(&format!("        d{index:02} @d{:02}\n", index + 1));
+    }
+    missing_at_64.push_str(&format!(
+        "        d{:02} @missing\n    }}\n}}\n",
+        MAX_GROUP_EXPANSION_DEPTH - 1
+    ));
+    let parsed_missing = Config::from_str(&missing_at_64)
+        .expect("undefined @missing at depth 64 must pass parse time");
+    let expand_err = parsed_missing
+        .expand_targets(&[String::from("@d00")])
+        .unwrap_err();
+    assert!(
+        matches!(
+            expand_err,
+            PodError::Config(ref error) if error.kind == ConfigErrorKind::UnknownGroup
+        ),
+        "expected UnknownGroup for @missing at depth 64, got {expand_err:?}"
+    );
+
+    // pods.path ending in /podman with invalid colon must NOT report an external editor error.
+    let pods_path_err = Config::from_str(
+        "pods {\n    path /tmp/a:b/podman\n}\nrecipes {\n    groups {\n        all app\n    }\n}\n",
+    )
+    .unwrap_err();
+    match pods_path_err {
+        PodError::Config(config_error) => {
+            assert_eq!(config_error.kind, ConfigErrorKind::InvalidPath);
+            let rendered = config_error.to_string();
+            assert!(
+                !rendered.contains("not allowed as an external editor"),
+                "pods.path must not emit external editor diagnostic: {rendered}"
+            );
+        }
+        other => panic!("expected InvalidPath for pods.path, got {other:?}"),
+    }
+
+    // general.editor with literal '..' inside a normal dir name ending in /podman must report disallowed podman editor.
+    let dot_dir_editor_err = Config::from_str(
+        "general {\n    editor /opt/v1..2/podman\n}\nrecipes {\n    groups {\n        all app\n    }\n}\n",
+    )
+    .unwrap_err();
+    match dot_dir_editor_err {
+        PodError::Config(config_error) => {
+            assert_eq!(config_error.kind, ConfigErrorKind::DisallowedEditor);
+            let rendered = config_error.to_string();
+            assert!(
+                rendered.contains("not allowed") && rendered.contains("'podman'"),
+                "expected disallowed podman editor message, got: {rendered}"
+            );
+        }
+        other => panic!("expected DisallowedEditor for /opt/v1..2/podman, got {other:?}"),
     }
 }

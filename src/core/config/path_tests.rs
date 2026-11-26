@@ -71,7 +71,9 @@ fn extract_config_stem_resolve_config_and_validate_editor() {
     ));
     assert!(matches!(
         validate_editor("podman"),
-        Err(PodError::Config(error)) if error.kind == ConfigErrorKind::InvalidPath
+        Err(PodError::Config(ref error))
+            if error.kind == ConfigErrorKind::DisallowedEditor
+                && error.to_string().contains("'podman'")
     ));
 
     for invalid in [

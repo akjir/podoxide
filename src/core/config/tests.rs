@@ -229,8 +229,34 @@ fn expand_targets_handles_wide_diamond_dag_and_enforces_depth_bound() {
         .unwrap_err();
     assert!(matches!(
         depth_error,
-        PodError::Config(ref error) if error.kind == ConfigErrorKind::InvalidGroupTarget
+        PodError::Config(ref error) if error.kind == ConfigErrorKind::GroupDepthExceeded
     ));
+
+    // Programmatic 66-level chain must reject @a65 consistently even after pre-expanding @a05.
+    let mut bottom_up_deep = Config::new();
+    bottom_up_deep
+        .recipes
+        .groups
+        .insert(String::from("a00"), vec![String::from("app")]);
+    for index in 1..=(MAX_GROUP_EXPANSION_DEPTH + 1) {
+        bottom_up_deep
+            .recipes
+            .groups
+            .insert(format!("a{index:02}"), vec![format!("@a{:02}", index - 1)]);
+    }
+    let direct_err = bottom_up_deep
+        .expand_targets(&[String::from("@a65")])
+        .unwrap_err();
+    let cached_err = bottom_up_deep
+        .expand_targets(&[String::from("@a05"), String::from("@a65")])
+        .unwrap_err();
+    match (direct_err, cached_err) {
+        (PodError::Config(direct), PodError::Config(cached)) => {
+            assert_eq!(direct.kind, ConfigErrorKind::GroupDepthExceeded);
+            assert_eq!(cached.kind, ConfigErrorKind::GroupDepthExceeded);
+        }
+        other => panic!("expected GroupDepthExceeded depth errors, got {other:?}"),
+    }
 }
 
 #[test]

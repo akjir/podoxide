@@ -361,3 +361,30 @@ fn pod_down_and_start_continue_when_containers_do_not_exist_and_return_failed_ou
         2
     );
 }
+
+#[test]
+fn pod_create_with_invokes_pod_create_only_once_when_pod_create_fails() {
+    let mut recipe = sample_multi_container_recipe();
+    recipe.pod.id = String::from("podoxide_create_fail_999999");
+    recipe.pod.options = vec![String::from("--podoxide-nonexistent-flag")];
+    for (index, container) in recipe.containers.iter_mut().enumerate() {
+        container.name = format!("podoxide_create_fail_999999-{}", index + 1);
+        container.options = vec![String::from("--pull=never")];
+    }
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let outcome = create_with(&recipe, false, &mut stdout, &mut stderr).unwrap();
+    assert_eq!(outcome, ExecOutcome::Failed);
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8(stdout).unwrap(),
+        String::from_utf8(stderr).unwrap()
+    );
+    let pod_create_invocations = combined.matches("Create pod 'Order Stack'").count();
+    assert_eq!(
+        pod_create_invocations, 1,
+        "pod::create_with must invoke podman pod create only once on failure:\n{combined}"
+    );
+}

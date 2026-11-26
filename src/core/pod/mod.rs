@@ -89,7 +89,14 @@ impl Pod {
         F: FnOnce(&str) -> bool,
     {
         self.validate_create()?;
-        self.ensure_created_validated(simulate, pod_exists, stdout, stderr)
+        if self.created.get() {
+            return Ok(ExecOutcome::Succeeded);
+        }
+        if pod_exists(&self.id) {
+            self.created.set(true);
+            return Ok(ExecOutcome::Succeeded);
+        }
+        self.create_validated(simulate, stdout, stderr)
     }
 
     /// Removes this pod in Podman (`podman pod rm`), writing command output to `stdout` and `stderr`.
@@ -160,29 +167,6 @@ impl Pod {
             self.created.set(true);
         }
         Ok(outcome)
-    }
-
-    /// Ensures this pod exists via `pod_exists`, skipping redundant validation when already checked.
-    pub(crate) fn ensure_created_validated<W, E, F>(
-        &self,
-        simulate: bool,
-        pod_exists: F,
-        stdout: &mut W,
-        stderr: &mut E,
-    ) -> Result<ExecOutcome, PodError>
-    where
-        W: Write,
-        E: Write,
-        F: FnOnce(&str) -> bool,
-    {
-        if self.created.get() {
-            return Ok(ExecOutcome::Succeeded);
-        }
-        if pod_exists(&self.id) {
-            self.created.set(true);
-            return Ok(ExecOutcome::Succeeded);
-        }
-        self.create_validated(simulate, stdout, stderr)
     }
 }
 

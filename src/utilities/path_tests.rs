@@ -21,10 +21,10 @@ use std::path::{Path, PathBuf};
 
 use crate::error::MAX_ERROR_TOKEN_BYTES;
 use super::{
-    build_full_path, has_parent_dir, has_regular_target_name, is_valid_directory,
-    is_valid_directory_path, is_valid_editor_value, is_valid_target_path, is_valid_volume_options,
-    matches_extension, normalize_lexical_path, parent_or_cur_dir, pop_relative_or_absolute,
-    relative_display_path, sanitize_path_token,
+    build_full_path, has_parent_dir, has_regular_target_name, is_disallowed_editor_value,
+    is_valid_directory, is_valid_directory_path, is_valid_editor_value, is_valid_target_path,
+    is_valid_volume_options, matches_extension, normalize_lexical_path, parent_or_cur_dir,
+    pop_relative_or_absolute, relative_display_path, sanitize_path_token,
 };
 
 #[test]
@@ -90,6 +90,12 @@ fn build_full_path_and_directory_validation_and_sanitization() {
     assert!(!is_valid_editor_value("vim -u NONE"));
     assert!(!is_valid_editor_value("podman"));
     assert!(!is_valid_editor_value("/usr/bin/podman"));
+    assert!(!is_valid_editor_value("/opt/v1..2/podman"));
+    assert!(is_disallowed_editor_value("podman"));
+    assert!(is_disallowed_editor_value("/usr/bin/podman"));
+    assert!(is_disallowed_editor_value("/opt/v1..2/podman"));
+    assert!(!is_disallowed_editor_value("../podman"));
+    assert!(!is_disallowed_editor_value("vim"));
 
     assert!(is_valid_volume_options("ro,Z"));
     assert!(!is_valid_volume_options(""));
