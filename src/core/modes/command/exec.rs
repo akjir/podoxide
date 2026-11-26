@@ -19,12 +19,11 @@ use std::io::{self, Write};
 
 use crate::core::context::Context;
 use crate::core::pod::PodCommand;
-use crate::core::recipe::Recipe;
+use crate::core::recipe::{Recipe, tokenizer};
 use crate::error::{CliError, CliErrorKind, PodError, RecipeError, RecipeErrorKind};
 use crate::io::exec::command::ExecOutcome;
 use crate::io::exec::podman::{self, ExecContainer};
 use crate::utilities::string;
-use super::tokenizer;
 
 /// Resolves and executes a predefined maintenance command declared in a recipe's `pod` block.
 ///
@@ -71,7 +70,18 @@ fn exec_command<W: Write, E: Write>(
 ) -> Result<ExecOutcome, PodError> {
     let (key, command) = resolve_command(recipe, command_spec, stderr)?;
     let execute_tokens = validate_command(key, command, command.line)?;
-    let container_name = recipe.resolve_container_name(&command.container)?;
+    let container_name =
+        recipe
+            .resolve_container_name(&command.container)
+            .map_err(|mut error| {
+                let line = if command.line == 0 {
+                    recipe.pod.line
+                } else {
+                    command.line
+                };
+                error.line = (line > 0).then_some(line);
+                error
+            })?;
     let prefix = format!(
         "Execute command '{}' in container '{container_name}': ",
         command.execute
@@ -177,34 +187,7 @@ fn validate_command(key: &str, command: &PodCommand, line: usize) -> Result<Vec<
             &command.name,
         )));
     }
-    if !string::is_valid_text(&command.execute) || command.execute.trim_start().starts_with('-') {
-        return Err(PodError::from(RecipeError::at_line_or_none(
-            RecipeErrorKind::InvalidCommand,
-            line,
-            &command.name,
-        )));
-    }
-    let Some(tokens) = tokenizer::split_execute_tokens(&command.execute) else {
-        return Err(PodError::from(RecipeError::at_line_or_none(
-            RecipeErrorKind::InvalidCommand,
-            line,
-            &command.name,
-        )));
-    };
-    let Some(program) = tokens.first() else {
-        return Err(PodError::from(RecipeError::at_line_or_none(
-            RecipeErrorKind::InvalidCommand,
-            line,
-            &command.name,
-        )));
-    };
-    if !string::is_valid_token(program) {
-        return Err(PodError::from(RecipeError::at_line_or_none(
-            RecipeErrorKind::InvalidCommand,
-            line,
-            program,
-        )));
-    }
+    let tokens = tokenizer::validate_execute_tokens(&command.execute, &command.name, line)?;
     if let Some(user) = &command.user
         && !string::is_valid_token(user)
     {

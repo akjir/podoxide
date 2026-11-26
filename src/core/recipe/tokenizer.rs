@@ -17,7 +17,9 @@
 
 use std::mem;
 
+use crate::error::{RecipeError, RecipeErrorKind};
 use crate::io::psl::MAX_ARGS_PER_STMT;
+use crate::utilities::string;
 
 /// Initial capacity pre-allocated for parsed `execute` argv tokens.
 const INITIAL_EXEC_TOKENS_CAPACITY: usize = 8;
@@ -35,7 +37,7 @@ enum QuoteState {
 
 /// Splits `input` into shell-style argv tokens, preserving single-quoted and double-quoted arguments.
 #[must_use]
-pub(super) fn split_execute_tokens(input: &str) -> Option<Vec<String>> {
+pub(crate) fn split_execute_tokens(input: &str) -> Option<Vec<String>> {
     let mut tokens = Vec::with_capacity(INITIAL_EXEC_TOKENS_CAPACITY);
     let mut current = String::new();
     let mut in_token = false;
@@ -61,6 +63,48 @@ pub(super) fn split_execute_tokens(input: &str) -> Option<Vec<String>> {
         tokens.push(current);
     }
     Some(tokens)
+}
+
+/// Validates and tokenizes a `command.execute` string, rejecting unclosed quotes, flag prefixes, or invalid program tokens.
+pub(crate) fn validate_execute_tokens(
+    execute: &str,
+    fallback_token: &str,
+    line: usize,
+) -> Result<Vec<String>, RecipeError> {
+    if !string::is_valid_text(execute) || execute.trim_start().starts_with('-') {
+        return Err(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            fallback_token,
+        ));
+    }
+    let Some(tokens) = split_execute_tokens(execute) else {
+        return Err(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            fallback_token,
+        ));
+    };
+    let Some(program) = tokens.first() else {
+        return Err(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            fallback_token,
+        ));
+    };
+    if !string::is_valid_token(program) {
+        let token = if program.is_empty() {
+            fallback_token
+        } else {
+            program.as_str()
+        };
+        return Err(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidCommand,
+            line,
+            token,
+        ));
+    }
+    Ok(tokens)
 }
 
 /// Processes an escaped `character` inside a double-quoted segment.

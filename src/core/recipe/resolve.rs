@@ -30,13 +30,16 @@ pub(super) fn resolve_container_entry<'a>(
     recipe: &'a Recipe,
     container_spec: &str,
 ) -> Result<ResolvedContainer<'a>, RecipeError> {
-    if !recipe.has_pod
-        || !string::is_valid_pod_or_container_name(&recipe.pod.id)
-        || !string::is_valid_text(container_spec)
-    {
+    if !recipe.has_pod || !string::is_valid_pod_or_container_name(&recipe.pod.id) {
         return Err(RecipeError::at_line_or_none(
             RecipeErrorKind::ContainerNotFound,
             recipe.pod.line,
+            container_spec,
+        ));
+    }
+    if !string::is_valid_text(container_spec) {
+        return Err(RecipeError::without_line(
+            RecipeErrorKind::ContainerNotFound,
             container_spec,
         ));
     }
@@ -60,9 +63,8 @@ pub(super) fn resolve_container_entry<'a>(
     ) {
         return Ok(found);
     }
-    Err(RecipeError::at_line_or_none(
+    Err(RecipeError::without_line(
         RecipeErrorKind::ContainerNotFound,
-        recipe.pod.line,
         container_spec,
     ))
 }
@@ -112,9 +114,8 @@ fn resolve_by_suffix<'a>(
     raw_spec: &str,
 ) -> Result<ResolvedContainer<'a>, RecipeError> {
     if !string::is_valid_container_suffix(suffix) {
-        return Err(RecipeError::at_line_or_none(
+        return Err(RecipeError::without_line(
             RecipeErrorKind::ContainerNotFound,
-            recipe.pod.line,
             raw_spec,
         ));
     }
@@ -124,9 +125,8 @@ fn resolve_by_suffix<'a>(
     {
         return Ok(found);
     }
-    Err(RecipeError::at_line_or_none(
+    Err(RecipeError::without_line(
         RecipeErrorKind::ContainerNotFound,
-        recipe.pod.line,
         raw_spec,
     ))
 }

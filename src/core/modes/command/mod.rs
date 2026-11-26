@@ -18,14 +18,13 @@
 pub mod exec;
 pub mod help;
 pub mod list;
-mod tokenizer;
 
 use std::io::Write;
 
 use crate::core::context::{CommandAction, Context};
 use crate::core::log;
 use crate::core::pod::PodCommand;
-use crate::core::recipe::Recipe;
+use crate::core::recipe::{Recipe, tokenizer};
 use crate::error::{ConfigError, ConfigErrorKind, PodError};
 use crate::io::exec::command::ExecOutcome;
 use crate::utilities::collection::{self, MAX_COLLECTION_PREALLOC};
@@ -90,7 +89,7 @@ pub(super) fn is_valid_command_entry(key: &str, command: &PodCommand) -> bool {
     string::is_valid_identifier(key)
         && key == command.name
         && string::is_valid_text(&command.container)
-        && string::is_valid_text(&command.execute)
+        && tokenizer::validate_execute_tokens(&command.execute, key, 0).is_ok()
         && (command.description.is_empty() || string::is_valid_text(&command.description))
         && command.user.as_deref().is_none_or(string::is_valid_token)
 }
@@ -165,6 +164,23 @@ mod tests {
             .insert(String::from("mismatch"), mismatched_command);
 
         assert!(!is_valid_command_entry("1bad", &PodCommand::new()));
+
+        for bad_execute in [
+            "--privileged sh",
+            "'--privileged' sh",
+            "sh -c 'unclosed",
+            "'' arg",
+            "'my script.sh' arg",
+        ] {
+            let mut malformed = PodCommand::new();
+            malformed.name = String::from("malformed");
+            malformed.container = String::from("*db");
+            malformed.execute = String::from(bad_execute);
+            assert!(
+                !is_valid_command_entry("malformed", &malformed),
+                "expected malformed execute {bad_execute:?} to be rejected"
+            );
+        }
 
         let commands = get_valid_commands(&recipe, false, &mut stderr);
         assert_eq!(commands.len(), 2);

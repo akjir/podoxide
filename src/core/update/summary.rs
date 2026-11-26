@@ -207,9 +207,14 @@ impl UpdateSummary {
         record: &ContainerPullRecord,
     ) {
         match action {
-            UpdateAction::Failed => self
-                .failed
-                .push(format!("{} ({})", record.container_name, record.image)),
+            UpdateAction::Failed => {
+                let entry = if record.outcome == PullOutcome::Failed {
+                    format!("{} ({})", record.container_name, record.image)
+                } else {
+                    format!("{}: reload failed", record.container_name)
+                };
+                self.failed.push(entry);
+            }
             UpdateAction::Reloaded => self
                 .changed
                 .push(format!("{} ({})", record.container_name, record.image)),

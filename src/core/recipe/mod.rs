@@ -18,6 +18,7 @@
 mod directives;
 mod parser;
 mod resolve;
+pub(crate) mod tokenizer;
 pub(crate) mod validation;
 
 use std::path::Path;

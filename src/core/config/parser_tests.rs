@@ -269,6 +269,10 @@ fn reject_all_semantic_and_syntactic_config_errors() {
         ConfigErrorKind::UnexpectedBlock,
     );
     assert_config_error(
+        "pod example-stack {\n    name \"Example\"\n}\nrecipes {\n    groups {\n        all app\n    }\n}",
+        ConfigErrorKind::UnexpectedBlock,
+    );
+    assert_config_error(
         "general {\n    nested {}\n}\nrecipes {\n    groups {\n        all app\n    }\n}",
         ConfigErrorKind::UnexpectedBlock,
     );
@@ -287,6 +291,10 @@ fn reject_all_semantic_and_syntactic_config_errors() {
 
     assert_config_error(
         "general {}\ngeneral {}\nrecipes {\n    groups {\n        all app\n    }\n}",
+        ConfigErrorKind::DuplicateBlock,
+    );
+    assert_config_error(
+        "general {}\ngeneral extra {}\nrecipes {\n    groups {\n        all app\n    }\n}",
         ConfigErrorKind::DuplicateBlock,
     );
     assert_config_error(

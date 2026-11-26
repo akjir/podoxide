@@ -112,10 +112,11 @@ pub(super) fn parse_multi_text_directive(
         collection::MAX_COLLECTION_PREALLOC,
     );
     target.reserve(additional);
-    for argument in &directive.arguments {
+    for (index, argument) in directive.arguments.iter().enumerate() {
         let value = argument.as_ref();
         if !string::is_valid_text(value) {
-            return Err(RecipeError::with_token(invalid_kind, directive.line, value));
+            return Err(RecipeError::with_token(invalid_kind, directive.line, value)
+                .with_arg_index(index + 1));
         }
         target.push(value.to_owned());
     }
@@ -146,14 +147,15 @@ pub(super) fn parse_option_directive(
         collection::MAX_COLLECTION_PREALLOC,
     );
     target.reserve(additional);
-    for argument in &directive.arguments {
+    for (index, argument) in directive.arguments.iter().enumerate() {
         let value = argument.as_ref();
         if !collection::is_valid_option_value(value) {
             return Err(RecipeError::with_token(
                 RecipeErrorKind::InvalidOption,
                 directive.line,
                 value,
-            ));
+            )
+            .with_arg_index(index + 1));
         }
         target.push(value.to_owned());
     }

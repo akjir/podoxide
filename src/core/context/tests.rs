@@ -404,7 +404,12 @@ fn requires_config_podman_elevation_and_simulate_sync_across_all_actions() {
         assert_eq!(
             context.requires_elevation_confirmation(),
             expects_elevation,
-            "unexpected requires_elevation_confirmation() for {action:?}"
+            "elevation for {action:?}"
+        );
+        assert_eq!(
+            context.supports_simulate(),
+            expects_elevation,
+            "simulate for {action:?}"
         );
     }
 
@@ -478,6 +483,13 @@ fn requires_config_podman_elevation_and_simulate_sync_across_all_actions() {
             expects_elevation,
             "unexpected requires_elevation_confirmation() for {action:?}"
         );
+        let expects_simulate =
+            expects_elevation && action != ModeAction::Default(DefaultAction::Status);
+        assert_eq!(context.supports_simulate(), expects_simulate, "{action:?}");
+        if action == ModeAction::Image(ImageAction::Prune) {
+            context.flags.set_preview(true);
+            assert!(!context.supports_simulate(), "prune --preview");
+        }
         assert_action_simulate_transitions(action, &simulate_false_path, &simulate_true_path);
     }
 }

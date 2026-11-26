@@ -383,6 +383,51 @@ container *2 {
         RecipeErrorKind::InvalidCommand,
     );
 
+    for bad_execute in [
+        "--privileged sh",
+        "'--privileged' sh",
+        "sh -c 'unclosed",
+        "'' arg",
+        "'my script.sh' arg",
+    ] {
+        let mut recipe_case = base_valid.clone();
+        let mut command_case = valid_command.clone();
+        command_case.execute = String::from(bad_execute);
+        recipe_case
+            .pod
+            .commands
+            .insert(String::from("migrate"), command_case);
+        assert_validate_error(
+            &mut recipe_case,
+            &config_with_pod_path,
+            "bad_command_execute",
+            RecipeErrorKind::InvalidCommand,
+        );
+    }
+
+    let mut dangling_command_target = base_valid.clone();
+    let mut dangling_command = valid_command.clone();
+    dangling_command.container = String::from("*nonexistent");
+    dangling_command_target
+        .pod
+        .commands
+        .insert(String::from("migrate"), dangling_command);
+    assert_validate_error(
+        &mut dangling_command_target,
+        &config_with_pod_path,
+        "dangling_command_target",
+        RecipeErrorKind::ContainerNotFound,
+    );
+
+    let mut host_port_with_registry = base_valid.clone();
+    host_port_with_registry.containers[0].image = String::from("localhost:5000/ns/app:v2");
+    assert_validate_error(
+        &mut host_port_with_registry,
+        &config_with_pod_path,
+        "host_port_with_registry",
+        RecipeErrorKind::InvalidImage,
+    );
+
     let mut invalid_command_user = base_valid.clone();
     let mut bad_user_command = valid_command;
     bad_user_command.user = Some(String::from("-root"));

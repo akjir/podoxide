@@ -187,6 +187,7 @@ where
     validation::validate_container_name(container)?;
     container.validate()?;
     validation::validate_optional_registry(&pod.registry, pod.line)?;
+    validation::validate_resolved_image(container, pod)?;
     let image_reference = resolve_image_reference(container, pod);
     let prefix = update::format_pull_prefix(&container.name, &image_reference, indent, simulate);
     let outcome = if let Some(cached_outcome) = runner.cache.get_outcome(&image_reference) {

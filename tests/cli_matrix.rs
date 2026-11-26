@@ -48,17 +48,10 @@ fn assert_debug_custom_config_outputs(workspace: &TestWorkspace) {
     );
     assert!(!declined_prune.success);
     assert!(declined_prune.stdout.is_empty());
-    assert!(declined_prune.stderr.starts_with(expected_debug_prefix));
-    assert!(
-        declined_prune
-            .stderr
-            .contains("Are you sure you want to prune ")
-    );
-    assert!(
-        declined_prune
-            .stderr
-            .ends_with("? Type 'yes' to proceed: ERROR: Aborting execution.\n")
-    );
+    let stderr = &declined_prune.stderr;
+    assert!(stderr.starts_with(expected_debug_prefix));
+    assert!(stderr.contains("Are you sure you want to prune "));
+    assert!(stderr.ends_with("? Type 'yes' to proceed: ERROR: Aborting execution.\n"));
 
     fs::write(
         &custom_conf,
@@ -289,16 +282,9 @@ fn simulate_false_and_flag_override_matrix_runs_deterministically() {
         );
         assert!(!declined.success);
         assert!(declined.stdout.is_empty());
-        assert!(
-            declined
-                .stderr
-                .starts_with("Are you sure you want to prune ")
-        );
-        assert!(
-            declined
-                .stderr
-                .ends_with("? Type 'yes' to proceed: ERROR: Aborting execution.\n")
-        );
+        let stderr = &declined.stderr;
+        assert!(stderr.starts_with("Are you sure you want to prune "));
+        assert!(stderr.ends_with("? Type 'yes' to proceed: ERROR: Aborting execution.\n"));
     }
 
     for (arguments, expected_stdout) in [
@@ -341,7 +327,6 @@ fn simulate_false_and_flag_override_matrix_runs_deterministically() {
             &["--simulate", "image", "prune", "--all"],
             "Prune images:\npodman image prune -f -a\n",
         ),
-        (&["--simulate", "cfg", "inspect"], "  Simulate:     true\n"),
         (&["--simulate", "cfg", "edit"], "true ./pods.conf\n"),
         (
             &["--simulate", "rec", "edit", "recipe"],
@@ -375,10 +360,18 @@ fn simulate_false_and_flag_override_matrix_runs_deterministically() {
         "INFO: Simulate mode is active.\n",
     );
 
-    let sim_show = workspace.run_pods(&["--simulate", "cfg", "show"], b"");
-    assert!(sim_show.success);
-    assert!(sim_show.stderr.is_empty());
-    assert!(sim_show.stdout.contains("  1: general {\n"));
+    assert_stdout_matrix(
+        &workspace,
+        &[
+            (&["--simulate", "cfg", "inspect"], "  Simulate:     true\n"),
+            (&["--simulate", "cfg", "show"], "  1: general {\n"),
+            (
+                &["--simulate", "img", "prune", "--preview"],
+                "No images found to prune.\n",
+            ),
+        ],
+        "",
+    );
 
     assert_debug_custom_config_outputs(&workspace);
 }
@@ -442,14 +435,9 @@ fn simulate_true_matrix_verifies_init_and_all_modes() {
             "Update Summary:\n  Simulated (1):\n    - example-stack-db (docker.io/example/db-server:latest)\n\nSimulated 1 container.\n",
         ),
         (
-            &["cmd", "list", "recipe"],
-            "Commands for recipe 'recipe':\n",
-        ),
-        (
             &["cmd", "exec", "recipe", "migrate"],
             "podman exec -it -u dbuser example-stack-db db-cli -U dbuser -d app -f /migrations/run.sql\n",
         ),
-        (&["cfg", "inspect"], "  Simulate:     true\n"),
         (&["cfg", "edit"], "vim ./pods.conf\n"),
         (
             &["con", "recipe/db"],
@@ -476,10 +464,6 @@ fn simulate_true_matrix_verifies_init_and_all_modes() {
             &["log", "follow", "recipe/db"],
             "Execute log command:\npodman pod logs -n --color -f -c example-stack-db example-stack\n",
         ),
-        (&["status"], "example-stack-app"),
-        (&["rec", "list"], "Recipes:\n"),
-        (&["rec", "inspect", "recipe"], "Recipe 'recipe' is valid.\n"),
-        (&["rec", "show", "recipe"], "  6: pod example-stack {\n"),
         (&["rec", "edit", "recipe"], "vim ./recipe.pod\n"),
     ];
 
@@ -489,8 +473,18 @@ fn simulate_true_matrix_verifies_init_and_all_modes() {
         "INFO: Simulate mode is active.\n",
     );
 
-    let show = workspace.run_pods(&["cfg", "show"], b"");
-    assert!(show.success);
-    assert!(show.stderr.is_empty());
-    assert!(show.stdout.contains("  5: general {\n"));
+    assert_stdout_matrix(
+        &workspace,
+        &[
+            (&["cmd", "list", "recipe"], "Commands for recipe 'recipe':"),
+            (&["cfg", "inspect"], "  Simulate:     true\n"),
+            (&["cfg", "show"], "  5: general {\n"),
+            (&["img", "prune", "--preview"], "No images found to prune."),
+            (&["status"], "example-stack-app"),
+            (&["rec", "list"], "Recipes:\n"),
+            (&["rec", "inspect", "recipe"], "Recipe 'recipe' is valid.\n"),
+            (&["rec", "show", "recipe"], "  6: pod example-stack {\n"),
+        ],
+        "",
+    );
 }

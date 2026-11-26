@@ -167,6 +167,7 @@ pub(crate) fn validate_container_create_for_validated_pod(
     validate_container_name(container)?;
     validate_optional_registry(&pod.registry, pod.line)?;
     validate_container(container)?;
+    validate_resolved_image(container, pod)?;
     if volume::has_relative_host_volume(&container.volumes) && !path::is_valid_directory(&pod.path)
     {
         return Err(RecipeError::at_line_or_none(
@@ -197,6 +198,19 @@ pub(crate) fn validate_optional_registry(value: &str, line: usize) -> Result<(),
             RecipeErrorKind::InvalidRegistry,
             line,
             value,
+        ));
+    }
+    Ok(())
+}
+
+/// Validates that the resolved `<registry>/<image>` reference for `container` inside `pod` satisfies [`is_valid_image_value`].
+pub(crate) fn validate_resolved_image(container: &Container, pod: &Pod) -> Result<(), RecipeError> {
+    let resolved = super::resolve_image_reference(container, pod);
+    if !is_valid_image_value(&resolved) {
+        return Err(RecipeError::at_line_or_none(
+            RecipeErrorKind::InvalidImage,
+            container.line,
+            &resolved,
         ));
     }
     Ok(())

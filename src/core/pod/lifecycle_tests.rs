@@ -321,6 +321,33 @@ fn pod_create_start_stop_remove_ordering() {
     assert_eq!(lines[14], "Stop container 'three':");
     assert_eq!(lines[28], "Remove pod 'Order Stack' ('order'):");
     assert!(stderr.is_empty());
+
+    // Simulating pod creation must not satisfy subsequent live ensure_created_with calls.
+    let sim_then_live_pod = sample_multi_container_recipe().pod;
+    let mut sim_out = Vec::new();
+    let mut sim_err = Vec::new();
+    assert_eq!(
+        sim_then_live_pod
+            .ensure_created_with(true, |_| false, &mut sim_out, &mut sim_err)
+            .unwrap(),
+        ExecOutcome::Succeeded
+    );
+    let mut exists_checked = false;
+    let mut live_out = Vec::new();
+    let mut live_err = Vec::new();
+    let _ = sim_then_live_pod.ensure_created_with(
+        false,
+        |_| {
+            exists_checked = true;
+            true
+        },
+        &mut live_out,
+        &mut live_err,
+    );
+    assert!(
+        exists_checked,
+        "simulated pod creation must not short-circuit live pod_exists checks"
+    );
 }
 
 #[test]

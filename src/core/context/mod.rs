@@ -66,7 +66,7 @@ impl Context {
             loaded.path = mem::take(&mut self.config.path);
             loaded.simulate |= self.flags.simulate();
             self.config = loaded;
-            if self.config.simulate {
+            if self.config.simulate && self.supports_simulate() {
                 log::info("Simulate mode is active.");
             }
         }
@@ -124,6 +124,37 @@ impl Context {
             | ModeAction::Init(_)
             | ModeAction::Logs(LogsAction::Help)
             | ModeAction::Recipe(_) => false,
+        }
+    }
+
+    /// Returns `true` if this context's mode and action support simulation (`--simulate` / `general.simulate`).
+    #[must_use]
+    pub const fn supports_simulate(&self) -> bool {
+        match self.action {
+            ModeAction::Command(CommandAction::Exec)
+            | ModeAction::Config(ConfigAction::Edit)
+            | ModeAction::Connect(ConnectAction::Shell)
+            | ModeAction::Image(ImageAction::Update)
+            | ModeAction::Init(InitAction::Create)
+            | ModeAction::Logs(LogsAction::Follow | LogsAction::Show)
+            | ModeAction::Recipe(RecipeAction::Edit) => true,
+            ModeAction::Default(action) => !matches!(
+                action,
+                DefaultAction::Help | DefaultAction::Status | DefaultAction::Version
+            ),
+            ModeAction::Image(ImageAction::Prune) => !self.flags.preview(),
+            ModeAction::Command(CommandAction::Help | CommandAction::List)
+            | ModeAction::Config(ConfigAction::Help | ConfigAction::Inspect | ConfigAction::Show)
+            | ModeAction::Connect(ConnectAction::Help)
+            | ModeAction::Image(ImageAction::Help)
+            | ModeAction::Init(InitAction::Help)
+            | ModeAction::Logs(LogsAction::Help)
+            | ModeAction::Recipe(
+                RecipeAction::Help
+                | RecipeAction::Inspect
+                | RecipeAction::List
+                | RecipeAction::Show,
+            ) => false,
         }
     }
 

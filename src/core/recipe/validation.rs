@@ -25,7 +25,7 @@ use crate::core::log;
 use crate::core::pod::{Pod, PodCommand};
 use crate::error::{RecipeError, RecipeErrorKind};
 use crate::utilities::{collection, path, string};
-use super::Recipe;
+use super::{Recipe, tokenizer};
 
 /// Parses `value` as a decimal TCP/UDP port number in `1..=65535`.
 #[must_use]
@@ -150,7 +150,8 @@ pub(super) fn validate_recipe_inner(
             file_name,
         ));
     }
-    validate_and_resolve_containers(&mut recipe.containers, &recipe.pod.id)
+    validate_and_resolve_containers(&mut recipe.containers, &recipe.pod)?;
+    validate_command_targets(recipe)
 }
 
 /// Evaluates whether `value` is a valid IPv4 literal or bracketed IPv6 literal (`[addr]`).
@@ -213,21 +214,38 @@ fn resolve_pod_path(pod: &mut Pod, config: &Config, file_name: &str) -> Result<(
     Ok(())
 }
 
-/// Resolves container names, validates each container, and rejects duplicate container names.
+/// Resolves container names, validates each container and its resolved image, and rejects duplicate container names.
 fn validate_and_resolve_containers(
     containers: &mut [Container],
-    pod_id: &str,
+    pod: &Pod,
 ) -> Result<(), RecipeError> {
     let mut seen_names = BTreeSet::new();
     for (index, container) in containers.iter_mut().enumerate() {
-        container.ensure_name(pod_id, index + 1)?;
+        container.ensure_name(&pod.id, index + 1)?;
         container.validate()?;
+        container_validation::validate_resolved_image(container, pod)?;
         if !seen_names.insert(container.name.as_str()) {
             return Err(RecipeError::at_line_or_none(
                 RecipeErrorKind::InvalidContainerName,
                 container.line,
                 &container.name,
             ));
+        }
+    }
+    Ok(())
+}
+
+/// Verifies that every `command.container` reference in `recipe.pod.commands` resolves to a declared container.
+fn validate_command_targets(recipe: &Recipe) -> Result<(), RecipeError> {
+    for command in recipe.pod.commands.values() {
+        if let Err(mut error) = recipe.resolve_container_index(&command.container) {
+            let line = if command.line == 0 {
+                recipe.pod.line
+            } else {
+                command.line
+            };
+            error.line = (line > 0).then_some(line);
+            return Err(error);
         }
     }
     Ok(())
@@ -279,6 +297,7 @@ fn validate_pod_command(
             &command.execute,
         ));
     }
+    let _ = tokenizer::validate_execute_tokens(&command.execute, key, line)?;
     if !command.description.is_empty() && !string::is_valid_text(&command.description) {
         return Err(RecipeError::at_line_or_none(
             RecipeErrorKind::InvalidCommand,

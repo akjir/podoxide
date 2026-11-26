@@ -18,9 +18,8 @@
 use crate::core::config::Config;
 use crate::core::container::Container;
 use crate::core::context::Context;
-use crate::core::modes::command::tokenizer;
 use crate::core::pod::PodCommand;
-use crate::core::recipe::Recipe;
+use crate::core::recipe::{Recipe, tokenizer};
 use crate::error::{CliErrorKind, PodError, RecipeErrorKind};
 use crate::io::system::fs::{self, TestTempDir};
 use super::{exec_command, execute_with, handle};
@@ -58,10 +57,6 @@ pod cmd_pod {
     command run_quoted {
         container *db
         execute \"sh -c 'echo hello'\"
-    }
-    command missing_target_container {
-        container *nonexistent
-        execute \"script.sh\"
     }
 }
 container {
@@ -294,11 +289,17 @@ fn execute_with_rejects_invalid_commands_and_missing_parameters() {
         "pod cmd_pod {\n    name \"Command Pod\"\n    path /pods/cmd_pod\n    registry docker.io\n    command missing_execute {\n        container *db\n    }\n}\ncontainer *db {\n    image postgres\n}\n",
     )
     .unwrap();
+    fs::write_file(
+        &directory.join("missing_target_container.pod"),
+        "pod cmd_pod {\n    name \"Command Pod\"\n    path /pods/cmd_pod\n    registry docker.io\n    command missing_target_container {\n        container *nonexistent\n        execute \"script.sh\"\n    }\n}\ncontainer *db {\n    image postgres\n}\n",
+    )
+    .unwrap();
     context.config.recipes.groups.insert(
         String::from("incomplete"),
         vec![
             String::from("missing_container"),
             String::from("missing_execute"),
+            String::from("missing_target_container"),
         ],
     );
     for incomplete_recipe in ["missing_container", "missing_execute"] {
@@ -319,13 +320,14 @@ fn execute_with_rejects_invalid_commands_and_missing_parameters() {
     }
 
     context.parameters = vec![
-        String::from("recipe_006_commands"),
+        String::from("missing_target_container"),
         String::from("missing_target_container"),
     ];
     let container_error = execute_with(&context, &mut stdout, &mut stderr).unwrap_err();
     match container_error {
         PodError::Recipe(recipe_error) => {
             assert_eq!(recipe_error.kind, RecipeErrorKind::ContainerNotFound);
+            assert_eq!(recipe_error.line, Some(5));
         }
         other => panic!("expected PodError::Recipe(ContainerNotFound), got {other:?}"),
     }
@@ -365,7 +367,7 @@ fn execute_with_simulates_named_and_indexed_commands() {
             "Execute command 'script.sh add-missing-indices' in container 'cmd_pod-db':\npodman exec -it -u 33 cmd_pod-db script.sh add-missing-indices\n",
         ),
         (
-            "3",
+            "2",
             "Execute command 'script.sh run-absolute' in container 'absolute_db':\npodman exec -it absolute_db script.sh run-absolute\n",
         ),
     ];

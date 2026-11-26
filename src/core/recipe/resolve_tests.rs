@@ -312,6 +312,10 @@ container {
     ] {
         let error = loaded.resolve_container_name(unknown).unwrap_err();
         assert_eq!(error.kind, RecipeErrorKind::ContainerNotFound);
+        assert_eq!(
+            error.line, None,
+            "CLI target mismatch {unknown:?} must not blame pod line"
+        );
     }
 }
 

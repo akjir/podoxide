@@ -209,7 +209,6 @@ fn apply_root_block(
     block: &PslBlock<'_>,
     seen: &mut u8,
 ) -> Result<(), ConfigError> {
-    ensure_no_block_arguments(block)?;
     match block.name {
         "general" => {
             mark_seen(
@@ -340,6 +339,7 @@ fn parse_editor_directive(directive: &PslDirective<'_>) -> Result<String, Config
 
 /// Parses all statements inside the `general` block of `pods.conf`.
 fn parse_general_block(config: &mut Config, block: &PslBlock<'_>) -> Result<(), ConfigError> {
+    ensure_no_block_arguments(block)?;
     let mut seen_directives = 0_u8;
     for statement in &block.statements {
         apply_general_statement(config, statement, &mut seen_directives)?;
@@ -381,6 +381,7 @@ fn parse_path_directive(directive: &PslDirective<'_>) -> Result<PathBuf, ConfigE
 
 /// Parses all statements inside the `pods` block of `pods.conf`.
 fn parse_pods_block(pods: &mut PodsConfig, block: &PslBlock<'_>) -> Result<(), ConfigError> {
+    ensure_no_block_arguments(block)?;
     let mut seen_directives = 0_u8;
     for statement in &block.statements {
         apply_pods_statement(pods, statement, &mut seen_directives)?;
@@ -393,6 +394,7 @@ fn parse_recipes_block(
     recipes: &mut RecipesConfig,
     block: &PslBlock<'_>,
 ) -> Result<(), ConfigError> {
+    ensure_no_block_arguments(block)?;
     let mut seen_items = 0_u8;
     for statement in &block.statements {
         apply_recipes_statement(recipes, statement, &mut seen_items)?;

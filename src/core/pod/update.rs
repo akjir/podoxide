@@ -164,27 +164,26 @@ where
     let has_failed_pull = containers
         .iter()
         .any(|record| record.outcome == PullOutcome::Failed);
-    for record in &mut containers {
-        let previous_outcome = record.outcome;
-        record.outcome = container::detect_stale_container_image(
-            &record.container_name,
-            &record.image,
-            record.outcome,
-            runners.cache,
-            runners.query_container_image,
-            runners.query_image,
-        );
-        if !has_failed_pull
-            && previous_outcome == PullOutcome::UpToDate
-            && record.outcome == PullOutcome::Updated
-        {
-            log::write_print(
-                stdout,
-                &format!(
-                    "{POD_INDENT}Container '{}' is running an older image; reloading.",
-                    record.container_name
-                ),
+    if !has_failed_pull {
+        for record in &mut containers {
+            let previous_outcome = record.outcome;
+            record.outcome = container::detect_stale_container_image(
+                &record.container_name,
+                &record.image,
+                record.outcome,
+                runners.cache,
+                runners.query_container_image,
+                runners.query_image,
             );
+            if previous_outcome == PullOutcome::UpToDate && record.outcome == PullOutcome::Updated {
+                log::write_print(
+                    stdout,
+                    &format!(
+                        "{POD_INDENT}Container '{}' is running an older image; reloading.",
+                        record.container_name
+                    ),
+                );
+            }
         }
     }
     let action = apply_pod_update_action(recipe, &containers, simulate, stdout, stderr)?;
@@ -323,6 +322,7 @@ fn validate_recipe_pull(recipe: &Recipe) -> Result<(), RecipeError> {
             ));
         }
         item.validate()?;
+        container_validation::validate_resolved_image(item, &recipe.pod)?;
     }
     Ok(())
 }

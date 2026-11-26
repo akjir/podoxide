@@ -46,7 +46,7 @@ pub struct Pod {
     pub path: PathBuf,
     pub publish: Vec<String>,
     pub registry: String,
-    created: Cell<bool>,
+    creation_state: Cell<PodCreationState>,
 }
 
 impl Pod {
@@ -89,11 +89,16 @@ impl Pod {
         F: FnOnce(&str) -> bool,
     {
         self.validate_create()?;
-        if self.created.get() {
+        let already_created = match self.creation_state.get() {
+            PodCreationState::Created => true,
+            PodCreationState::Simulated => simulate,
+            PodCreationState::Unknown => false,
+        };
+        if already_created {
             return Ok(ExecOutcome::Succeeded);
         }
         if pod_exists(&self.id) {
-            self.created.set(true);
+            self.creation_state.set(PodCreationState::Created);
             return Ok(ExecOutcome::Succeeded);
         }
         self.create_validated(simulate, stdout, stderr)
@@ -113,7 +118,7 @@ impl Pod {
         lifecycle::validate_pod_id(self)?;
         let prefix = format!("Remove pod '{}' ('{}'): ", self.name, self.id);
         let outcome = podman::remove_pod(&self.id, &prefix, simulate, stdout, stderr)?;
-        self.created.set(false);
+        self.creation_state.set(PodCreationState::Unknown);
         Ok(outcome)
     }
 
@@ -164,7 +169,12 @@ impl Pod {
             stderr,
         )?;
         if outcome == ExecOutcome::Succeeded {
-            self.created.set(true);
+            let state = if simulate {
+                PodCreationState::Simulated
+            } else {
+                PodCreationState::Created
+            };
+            self.creation_state.set(state);
         }
         Ok(outcome)
     }
@@ -203,6 +213,15 @@ impl PodCommand {
     pub fn new() -> Self {
         Self::default()
     }
+}
+
+/// Cached pod existence state tracked across container operations in a single run.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PodCreationState {
+    Created,
+    Simulated,
+    #[default]
+    Unknown,
 }
 
 #[cfg(test)]

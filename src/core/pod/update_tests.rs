@@ -167,4 +167,52 @@ container *b {
             .unwrap()
             .contains("  Pod 'Shared Stack' ('shared') is up to date.")
     );
+
+    // Failed pull in one container must skip stale-image inspection and keep other outcomes unmutated.
+    let mut fail_cache = PullCache::new();
+    let mut fail_out = Vec::new();
+    let mut fail_calls = 0_usize;
+    let mut partial_fail_pull =
+        |_: &str, prefix: &str, _: bool, out: &mut Vec<u8>, _: &mut Vec<u8>| {
+            fail_calls += 1;
+            if fail_calls == 1 {
+                log::write_print(out, &format!("{prefix}Up to date."));
+                Ok(PullOutcome::UpToDate)
+            } else {
+                log::write_print(out, &format!("{prefix}Failed."));
+                Ok(PullOutcome::Failed)
+            }
+        };
+    let mut container_inspect_called = false;
+    let mut image_inspect_called = false;
+    let mut query_never = |_: &str| {
+        container_inspect_called = true;
+        Some(String::from("sha256:old"))
+    };
+    let mut query_image_never = |_: &str| {
+        image_inspect_called = true;
+        Some(String::from("sha256:new"))
+    };
+    let mut fail_runners = UpdateRunners {
+        cache: &mut fail_cache,
+        pull_image: &mut partial_fail_pull,
+        query_container_image: &mut query_never,
+        query_image: &mut query_image_never,
+    };
+    let mut distinct_recipe = shared_recipe;
+    distinct_recipe.containers[1].image = String::from("shared:other");
+    let fail_result = update_with_cache(
+        &distinct_recipe,
+        true,
+        &mut fail_runners,
+        &mut fail_out,
+        &mut stderr,
+    )
+    .unwrap();
+    assert_eq!(fail_result.action, UpdateAction::Failed);
+    assert!(
+        !container_inspect_called && !image_inspect_called,
+        "stale-image inspection must not run when any container pull failed"
+    );
+    assert_eq!(fail_result.containers[0].outcome, PullOutcome::UpToDate);
 }

@@ -384,4 +384,19 @@ fn update_summary_renders_simulated_footers_and_enforces_bucket_bounds() {
         reload_fail_text.contains("  Failed (1):\n    - webapp (Web App): reload failed\n"),
         "expected reload failure detail in Failed bucket:\n{reload_fail_text}"
     );
+
+    let mut container_reload_fail =
+        UpdateSummary::new(SummaryKind::LifecycleUpdate, SummaryScope::Container);
+    container_reload_fail.record_container(
+        UpdateAction::Failed,
+        &pull_record("webapp-app", "docker.io/app:latest", PullOutcome::Updated),
+    );
+    assert!(container_reload_fail.has_failures());
+    let mut cnt_fail_out = Vec::new();
+    container_reload_fail.write_to(&mut cnt_fail_out);
+    let cnt_fail_text = String::from_utf8(cnt_fail_out).unwrap();
+    assert!(
+        cnt_fail_text.contains("  Failed (1):\n    - webapp-app: reload failed\n"),
+        "expected container reload failure detail in Failed bucket:\n{cnt_fail_text}"
+    );
 }

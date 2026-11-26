@@ -351,6 +351,28 @@ fn recipe_parser_rejects_structural_and_security_violations() {
         other => panic!("expected InvalidVolume, got {other:?}"),
     }
 
+    let multi_cmd_err =
+        Recipe::from_str("container {\n    command \"a b\" \"a\\nb\"\n}\n").unwrap_err();
+    match multi_cmd_err {
+        PodError::Recipe(recipe_error) => {
+            assert_eq!(recipe_error.kind, RecipeErrorKind::InvalidCommand);
+            let diagnostic = recipe_error.diagnostic.as_ref().unwrap();
+            assert_eq!(diagnostic.col_number, 19);
+        }
+        other => panic!("expected InvalidCommand at arg 2, got {other:?}"),
+    }
+
+    let multi_opt_err =
+        Recipe::from_str("container {\n    option \"foo bar\" \"foo\\nbar\"\n}\n").unwrap_err();
+    match multi_opt_err {
+        PodError::Recipe(recipe_error) => {
+            assert_eq!(recipe_error.kind, RecipeErrorKind::InvalidOption);
+            let diagnostic = recipe_error.diagnostic.as_ref().unwrap();
+            assert_eq!(diagnostic.col_number, 22);
+        }
+        other => panic!("expected InvalidOption at arg 2, got {other:?}"),
+    }
+
     let delimiter_error = Recipe::from_str("pod \"app\"{ name Test }\n").unwrap_err();
     match delimiter_error {
         PodError::Psl(psl_error) => {

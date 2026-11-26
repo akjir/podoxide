@@ -30,7 +30,7 @@ use super::directives::{
     SEEN_COMMAND_USER, SEEN_CONTAINER_REGISTRY, SEEN_CONTAINER_RESTART, SEEN_POD_DESCRIPTION,
     SEEN_POD_REGISTRY,
 };
-use super::{RECIPE_EXTENSION, Recipe};
+use super::{RECIPE_EXTENSION, Recipe, tokenizer};
 
 /// Evaluates whether `recipes_dir` and `recipe_name` form a valid recipe load target.
 #[must_use]
@@ -113,12 +113,14 @@ fn apply_command_directive(
             )?;
         }
         "execute" => {
-            command.execute = directives::parse_unique_text_directive(
+            let execute = directives::parse_unique_text_directive(
                 directive,
                 seen,
                 SEEN_COMMAND_EXECUTE,
                 kind,
             )?;
+            let _ = tokenizer::validate_execute_tokens(&execute, &execute, directive.line)?;
+            command.execute = execute;
         }
         "user" => {
             command.user = Some(directives::parse_unique_token_directive(
