@@ -47,13 +47,24 @@ use crate::utilities::string::is_valid_target_segment;
 pub fn handle(context: &Context, action: RecipeAction) -> Result<ExecOutcome, PodError> {
     log::debug("Recipe mode is used.");
     match action {
-        RecipeAction::Edit => edit::handle(context)?,
-        RecipeAction::Help => help::handle(context)?,
-        RecipeAction::Inspect => inspect::handle(context)?,
-        RecipeAction::List => list::handle(context)?,
-        RecipeAction::Show => show::handle(context)?,
+        RecipeAction::Edit => edit::handle(context),
+        RecipeAction::Help => {
+            help::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
+        RecipeAction::Inspect => {
+            inspect::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
+        RecipeAction::List => {
+            list::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
+        RecipeAction::Show => {
+            show::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
     }
-    Ok(ExecOutcome::Succeeded)
 }
 
 /// Validates `recipes_dir` and constructs the `<recipes.path>/<recipe_name>.pod` path.
@@ -210,5 +221,16 @@ mod tests {
                 "expected recipe::{action} to succeed"
             );
         }
+
+        let mut failing_editor = Context::new();
+        failing_editor.config = root_config;
+        failing_editor.config.editor = String::from("false");
+        failing_editor.config.simulate = false;
+        failing_editor.parameters = vec![String::from("recipe")];
+        assert_eq!(
+            handle(&failing_editor, RecipeAction::Edit).unwrap(),
+            ExecOutcome::Failed,
+            "recipe edit must propagate non-zero editor exit as ExecOutcome::Failed"
+        );
     }
 }

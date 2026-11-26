@@ -249,7 +249,7 @@ fn execute_logs_with_simulates_show_follow_options_and_container_filters() {
             false,
             option_flags,
             "recipe_011_simple_container",
-            "Execute log command: \npodman pod logs -n --color --since '2026-01-01 12:00:00' --until '2026-01-01 13:00:00' --tail all --timestamps simple_container\n",
+            "Execute log command: \npodman pod logs -n --color --since '2026-01-01 12:00:00' --until '2026-01-01 13:00:00' --tail -1 --timestamps simple_container\n",
         ),
         (
             false,

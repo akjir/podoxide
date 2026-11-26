@@ -30,6 +30,7 @@ podoxide/
 ├── AGENTS.md
 ├── ARCHITECTURE.md
 ├── build.rs
+├── build_metadata.rs
 ├── Cargo.toml
 ├── CHANGELOG.md
 ├── LICENSE
@@ -183,6 +184,7 @@ podoxide/
 │   │   │   ├── command_tests.rs
 │   │   │   ├── mod.rs
 │   │   │   ├── spinner.rs
+│   │   │   ├── spinner_tests.rs
 │   │   │   └── podman/
 │   │   │       ├── lifecycle.rs
 │   │   │       ├── lifecycle_tests.rs
@@ -213,6 +215,7 @@ podoxide/
 │       ├── path_tests.rs
 │       └── string.rs
 └── tests/
+    ├── build_script.rs
     ├── cli_matrix.rs
     ├── cli_workflows.rs
     ├── common/
@@ -224,11 +227,12 @@ podoxide/
 
 | File                        | Function |
 | :-------------------------- | :------- |
-| `.github/workflows/ci.yml`  | Runs formatting (`cargo fmt`), Clippy (`--all-targets -- -D warnings`), test suite, and release build in Linux CI. |
+| `.github/workflows/ci.yml`  | Runs formatting (`cargo fmt`), Clippy (`--all-targets -- -D warnings`), test suite, release build, and MSRV `1.88` check and test in Linux CI. |
 | `.gitignore`                | Excludes build artifacts, local test workspaces (`.test/`), and editor/backup files from Git tracking. |
 | `.pods-completion.bash`     | Provides pure-Bash autocompletion for modes, actions, action-scoped flags, `.conf` files, groups, recipes, containers, and recipe commands. |
 | `Cargo.toml`                | Defines crate metadata, MSRV (`1.88`), workspace lints, library and binary targets, and release optimizations. |
-| `build.rs`                  | Generates the compile-time application version string with Git commit count, short hash, and dirty-tree build metadata. |
+| `build.rs`                  | Runs the Cargo build script delegating compile-time Git version and rerun directive emission to `build_metadata.rs`. |
+| `build_metadata.rs`         | Implements pure Git version formatting, output validation, worktree path resolution, and Cargo rerun directive generation shared by `build.rs` and `tests/build_script.rs`. |
 | `podoxide.code-workspace`   | Defines editor workspace formatting settings (4-space indentation, final newlines, trailing-whitespace trimming). |
 | `pods.conf`                 | Provides the root configuration template embedded and written by `pods init`. |
 | `PSL_SPEC.md`               | Specifies the PodScript Language (PSL) syntax, lexical grammar, block schemas, and parser resource bounds. |
@@ -459,6 +463,7 @@ The `tests/` directory verifies the compiled `pods` binary in isolated RAII temp
 | File                     | Function |
 | :----------------------- | :------- |
 | `tests/common/mod.rs`    | Provides `TestWorkspace` (RAII temp directory cleanup and executable mock `podman` shim) and `CliOutput` for subprocess execution. |
+| `tests/build_script.rs`  | Verifies `build_metadata.rs` version formatting, Git output validation, non-Git isolation, unborn/worktree/packed-refs handling, and Cargo rerun directives. |
 | `tests/cli_matrix.rs`    | Verifies missing-config bypass/error matrices, `simulate true`/`false` and `--simulate` override matrices, argument pipeline validation, and Podman `< 5.8.0` version enforcement. |
 | `tests/cli_workflows.rs` | Verifies installed-symlink CWD resolution, custom `--config` debug logging and broken-config display, non-zero Podman exit propagation without duplicate `ERROR:` lines, live shared-image `pods update` pull deduplication and reload, and live `pods image prune` preview/abort/confirm/failure flows. |
 | `tests/completion.rs`    | Verifies `.pods-completion.bash` in isolated Bash subshells (`set -u`): zero shell variable leaks, split and glued `--config=` `.conf` filtering, `--flag=value` scanning, action-scoped flag filtering, unknown command rejection, and dynamic group/recipe/container/command completion. |

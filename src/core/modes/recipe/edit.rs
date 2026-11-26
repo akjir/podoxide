@@ -20,10 +20,10 @@ use std::io::{self, Write};
 use crate::core::config::validate_editor;
 use crate::core::context::Context;
 use crate::error::PodError;
-use crate::io::exec::command;
+use crate::io::exec::command::{self, ExecOutcome};
 use super::{build_recipe_path, extract_registered_recipe};
 
-/// Opens the specified `.pod` recipe file in the external editor configured in `pods.conf`.
+/// Opens the specified `.pod` recipe file in the external editor configured in `pods.conf` and returns its [`ExecOutcome`].
 ///
 /// # Workflow
 ///
@@ -40,7 +40,7 @@ use super::{build_recipe_path, extract_registered_recipe};
 ///
 /// Returns [`PodError`] if `<recipe>` is not registered in `pods.conf`, `general.editor` is
 /// empty, or spawning the editor process fails.
-pub fn handle(context: &Context) -> Result<(), PodError> {
+pub fn handle(context: &Context) -> Result<ExecOutcome, PodError> {
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();
     edit_with(context, &mut stdout, &mut stderr)
@@ -53,12 +53,12 @@ pub fn handle(context: &Context) -> Result<(), PodError> {
 ///
 /// Returns [`PodError`] if `<recipe>` is missing, invalid, or not registered in `pods.conf`,
 /// `context.config.editor` is missing or invalid, `context.config.recipes.path` is invalid, or
-/// the editor command fails.
+/// spawning the editor command fails.
 fn edit_with<W: Write, E: Write>(
     context: &Context,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError> {
+) -> Result<ExecOutcome, PodError> {
     let recipe_name = extract_registered_recipe(context)?;
     let editor = validate_editor(&context.config.editor)?;
     let recipe_path = build_recipe_path(&context.config.recipes.path, recipe_name)?;
@@ -78,6 +78,7 @@ mod tests {
     use crate::core::context::Context;
     use crate::core::log::DebugGuard;
     use crate::error::{CliErrorKind, ConfigErrorKind, PodError};
+    use crate::io::exec::command::ExecOutcome;
     use super::{edit_with, handle};
 
     fn build_edit_context() -> Context {
@@ -102,11 +103,12 @@ mod tests {
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
-        {
+        let failed_outcome = {
             let _debug_guard = DebugGuard::new(true);
-            edit_with(&context, &mut stdout, &mut stderr).unwrap();
-        }
+            edit_with(&context, &mut stdout, &mut stderr).unwrap()
+        };
 
+        assert_eq!(failed_outcome, ExecOutcome::Failed);
         assert!(stdout.is_empty());
         assert_eq!(
             String::from_utf8(stderr).unwrap(),
@@ -116,7 +118,10 @@ mod tests {
         context.config.editor = String::from("true");
         let mut ok_stdout = Vec::new();
         let mut ok_stderr = Vec::new();
-        edit_with(&context, &mut ok_stdout, &mut ok_stderr).unwrap();
+        assert_eq!(
+            edit_with(&context, &mut ok_stdout, &mut ok_stderr).unwrap(),
+            ExecOutcome::Succeeded
+        );
         assert!(ok_stdout.is_empty());
         assert!(ok_stderr.is_empty());
     }

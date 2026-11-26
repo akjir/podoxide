@@ -15,6 +15,7 @@
 
 //! Unit tests for Podman CLI runtime operations in [`super`].
 
+use std::ffi::OsStr;
 use std::io::{self, Write};
 
 use crate::error::PodError;
@@ -22,7 +23,7 @@ use crate::io::exec::command::ExecOutcome;
 use super::{
     ExecContainer, PodLogs, PullOutcome, SHELL_FALLBACK_COMMAND, build_container_exec_args,
     build_pod_logs_args, exec_container, logs_pod, pull_image, pull_image_with,
-    resolve_pull_outcome,
+    resolve_pull_outcome, should_use_log_color,
 };
 
 #[test]
@@ -141,6 +142,33 @@ fn build_exec_and_logs_args_gate_tty_and_color_flags() {
             "cmd_pod-db",
             "cmd_pod",
         ]
+    );
+
+    for tail_all in ["all", "ALL", "All"] {
+        let all_tail_request = PodLogs {
+            tail: Some(tail_all),
+            ..logs_request
+        };
+        let args = build_pod_logs_args(&all_tail_request, true);
+        let tail_index = args.iter().position(|arg| *arg == "--tail").unwrap();
+        assert_eq!(
+            args.get(tail_index + 1).copied(),
+            Some("-1"),
+            "expected --tail {tail_all:?} to translate to --tail -1"
+        );
+    }
+
+    assert!(should_use_log_color(false, true, None));
+    assert!(
+        should_use_log_color(false, true, Some(OsStr::new(""))),
+        "empty NO_COLOR must not disable --color"
+    );
+    assert!(!should_use_log_color(false, true, Some(OsStr::new("1"))));
+    assert!(!should_use_log_color(false, false, None));
+    assert!(!should_use_log_color(false, false, Some(OsStr::new(""))));
+    assert!(
+        should_use_log_color(true, false, Some(OsStr::new("1"))),
+        "simulate mode must keep deterministic --color regardless of NO_COLOR"
     );
 }
 
@@ -280,7 +308,7 @@ fn exec_logs_and_pull_validate_inputs_and_support_uppercase_unmanaged_names() {
     assert!(
         String::from_utf8(spaced_out)
             .unwrap()
-            .contains("--since '2026-01-01 12:00:00' --until '2026-01-01 13:00:00' --tail all")
+            .contains("--since '2026-01-01 12:00:00' --until '2026-01-01 13:00:00' --tail -1")
     );
 
     let mut logs_out = Vec::new();

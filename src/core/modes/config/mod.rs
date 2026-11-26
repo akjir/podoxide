@@ -40,12 +40,20 @@ use crate::io::exec::command::ExecOutcome;
 pub fn handle(context: &Context, action: ConfigAction) -> Result<ExecOutcome, PodError> {
     log::debug("Config mode is used.");
     match action {
-        ConfigAction::Edit => edit::handle(context)?,
-        ConfigAction::Help => help::handle(context)?,
-        ConfigAction::Inspect => inspect::handle(context)?,
-        ConfigAction::Show => show::handle(context)?,
+        ConfigAction::Edit => edit::handle(context),
+        ConfigAction::Help => {
+            help::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
+        ConfigAction::Inspect => {
+            inspect::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
+        ConfigAction::Show => {
+            show::handle(context)?;
+            Ok(ExecOutcome::Succeeded)
+        }
     }
-    Ok(ExecOutcome::Succeeded)
 }
 
 #[cfg(test)]
@@ -75,5 +83,15 @@ mod tests {
                 "expected config::{action} to succeed"
             );
         }
+
+        let mut failing_editor = Context::new();
+        failing_editor.config = root_config;
+        failing_editor.config.editor = String::from("false");
+        failing_editor.config.simulate = false;
+        assert_eq!(
+            handle(&failing_editor, ConfigAction::Edit).unwrap(),
+            ExecOutcome::Failed,
+            "config edit must propagate non-zero editor exit as ExecOutcome::Failed"
+        );
     }
 }

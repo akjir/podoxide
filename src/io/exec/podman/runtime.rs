@@ -17,6 +17,7 @@
 
 use std::borrow::Cow;
 use std::env;
+use std::ffi::OsStr;
 use std::io::{self, IsTerminal, Write};
 
 use crate::error::PodError;
@@ -130,12 +131,8 @@ pub fn logs_pod<W: Write, E: Write>(
     stderr: &mut E,
 ) -> Result<ExecOutcome, PodError> {
     validate_pod_logs(request)?;
-    let no_color = env::var_os("NO_COLOR").is_some();
-    let use_color = if simulate {
-        !no_color
-    } else {
-        io::stdout().is_terminal() && !no_color
-    };
+    let no_color = env::var_os("NO_COLOR");
+    let use_color = should_use_log_color(simulate, io::stdout().is_terminal(), no_color.as_deref());
     let arguments = build_pod_logs_args(request, use_color);
     let interrupt_policy = if request.follow {
         InterruptPolicy::QuietOnSigint
@@ -248,7 +245,14 @@ fn build_pod_logs_args<'a>(request: &'a PodLogs<'a>, use_color: bool) -> Vec<&'a
     }
     append_flag_pair(&mut arguments, "--since", request.since);
     append_flag_pair(&mut arguments, "--until", request.until);
-    append_flag_pair(&mut arguments, "--tail", request.tail);
+    let resolved_tail = request.tail.map(|value| {
+        if value.eq_ignore_ascii_case("all") {
+            "-1"
+        } else {
+            value
+        }
+    });
+    append_flag_pair(&mut arguments, "--tail", resolved_tail);
     if request.timestamps {
         arguments.push("--timestamps");
     }
@@ -340,6 +344,16 @@ fn resolve_pull_outcome(
         Some(after) if before_id != Some(after) => PullOutcome::Updated,
         _ => PullOutcome::UpToDate,
     }
+}
+
+/// Evaluates whether `podman pod logs` should pass `--color`, keeping `--simulate` previews deterministic and treating empty `NO_COLOR` as unset.
+#[must_use]
+fn should_use_log_color(simulate: bool, is_tty: bool, no_color: Option<&OsStr>) -> bool {
+    if simulate {
+        return true;
+    }
+    let color_disabled = no_color.is_some_and(|value| !value.is_empty());
+    is_tty && !color_disabled
 }
 
 /// Validates all fields of `request` before building `podman exec` arguments.

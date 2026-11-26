@@ -75,6 +75,24 @@ fn list_directory_skips_subdirectories_filters_extensions_and_enforces_bounds() 
     let pod_files = list_directory(&temp_dir, Some(".pod")).unwrap();
     assert_eq!(pod_files, vec![".hidden.pod", "a.pod", "b.pod"]);
 
+    let symlink_dir = TestTempDir::new("fs_list_symlinks");
+    let target_pod = symlink_dir.join("target.pod");
+    let subdir = symlink_dir.join("subdir");
+    write_file(&target_pod, "pod app {}\n").unwrap();
+    fs::create_dir_all(&subdir).unwrap();
+    unix_fs::symlink(&target_pod, symlink_dir.join("link.pod")).unwrap();
+    unix_fs::symlink(&subdir, symlink_dir.join("dir_link.pod")).unwrap();
+    unix_fs::symlink(
+        symlink_dir.join("missing.pod"),
+        symlink_dir.join("broken.pod"),
+    )
+    .unwrap();
+    assert_eq!(
+        list_directory(&symlink_dir, Some(".pod")).unwrap(),
+        vec!["link.pod", "target.pod"],
+        "list_directory must include regular-file symlinks and skip directory/dangling symlinks"
+    );
+
     let missing_ext = list_directory(&temp_dir, Some(".missing")).unwrap();
     assert!(missing_ext.is_empty());
 
@@ -225,13 +243,38 @@ fn read_write_exclusive_nofollow_nonblock_and_error_source_preservation() {
     let mut straddling_utf8 = vec![b'a'; MAX_FILE_BYTES];
     straddling_utf8.extend_from_slice("ä".as_bytes());
     assert!(matches!(
-        read_bounded_utf8(Cursor::new(straddling_utf8), INITIAL_FILE_CAPACITY),
+        read_bounded_utf8(
+            Path::new("straddling.pod"),
+            Cursor::new(straddling_utf8),
+            INITIAL_FILE_CAPACITY
+        ),
         Err(PodError::Psl(ref error)) if error.kind == PslErrorKind::LimitExceeded
     ));
+    let bounded_invalid_err = read_bounded_utf8(
+        Path::new("invalid.pod"),
+        Cursor::new(vec![0xFF, 0xFE]),
+        INITIAL_FILE_CAPACITY,
+    )
+    .unwrap_err();
     assert!(matches!(
-        read_bounded_utf8(Cursor::new(vec![0xFF, 0xFE]), INITIAL_FILE_CAPACITY),
-        Err(PodError::Io(_))
+        bounded_invalid_err,
+        PodError::Io(ref error) if error.kind() == io::ErrorKind::InvalidData
     ));
+    assert!(bounded_invalid_err.to_string().contains("invalid.pod"));
+
+    let invalid_utf8_path = temp_dir.join("invalid_utf8.pod");
+    fs::write(&invalid_utf8_path, [0xFF, 0xFE]).unwrap();
+    let invalid_utf8_err = read_file(&invalid_utf8_path).unwrap_err();
+    assert!(matches!(
+        invalid_utf8_err,
+        PodError::Io(ref error) if error.kind() == io::ErrorKind::InvalidData
+    ));
+    assert!(
+        invalid_utf8_err
+            .to_string()
+            .contains(invalid_utf8_path.to_str().unwrap()),
+        "read_file invalid UTF-8 error must include file path, got: {invalid_utf8_err}"
+    );
 }
 
 #[test]

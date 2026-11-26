@@ -20,14 +20,15 @@ use std::io;
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::ExitStatus;
+use std::process::{ExitStatus, Stdio};
 
 use crate::core::log::DebugGuard;
 use crate::error::PodError;
 use crate::utilities::format;
 use super::{
-    ExecMode, ExecOptions, ExecOutcome, InterruptPolicy, exec_capture, exec_capture_bounded,
-    exec_editor_with, exec_with, run_captured, warn_on_exit_failure,
+    ExecMode, ExecOptions, ExecOutcome, InterruptPolicy, build_command, exec_capture,
+    exec_capture_bounded, exec_editor_with, exec_with, read_bounded_bytes, run_captured,
+    warn_on_exit_failure,
 };
 
 #[test]
@@ -105,16 +106,39 @@ fn exec_editor_with_validates_normalizes_and_runs() {
 
     let mut live_stdout = Vec::new();
     let mut live_stderr = Vec::new();
-    exec_editor_with(
-        "true",
-        Path::new("./recipe.pod"),
-        false,
-        &mut live_stdout,
-        &mut live_stderr,
-    )
-    .unwrap();
+    assert_eq!(
+        exec_editor_with(
+            "true",
+            Path::new("./recipe.pod"),
+            false,
+            &mut live_stdout,
+            &mut live_stderr,
+        )
+        .unwrap(),
+        ExecOutcome::Succeeded
+    );
     assert!(live_stdout.is_empty());
     assert!(live_stderr.is_empty());
+
+    let mut fail_stdout = Vec::new();
+    let mut fail_stderr = Vec::new();
+    assert_eq!(
+        exec_editor_with(
+            "false",
+            Path::new("./recipe.pod"),
+            false,
+            &mut fail_stdout,
+            &mut fail_stderr,
+        )
+        .unwrap(),
+        ExecOutcome::Failed
+    );
+    assert!(fail_stdout.is_empty());
+    assert!(
+        String::from_utf8(fail_stderr)
+            .unwrap()
+            .contains("WARNING: Command exited with code '1'!")
+    );
 
     for invalid_editor in [
         "",
@@ -404,4 +428,28 @@ fn exec_with_routes_streams_bounds_capture_and_handles_sigint_policy() {
             "expected PodError::Io for mode {mode:?}"
         );
     }
+}
+
+#[test]
+fn read_bounded_bytes_drains_large_pipe_without_sigpipe_while_capping_buffer() {
+    let mut child = build_command("dd", &["if=/dev/zero", "bs=1024", "count=128"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout_pipe = child.stdout.take().unwrap();
+    let (bytes, truncated) = read_bounded_bytes(stdout_pipe, 64).unwrap();
+    let status = child.wait().unwrap();
+    assert!(
+        status.success(),
+        "child writing >80 KiB to bounded pipe must not receive SIGPIPE, status={status:?}"
+    );
+    assert!(truncated, "expected truncation flag when output > 64 bytes");
+    assert_eq!(bytes.len(), 64);
+
+    assert!(
+        exec_capture_bounded("dd", &["if=/dev/zero", "bs=1024", "count=128"], 64).is_none(),
+        "exec_capture_bounded must still return None on overflow"
+    );
 }

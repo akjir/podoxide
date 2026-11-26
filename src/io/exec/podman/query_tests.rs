@@ -15,6 +15,8 @@
 
 //! Unit tests for Podman CLI inspection queries in [`super`].
 
+use std::io;
+
 use crate::error::PodError;
 use super::{
     FIELD_DELIMITER, IMAGES_FORMAT, MAX_INSPECT_RECORDS, MAX_VERSION_LINES,
@@ -147,23 +149,33 @@ fn query_in_use_images_and_format_templates_use_atomic_ps_and_control_delimiters
             .is_empty()
     );
 
+    let mut exact_limit_ps = String::new();
+    for index in 0..MAX_INSPECT_RECORDS {
+        exact_limit_ps.push_str(&format!("used_{index}\n"));
+    }
+    exact_limit_ps.push_str("\nused_0\n");
+    assert_eq!(
+        parse_in_use_output(&exact_limit_ps).unwrap().len(),
+        MAX_INSPECT_RECORDS
+    );
+
     let mut oversized_ps = String::new();
     for index in 0..(MAX_INSPECT_RECORDS + 10) {
         oversized_ps.push_str(&format!("used_{index}\n"));
     }
-    assert_eq!(
-        parse_in_use_output(&oversized_ps).len(),
-        MAX_INSPECT_RECORDS
-    );
+    assert!(matches!(
+        parse_in_use_output(&oversized_ps),
+        Err(PodError::Io(ref error)) if error.kind() == io::ErrorKind::InvalidData
+    ));
 
     let duplicate_flood = format!(
         "{}trailing_image\n",
         "same_image\n".repeat(MAX_INSPECT_RECORDS)
     );
-    let duplicate_set = parse_in_use_output(&duplicate_flood);
-    assert_eq!(duplicate_set.len(), 1);
+    let duplicate_set = parse_in_use_output(&duplicate_flood).unwrap();
+    assert_eq!(duplicate_set.len(), 2);
     assert!(duplicate_set.contains("same_image"));
-    assert!(!duplicate_set.contains("trailing_image"));
+    assert!(duplicate_set.contains("trailing_image"));
 
     assert_eq!(
         parse_image_id_output("  sha256:abcd1234  \n"),
@@ -212,6 +224,40 @@ fn query_in_use_images_and_format_templates_use_atomic_ps_and_control_delimiters
         vec!["container", "inspect", "-f", "{{.Image}}", "stack-db"]
     );
     assert!(query_container_image_id_with("stack-db", &mut |_: &[&str]| None).is_none());
+}
+
+#[test]
+fn query_in_use_images_scans_past_infra_lines_and_fails_closed_above_limit() {
+    let mut infra_plus_valid = String::new();
+    for _ in 0..1200 {
+        infra_plus_valid.push_str("\n   \n");
+    }
+    for index in 0..300 {
+        infra_plus_valid.push_str(&format!("sha256:valid_{index}\n"));
+    }
+    let collected =
+        collect_in_use_images_with(&mut |_: &[&str]| Some(infra_plus_valid.clone())).unwrap();
+    assert_eq!(
+        collected.len(),
+        300,
+        "all 300 valid image IDs past line 1024 must be collected"
+    );
+    assert!(collected.contains("sha256:valid_0"));
+    assert!(collected.contains("sha256:valid_299"));
+
+    let mut over_limit = String::new();
+    for index in 0..=MAX_INSPECT_RECORDS {
+        over_limit.push_str(&format!("sha256:distinct_{index}\n"));
+    }
+    let over_limit_err =
+        collect_in_use_images_with(&mut |_: &[&str]| Some(over_limit.clone())).unwrap_err();
+    assert!(
+        matches!(
+            over_limit_err,
+            PodError::Io(ref error) if error.kind() == io::ErrorKind::InvalidData
+        ),
+        "exceeding MAX_INSPECT_RECORDS distinct IDs must fail closed, got {over_limit_err:?}"
+    );
 }
 
 #[test]

@@ -40,6 +40,7 @@ const INITIAL_FILE_CAPACITY: usize = 256;
 #[cfg(any(
     target_arch = "aarch64",
     target_arch = "arm",
+    target_arch = "m68k",
     target_arch = "powerpc",
     target_arch = "powerpc64"
 ))]
@@ -47,17 +48,25 @@ const LINUX_O_NOFOLLOW: i32 = 0o100_000;
 #[cfg(not(any(
     target_arch = "aarch64",
     target_arch = "arm",
+    target_arch = "m68k",
     target_arch = "powerpc",
     target_arch = "powerpc64"
 )))]
 const LINUX_O_NOFOLLOW: i32 = 0o400_000;
-#[cfg(any(target_arch = "mips", target_arch = "mips64"))]
+#[cfg(any(
+    target_arch = "mips",
+    target_arch = "mips32r6",
+    target_arch = "mips64",
+    target_arch = "mips64r6"
+))]
 const LINUX_O_NONBLOCK: i32 = 0o200;
 #[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
 const LINUX_O_NONBLOCK: i32 = 0x4000;
 #[cfg(not(any(
     target_arch = "mips",
+    target_arch = "mips32r6",
     target_arch = "mips64",
+    target_arch = "mips64r6",
     target_arch = "sparc",
     target_arch = "sparc64"
 )))]
@@ -179,7 +188,7 @@ pub fn get_absolute_path(target_path: &Path) -> PathBuf {
     path_resolve::get_absolute_path(target_path)
 }
 
-/// Lists regular file names in `target_path`, optionally filtered by `extension` (such as `Some(".pod")`),
+/// Lists regular file names (including symlinks resolving to regular files) in `target_path`, optionally filtered by `extension` (such as `Some(".pod")`),
 /// sorted alphabetically.
 ///
 /// # Errors
@@ -229,17 +238,7 @@ pub fn read_file(target_path: &Path) -> Result<String, PodError> {
         )));
     }
     let initial_capacity = usize::try_from(metadata.len()).unwrap_or(INITIAL_FILE_CAPACITY);
-    read_bounded_utf8(file, initial_capacity)
-}
-
-/// Writes `content` to `target_path`, creating or truncating the target regular file with `O_NOFOLLOW`.
-///
-/// # Errors
-///
-/// Returns [`PodError::Io`] if `target_path` is a symlink or non-regular file, or if writing fails.
-pub fn write_file(target_path: &Path, content: &str) -> Result<(), PodError> {
-    ensure_writable_target(target_path)?;
-    write_file_nofollow(target_path, content)
+    read_bounded_utf8(target_path, file, initial_capacity)
 }
 
 /// Atomically creates a new file at `target_path` (`O_CREAT | O_EXCL | O_NOFOLLOW`) and writes `content`.
@@ -265,7 +264,18 @@ pub fn write_file_exclusive(target_path: &Path, content: &str) -> Result<(), Pod
     Ok(())
 }
 
-/// Appends a regular-file directory entry name to `entries` if it is valid UTF-8, matches `extension`, and stays within [`MAX_DIRECTORY_ENTRIES`].
+/// Writes `content` to `target_path`, creating or truncating the target regular file with `O_NOFOLLOW`.
+///
+/// # Errors
+///
+/// Returns [`PodError::Io`] if `target_path` is a symlink or non-regular file, or if writing fails.
+#[cfg(test)]
+pub(crate) fn write_file(target_path: &Path, content: &str) -> Result<(), PodError> {
+    ensure_writable_target(target_path)?;
+    write_file_nofollow(target_path, content)
+}
+
+/// Appends a regular-file (or regular-file symlink) directory entry name to `entries` if it is valid UTF-8, matches `extension`, and stays within [`MAX_DIRECTORY_ENTRIES`].
 fn collect_matching_entry(
     directory_path: &Path,
     entry_result: io::Result<DirEntry>,
@@ -279,7 +289,10 @@ fn collect_matching_entry(
     let file_type = entry
         .file_type()
         .map_err(|error| io_path_error(&entry.path(), error))?;
-    if !file_type.is_file() {
+    let is_regular_file = file_type.is_file()
+        || (file_type.is_symlink()
+            && fs::metadata(entry.path()).is_ok_and(|metadata| metadata.is_file()));
+    if !is_regular_file {
         return Ok(());
     }
     let file_name = entry.file_name();
@@ -347,22 +360,33 @@ fn io_path_error(target_path: &Path, error: io::Error) -> PodError {
     ))
 }
 
-/// Reads at most [`MAX_FILE_BYTES`] bytes from `reader` and decodes the buffer as UTF-8.
-fn read_bounded_utf8<R: Read>(reader: R, initial_capacity: usize) -> Result<String, PodError> {
+/// Reads at most [`MAX_FILE_BYTES`] bytes from `reader` and decodes the buffer as UTF-8, annotating I/O and UTF-8 errors with `target_path`.
+fn read_bounded_utf8<R: Read>(
+    target_path: &Path,
+    reader: R,
+    initial_capacity: usize,
+) -> Result<String, PodError> {
     let mut bytes = Vec::with_capacity(initial_capacity.min(MAX_FILE_BYTES));
     let mut bounded = reader.take((MAX_FILE_BYTES + 1) as u64);
-    bounded.read_to_end(&mut bytes)?;
+    bounded
+        .read_to_end(&mut bytes)
+        .map_err(|error| io_path_error(target_path, error))?;
     if bytes.len() > MAX_FILE_BYTES {
         return Err(PodError::from(PslError::new(
             PslErrorKind::LimitExceeded,
             1,
         )));
     }
-    String::from_utf8(bytes)
-        .map_err(|error| PodError::from(io::Error::new(io::ErrorKind::InvalidData, error)))
+    String::from_utf8(bytes).map_err(|error| {
+        io_path_error(
+            target_path,
+            io::Error::new(io::ErrorKind::InvalidData, error),
+        )
+    })
 }
 
 /// Opens `target_path` for writing with `O_NOFOLLOW`, truncating or creating it, and writes `content`.
+#[cfg(test)]
 fn write_file_nofollow(target_path: &Path, content: &str) -> Result<(), PodError> {
     let working_path = path_resolve::resolve_working_path(target_path);
     let mut file = OpenOptions::new()

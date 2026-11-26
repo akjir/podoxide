@@ -95,7 +95,7 @@ struct CapturedOutput {
     stdout: Vec<u8>,
 }
 
-/// Executes `editor` with `file_path` interactively (or prints the command when `simulate` is `true`).
+/// Executes `editor` with `file_path` interactively (or prints the command when `simulate` is `true`) and returns its [`ExecOutcome`].
 ///
 /// # Errors
 ///
@@ -106,7 +106,7 @@ pub fn exec_editor_with<W, E>(
     simulate: bool,
     stdout: &mut W,
     stderr: &mut E,
-) -> Result<(), PodError>
+) -> Result<ExecOutcome, PodError>
 where
     W: Write,
     E: Write,
@@ -130,7 +130,7 @@ where
         )));
     };
     let safe_path = normalize_editor_target(raw_path);
-    let _ = exec_with(
+    exec_with(
         editor,
         &[safe_path.as_ref()],
         &ExecOptions {
@@ -141,8 +141,7 @@ where
         },
         stdout,
         stderr,
-    )?;
-    Ok(())
+    )
 }
 
 /// Constructs a [`Command`] for `program` populated with `arguments`.
@@ -204,9 +203,9 @@ where
     }
 }
 
-/// Reads at most `max_bytes` from `reader`, returning collected bytes and whether unread bytes remained.
+/// Reads at most `max_bytes` from `reader` into memory and drains any remaining bytes to EOF so pipe writers never receive `SIGPIPE`.
 pub(super) fn read_bounded_bytes<R: Read>(
-    reader: R,
+    mut reader: R,
     max_bytes: usize,
 ) -> io::Result<(Vec<u8>, bool)> {
     let initial_capacity = max_bytes.min(INITIAL_CAPTURE_CAPACITY);
@@ -214,10 +213,11 @@ pub(super) fn read_bounded_bytes<R: Read>(
     let limit = u64::try_from(max_bytes)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
-    reader.take(limit).read_to_end(&mut buffer)?;
+    reader.by_ref().take(limit).read_to_end(&mut buffer)?;
     let truncated = buffer.len() > max_bytes;
     if truncated {
         buffer.truncate(max_bytes);
+        let _ = io::copy(&mut reader, &mut io::sink());
     }
     Ok((buffer, truncated))
 }

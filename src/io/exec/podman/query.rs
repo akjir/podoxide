@@ -89,7 +89,7 @@ pub fn query_images(all: bool) -> Option<String> {
 ///
 /// # Errors
 ///
-/// Returns [`PodError::Io`] if querying `podman ps` fails so callers never fail open with an empty set.
+/// Returns [`PodError::Io`] if querying `podman ps` fails or if more than [`MAX_INSPECT_RECORDS`] distinct valid image IDs are returned so callers never fail open.
 pub fn query_in_use_images() -> Result<BTreeSet<String>, PodError> {
     collect_in_use_images_with(&mut super::run_podman_capture)
 }
@@ -107,7 +107,7 @@ where
 {
     let ps_output = capture(&["ps", "-a", "--no-trunc", "--format", "{{.ImageID}}"])
         .ok_or_else(|| PodError::from(io::Error::other("Failed to query in-use podman images.")))?;
-    Ok(parse_in_use_output(&ps_output))
+    parse_in_use_output(&ps_output)
 }
 
 /// Evaluates whether `container_name` exists via `capture`, supporting unmanaged container names.
@@ -199,20 +199,23 @@ fn parse_image_id_output(output: &str) -> Option<String> {
     Some(String::from(first))
 }
 
-/// Collects valid trimmed image IDs from `podman ps -a --no-trunc --format '{{.ImageID}}'` output up to [`MAX_INSPECT_RECORDS`].
-#[must_use]
-fn parse_in_use_output(ps_output: &str) -> BTreeSet<String> {
+/// Collects valid trimmed image IDs from `podman ps -a --no-trunc --format '{{.ImageID}}'` output, failing closed when distinct image IDs exceed [`MAX_INSPECT_RECORDS`].
+fn parse_in_use_output(ps_output: &str) -> Result<BTreeSet<String>, PodError> {
     let mut in_use = BTreeSet::new();
-    for (index, line) in ps_output.lines().enumerate() {
-        if index >= MAX_INSPECT_RECORDS || in_use.len() >= MAX_INSPECT_RECORDS {
-            break;
-        }
+    for line in ps_output.lines() {
         let trimmed = line.trim();
-        if string::is_valid_token(trimmed) && !in_use.contains(trimmed) {
-            in_use.insert(String::from(trimmed));
+        if !string::is_valid_token(trimmed) || in_use.contains(trimmed) {
+            continue;
         }
+        if in_use.len() >= MAX_INSPECT_RECORDS {
+            return Err(PodError::from(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "in-use image limit exceeded",
+            )));
+        }
+        in_use.insert(String::from(trimmed));
     }
-    in_use
+    Ok(in_use)
 }
 
 /// Parses a single `"podman version <major>.<minor>.<patch>"` line into its `(major, minor)` version tuple.
